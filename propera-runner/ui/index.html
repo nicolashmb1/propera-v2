@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Propera Runner</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; padding: 12px; background: #1a1a2e; color: #eee; }
+    h1 { font-size: 1.25rem; margin: 0 0 12px 0; }
+    .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+    label { min-width: 100px; }
+    input, select, button { padding: 6px 10px; border-radius: 4px; border: 1px solid #444; background: #2d2d44; color: #eee; }
+    input[type="number"] { width: 70px; }
+    button { cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .panel { background: #252538; border-radius: 6px; padding: 12px; margin-top: 12px; }
+    .panel h2 { font-size: 1rem; margin: 0 0 8px 0; }
+    .runs-list { max-height: 280px; overflow-y: auto; }
+    .run-item { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 4px; cursor: pointer; margin-bottom: 4px; }
+    .run-item:hover { background: #333350; }
+    .run-item.selected { background: #3d3d5c; }
+    .badge { padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 0.85rem; }
+    .badge.pass { background: #1b5e20; color: #a5d6a7; }
+    .badge.fail { background: #b71c1c; color: #ffcdd2; }
+    .run-id { font-family: monospace; font-size: 0.9rem; }
+    .run-meta { font-size: 0.8rem; color: #aaa; }
+    .detail-section { margin-bottom: 12px; }
+    .detail-section pre { white-space: pre-wrap; word-break: break-word; background: #1a1a2e; padding: 10px; border-radius: 4px; font-size: 0.85rem; max-height: 320px; overflow-y: auto; }
+    .transcript-turn { margin-bottom: 10px; padding: 8px; background: #1a1a2e; border-radius: 4px; font-size: 0.85rem; }
+    .transcript-turn .tag { font-weight: bold; color: #9fa8da; }
+    .console-pre { white-space: pre-wrap; font-family: monospace; font-size: 0.8rem; max-height: 240px; overflow-y: auto; background: #0d0d14; padding: 10px; border-radius: 4px; }
+    .copy-btn { margin-left: 8px; font-size: 0.85rem; }
+    .filter-btn { margin-left: 4px; }
+    .repeated-box { background: #3d1f1f; border-left: 4px solid #c62828; }
+    .repeated-text { font-style: italic; color: #ffab91; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 800px) { .two-col { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <h1>Propera Runner</h1>
+
+  <div class="panel">
+    <div class="row">
+      <label>WEBAPP_URL</label>
+      <input type="text" id="webappUrl" placeholder="https://.../exec" style="flex:1; min-width: 200px;">
+    </div>
+    <div class="row">
+      <label>SIM Secret</label>
+      <input type="password" id="simSecret" placeholder="webhook secret" style="flex:1; min-width: 120px;">
+    </div>
+    <div class="row">
+      <label>From Phone</label>
+      <input type="text" id="fromPhone" placeholder="+19085550102">
+    </div>
+    <div class="row">
+      <label>Runs</label>
+      <input type="number" id="runs" value="1" min="1">
+      <label>Max Turns</label>
+      <input type="number" id="maxTurns" value="18" min="1">
+      <label>Chaos Level</label>
+      <select id="chaosLevel">
+        <option value="low">low</option>
+        <option value="medium" selected>medium</option>
+        <option value="high">high</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>Phones (opt)</label>
+      <input type="text" id="phones" placeholder="+1,+2 comma list" style="flex:1; min-width: 180px;">
+    </div>
+    <div class="row">
+      <label>Lane Preset</label>
+      <select id="lanePreset">
+        <option value="">—</option>
+        <option value="tenant">Tenant Maintenance</option>
+        <option value="manager">Manager Lane</option>
+        <option value="commands">Commands Suite</option>
+        <option value="highburn">High Chaos Burn</option>
+      </select>
+    </div>
+    <div class="row" style="margin-top: 10px;">
+      <button id="btnRun">Run</button>
+      <button id="btnLoadSandbox" title="Fill WEBAPP_URL (and optional secret) from sandbox-config.json or use default sandbox URL">Load Sandbox</button>
+      <button id="btnRefresh">Refresh</button>
+      <button id="btnSession" class="filter-btn">This Session</button>
+      <button id="btnAllRuns" class="filter-btn">All Runs</button>
+      <button id="btnClearRuns" class="filter-btn">Clear Runs</button>
+      <button id="btnCopyReport" class="copy-btn">Copy report</button>
+      <button id="btnCopyTxt" class="copy-btn">Copy .txt transcript</button>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div class="panel">
+      <h2>Recent Runs</h2>
+      <div id="runsList" class="runs-list"></div>
+    </div>
+    <div class="panel">
+      <h2>Run Detail</h2>
+      <div id="runDetail">
+        <p style="color:#888;">Select a run from the list.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Console (last run)</h2>
+    <pre id="consoleOut" class="console-pre"></pre>
+  </div>
+
+  <script>
+    (function () {
+      const STORAGE_KEY = "propera-runner-config";
+      const SESSION_START_KEY = "properaRunnerSessionStartMs";
+      const runsDirNote = "..\\runs\\";
+      const SANDBOX_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxWOson_kbGXT2OT2b42wgjHlG1e8Uo93ek9DRf8_84mmwJoYrfwYawf-197Dh90eK6/exec";
+
+      const sessionStartMs = Date.now();
+      localStorage.setItem(SESSION_START_KEY, String(sessionStartMs));
+
+      let filterMode = "session";
+
+      function loadConfig() {
+        try {
+          const s = localStorage.getItem(STORAGE_KEY);
+          if (!s) return;
+          const c = JSON.parse(s);
+          if (c.webappUrl != null) document.getElementById("webappUrl").value = c.webappUrl;
+          if (c.simSecret != null) document.getElementById("simSecret").value = c.simSecret;
+          if (c.fromPhone != null) document.getElementById("fromPhone").value = c.fromPhone;
+          if (c.runs != null) document.getElementById("runs").value = c.runs;
+          if (c.maxTurns != null) document.getElementById("maxTurns").value = c.maxTurns;
+          if (c.chaosLevel != null) document.getElementById("chaosLevel").value = c.chaosLevel;
+          if (c.phones != null) document.getElementById("phones").value = c.phones;
+          if (c.lanePreset != null) document.getElementById("lanePreset").value = c.lanePreset || "";
+        } catch (_) {}
+      }
+
+      function saveConfig() {
+        const c = {
+          webappUrl: document.getElementById("webappUrl").value,
+          simSecret: document.getElementById("simSecret").value,
+          fromPhone: document.getElementById("fromPhone").value,
+          runs: document.getElementById("runs").value,
+          maxTurns: document.getElementById("maxTurns").value,
+          chaosLevel: document.getElementById("chaosLevel").value,
+          phones: document.getElementById("phones").value,
+          lanePreset: document.getElementById("lanePreset").value || ""
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(c));
+      }
+
+      const presets = {
+        tenant: { chaosLevel: "medium", runs: 10 },
+        manager: { chaosLevel: "low", runs: 5 },
+        commands: { chaosLevel: "low", runs: 5 },
+        highburn: { chaosLevel: "high", runs: 50 }
+      };
+
+      document.getElementById("lanePreset").addEventListener("change", function () {
+        const p = presets[this.value];
+        if (p) {
+          document.getElementById("chaosLevel").value = p.chaosLevel;
+          document.getElementById("runs").value = p.runs;
+        }
+        saveConfig();
+      });
+
+      function getConfigForRun() {
+        return {
+          webappUrl: document.getElementById("webappUrl").value.trim(),
+          simSecret: document.getElementById("simSecret").value.trim(),
+          fromPhone: document.getElementById("fromPhone").value.trim() || "+19085550102",
+          runs: parseInt(document.getElementById("runs").value, 10) || 1,
+          maxTurns: parseInt(document.getElementById("maxTurns").value, 10) || 18,
+          chaosLevel: document.getElementById("chaosLevel").value,
+          phones: document.getElementById("phones").value.trim()
+        };
+      }
+
+      function api(path, opts) {
+        opts = opts || {};
+        return fetch(path, {
+          method: opts.method || "GET",
+          headers: opts.headers || {},
+          body: opts.body
+        }).then(function (r) {
+          if (opts.text) return r.text();
+          return r.json();
+        });
+      }
+
+      let lastRunStdout = "";
+      let lastRunStderr = "";
+      let selectedRunId = null;
+      let selectedRunFile = null;
+
+      function renderRuns(list) {
+        const el = document.getElementById("runsList");
+        if (!list || list.length === 0) {
+          el.innerHTML = "<p style='color:#888'>No runs yet. Output lives in " + runsDirNote + "</p>";
+          return;
+        }
+        el.innerHTML = list.map(function (r) {
+          const pass = r.verdict && r.verdict.success;
+          const badge = pass ? "<span class='badge pass'>PASS</span>" : "<span class='badge fail'>FAIL</span>";
+          const reason = (r.verdict && r.verdict.reason) ? " " + r.verdict.reason : "";
+          const stats = r.stats || {};
+          const meta = "turns: " + (stats.turns || 0) + " frag: " + (stats.fragmentsSent || 0) + " wrong: " + (stats.wrongAnswers || 0) + " intr: " + (stats.interruptions || 0) + reason;
+          const sel = (selectedRunId === r.runId) ? " selected" : "";
+          return "<div class='run-item" + sel + "' data-run-id='" + (r.runId || "") + "' data-file='" + (r.file || "") + "'><span>" + badge + "</span><span class='run-id'>" + (r.runId || "") + "</span><span class='run-meta'>" + meta + "</span></div>";
+        }).join("");
+        el.querySelectorAll(".run-item").forEach(function (node) {
+          node.addEventListener("click", function () {
+            selectedRunId = this.getAttribute("data-run-id");
+            selectedRunFile = this.getAttribute("data-file");
+            document.querySelectorAll(".run-item").forEach(function (n) { n.classList.remove("selected"); });
+            this.classList.add("selected");
+            loadRunDetail(selectedRunId, selectedRunFile);
+          });
+        });
+      }
+
+      function loadRunDetail(runId, file) {
+        const detailEl = document.getElementById("runDetail");
+        if (!runId || !file) {
+          detailEl.innerHTML = "<p style='color:#888'>Select a run from the list.</p>";
+          return;
+        }
+        detailEl.innerHTML = "<p>Loading…</p>";
+        Promise.all([
+          api("/api/run?file=" + encodeURIComponent(file)),
+          api("/api/runTxt?runId=" + encodeURIComponent(runId), { text: true })
+        ]).then(function (results) {
+          const run = results[0];
+          const txt = results[1];
+          let html = "<div class='detail-section'><strong>" + (run.runId || runId) + "</strong>";
+          if (run.verdict) {
+            const pass = run.verdict.success;
+            html += " " + (pass ? "<span class='badge pass'>PASS</span>" : "<span class='badge fail'>FAIL</span>");
+            if (run.verdict.reason) html += " " + run.verdict.reason;
+          }
+          html += "</div>";
+
+          if (run.verdict && run.verdict.reason === "stuck_same_reply_3x" && run.turns && run.turns.length) {
+            var repeated = findRepeatedReply(run.turns);
+            if (repeated) {
+              html += "<div class='detail-section repeated-box'><strong>Repeated reply detected</strong><br>";
+              html += "<span class='repeated-text'>" + escapeHtml((repeated.text || "").substring(0, 200)) + (repeated.text && repeated.text.length > 200 ? "…" : "") + "</span><br>";
+              html += "Turn numbers: " + (repeated.turnNumbers.join(", ")) + "</div>";
+            }
+          }
+
+          if (run.turns && run.turns.length) {
+            html += "<div class='detail-section'><strong>Transcript (from JSON)</strong> <button class='copy-btn' data-copy='json'>Copy</button><br>";
+            html += run.turns.map(function (t) {
+              return "<div class='transcript-turn'>" +
+                "<span class='tag'>TURN " + t.i + "</span><br>" +
+                "SENT: " + (t.sent && t.sent.length ? t.sent.join(" | ") : "") + "<br>" +
+                "RECV: " + (t.received || "").substring(0, 300) + (t.received && t.received.length > 300 ? "…" : "") + "<br>" +
+                "ASK: " + (t.inferredAsk || "") + " BEHAVIOR: " + (t.behavior || "") + (t.notes ? " — " + t.notes : "") +
+                "</div>";
+            }).join("");
+            html += "</div>";
+          }
+
+          var turnsWithSnapshot = run.turns ? run.turns.filter(function (t) { return t.snapshot; }) : [];
+          if (turnsWithSnapshot.length) {
+            html += "<div class='detail-section'><strong>Run snapshots (Directory, Session, ctx, Sheet1, DevSmsLog)</strong><br>";
+            turnsWithSnapshot.forEach(function (t) {
+              var s = t.snapshot;
+              var parts = [];
+              if (s.directory && s.directory.length) parts.push("Directory " + s.directory.length + " rows");
+              if (s.session) parts.push("Session");
+              if (s.ctx) parts.push("ctx");
+              if (s.sheet1 && s.sheet1.length) parts.push("Sheet1 " + s.sheet1.length + " rows");
+              if (s.devLog && s.devLog.length) parts.push("DevLog " + s.devLog.length + " lines");
+              html += "<div class='transcript-turn'>TURN " + t.i + ": " + parts.join(", ") + " <button class='copy-btn' data-copy-snapshot='" + t.i + "'>Copy snapshot</button></div>";
+            });
+            html += "</div>";
+          }
+
+          if (txt) {
+            html += "<div class='detail-section'><strong>.txt transcript</strong> <button class='copy-btn' data-copy='txt'>Copy</button><pre id='detailTxtPre'>" + escapeHtml(txt) + "</pre></div>";
+          } else {
+            html += "<div class='detail-section'><strong>.txt transcript</strong> <em>No file for this run.</em></div>";
+          }
+
+          detailEl.innerHTML = html;
+
+          detailEl.querySelectorAll("[data-copy='json']").forEach(function (btn) {
+            btn.onclick = function () {
+              copyToClipboard(JSON.stringify(run.turns, null, 2));
+            };
+          });
+          detailEl.querySelectorAll("[data-copy='txt']").forEach(function (btn) {
+            btn.onclick = function () {
+              copyToClipboard(txt || "");
+            };
+          });
+          detailEl.querySelectorAll("[data-copy-snapshot]").forEach(function (btn) {
+            var turnI = parseInt(btn.getAttribute("data-copy-snapshot"), 10);
+            var turn = run.turns && run.turns.find(function (t) { return t.i === turnI; });
+            btn.onclick = function () {
+              copyToClipboard(turn && turn.snapshot ? JSON.stringify(turn.snapshot, null, 2) : "");
+            };
+          });
+        }).catch(function () {
+          detailEl.innerHTML = "<p style='color:#c62828'>Failed to load run.</p>";
+        });
+      }
+
+      function escapeHtml(s) {
+        const div = document.createElement("div");
+        div.textContent = s;
+        return div.innerHTML;
+      }
+
+      function findRepeatedReply(turns) {
+        if (!turns.length) return null;
+        var i = 0;
+        while (i < turns.length) {
+          var recv = (turns[i].received || "").trim();
+          var start = i;
+          while (i + 1 < turns.length && (turns[i + 1].received || "").trim() === recv) i++;
+          var count = i - start + 1;
+          if (count >= 3 && recv) {
+            var turnNumbers = [];
+            for (var j = start; j <= i; j++) turnNumbers.push(turns[j].i);
+            return { text: recv, turnNumbers: turnNumbers };
+          }
+          i++;
+        }
+        return null;
+      }
+
+      function copyToClipboard(text) {
+        navigator.clipboard.writeText(text).then(function () {
+          alert("Copied to clipboard.");
+        }).catch(function () {
+          alert("Copy failed.");
+        });
+      }
+
+      function getRunsUrl() {
+        if (filterMode === "session") {
+          const since = localStorage.getItem(SESSION_START_KEY);
+          return "/api/runs" + (since ? "?sinceMs=" + encodeURIComponent(since) : "");
+        }
+        return "/api/runs";
+      }
+
+      function refreshRuns() {
+        saveConfig();
+        api(getRunsUrl()).then(function (list) {
+          renderRuns(list);
+          if (selectedRunId && list && list.some(function (r) { return r.runId === selectedRunId; })) {
+            loadRunDetail(selectedRunId, selectedRunFile);
+          }
+        }).catch(function () {
+          document.getElementById("runsList").innerHTML = "<p style='color:#c62828'>Could not load runs. Is the server running?</p>";
+        });
+      }
+
+      document.getElementById("btnRefresh").addEventListener("click", refreshRuns);
+
+      document.getElementById("btnLoadSandbox").addEventListener("click", function () {
+        api("/api/sandboxConfig").then(function (data) {
+          if (data && data.webappUrl) {
+            document.getElementById("webappUrl").value = data.webappUrl;
+            if (data.simSecret != null) document.getElementById("simSecret").value = data.simSecret;
+            if (data.fromPhone != null) document.getElementById("fromPhone").value = data.fromPhone;
+            saveConfig();
+            return;
+          }
+          throw new Error("No webappUrl");
+        }).catch(function () {
+          document.getElementById("webappUrl").value = SANDBOX_WEBAPP_URL;
+          saveConfig();
+        });
+      });
+
+      document.getElementById("btnSession").addEventListener("click", function () {
+        filterMode = "session";
+        refreshRuns();
+      });
+
+      document.getElementById("btnAllRuns").addEventListener("click", function () {
+        filterMode = "all";
+        refreshRuns();
+      });
+
+      document.getElementById("btnClearRuns").addEventListener("click", function () {
+        if (!confirm("Delete all run files from before this session? (Runs from this session will be kept.)")) return;
+        const since = localStorage.getItem(SESSION_START_KEY);
+        const olderThanMs = since ? parseInt(since, 10) : null;
+        api("/api/clearRuns", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(olderThanMs != null ? { olderThanMs: olderThanMs } : {})
+        }).then(function (result) {
+          if (result && result.ok) alert("Cleared " + (result.deletedCount || 0) + " file(s).");
+          refreshRuns();
+        }).catch(function () {
+          alert("Clear runs failed.");
+        });
+      });
+
+      document.getElementById("btnRun").addEventListener("click", function () {
+        const btn = this;
+        const config = getConfigForRun();
+        saveConfig();
+        if (!config.webappUrl || !config.simSecret) {
+          alert("Set WEBAPP_URL and SIM Secret.");
+          return;
+        }
+        btn.disabled = true;
+        document.getElementById("consoleOut").textContent = "Running…";
+        api("/api/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(config)
+        }).then(function (result) {
+          lastRunStdout = result.stdout || "";
+          lastRunStderr = result.stderr || "";
+          document.getElementById("consoleOut").textContent = (lastRunStdout + (lastRunStderr ? "\n--- stderr ---\n" + lastRunStderr : "")).trim() || "(no output)";
+          refreshRuns();
+        }).catch(function (err) {
+          document.getElementById("consoleOut").textContent = "Error: " + (err && err.message ? err.message : "request failed");
+        }).finally(function () {
+          btn.disabled = false;
+        });
+      });
+
+      document.getElementById("btnCopyReport").addEventListener("click", function () {
+        const pre = document.getElementById("consoleOut");
+        copyToClipboard(pre ? pre.textContent : "");
+      });
+
+      document.getElementById("btnCopyTxt").addEventListener("click", function () {
+        const pre = document.getElementById("detailTxtPre");
+        if (!pre || !pre.textContent) {
+          alert("Select a run that has a .txt transcript first.");
+          return;
+        }
+        copyToClipboard(pre.textContent);
+      });
+
+      ["webappUrl", "simSecret", "fromPhone", "runs", "maxTurns", "chaosLevel", "phones"].forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener("change", saveConfig);
+      });
+
+      loadConfig();
+      refreshRuns();
+    })();
+  </script>
+</body>
+</html>

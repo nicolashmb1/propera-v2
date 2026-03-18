@@ -1,0 +1,352 @@
+Propera HVAC Vendor Dispatch System Map
+
+Version: v1
+Purpose: Automatically dispatch HVAC vendors when a maintenance ticket is created.
+
+1. High-Level Flow
+Tenant SMS
+   ↓
+Router (handleSmsRouter_)
+   ↓
+Core Pipeline
+   ↓
+Ticket Created
+   ↓
+WorkItem Created
+   ↓
+PolicyEngine (WORKITEM_CREATED event)
+   ↓
+PolicyRule Match (HVAC)
+   ↓
+ASSIGN_VENDOR_BY_POLICY action
+   ↓
+Ticket Assigned to Vendor
+   ↓
+assignTicketFromRow_()
+   ↓
+notifyVendorForTicket_()
+   ↓
+Vendor receives SMS
+   ↓
+Vendor replies YES / NO
+   ↓
+Vendor command handler
+   ↓
+Ticket + WorkItem updated
+2. Policy Engine Layer
+Trigger Event
+WORKITEM_CREATED
+
+Policy engine evaluates rules when a WorkItem is created.
+
+PolicyRules (Sheet)
+R-HVAC-A
+
+Properties:
+PENN
+MORR
+
+WhenJson
+
+{"afterHours":false,"hasVendor":false,"catIn":["hvac"],"propIn":["PENN","MORR"]}
+
+ThenJson
+
+{"actions":[{"type":"ASSIGN_VENDOR_BY_POLICY","policyKey":"HVAC_VENDOR_ID"}]}
+R-HVAC-B
+
+Properties:
+MURR
+WEST
+WGRA
+
+WhenJson
+
+{"afterHours":false,"hasVendor":false,"catIn":["hvac"],"propIn":["MURR","WEST","WGRA"]}
+
+ThenJson
+
+{"actions":[{"type":"ASSIGN_VENDOR_BY_POLICY","policyKey":"HVAC_VENDOR_ID"}]}
+3. Policy Facts
+
+Added to buildPolicyFacts_
+
+facts.category
+
+Source:
+
+TicketRow → COL.CAT
+
+Normalization:
+
+"HVAC" → "hvac"
+
+Matcher added:
+
+catIn
+
+Example match:
+
+catIn:["hvac"]
+4. Vendor Mapping Layer
+
+Stored in PropertyPolicy sheet
+
+Property | PolicyKey        | Value   | Type
+----------------------------------------------
+PENN     | HVAC_VENDOR_ID   | HVAC_A  | TEXT
+MORR     | HVAC_VENDOR_ID   | HVAC_A  | TEXT
+MURR     | HVAC_VENDOR_ID   | HVAC_B  | TEXT
+WEST     | HVAC_VENDOR_ID   | HVAC_B  | TEXT
+WGRA     | HVAC_VENDOR_ID   | HVAC_B  | TEXT
+
+Policy engine reads:
+
+ppGet_(propCode,"HVAC_VENDOR_ID","")
+5. Vendors Directory
+
+Sheet: Vendors
+
+Structure
+
+VendorId | VendorName | PhoneE164 | Active
+
+Example
+
+HVAC_A | ABC HVAC | +19085550001 | Yes
+HVAC_B | Cooling Experts | +19085550002 | Yes
+
+Lookup functions
+
+readVendors_()
+getVendorById_()
+getVendorByPhoneDigits_()
+6. Policy Action
+
+New PolicyEngine action
+
+ASSIGN_VENDOR_BY_POLICY
+
+Purpose
+
+Assign vendor automatically based on PropertyPolicy
+
+Steps executed
+
+vendorId = ppGet_(prop,"HVAC_VENDOR_ID")
+
+Ticket row updated
+
+AssignedType = "Vendor"
+AssignedId   = vendorId
+
+Then dispatch triggered
+
+assignTicketFromRow_()
+7. Vendor Dispatch Engine
+
+Main function
+
+assignTicketFromRow_(creds, sheet, row, opt)
+
+Responsibilities
+
+Set assignment metadata
+
+AssignedName
+AssignedAt
+AssignedBy
+
+Set vendor status
+
+VendorStatus = Contacted
+
+Send vendor SMS
+
+notifyVendorForTicket_()
+
+Transition WorkItem
+
+WAIT_VENDOR
+8. Vendor Notification
+
+Function
+
+notifyVendorForTicket_()
+
+Message currently hardcoded:
+
+The Grand — Scheduling System
+
+<Property> Unit <Unit>
+<Category> — <Issue>
+
+Reply:
+YES <availability>
+or
+NO <reason>
+
+Ticket: <TicketID>
+
+SMS sent via
+
+sendSms_(sid, token, fromNumber, vendorPhone)
+9. Vendor Reply Processing
+
+Incoming vendor SMS detected via:
+
+isVendorPhone_
+getVendorByPhoneDigits_
+
+Router lane
+
+handleVendorLane_
+
+Handlers
+
+handleVendorAcceptDecline_
+handleVendorAvailabilityOnly_
+Vendor YES Flow
+
+Vendor sends:
+
+YES tomorrow afternoon
+
+System updates:
+
+VendorStatus = Accepted
+VendorAppt   = tomorrow afternoon
+
+WorkItem transition
+
+WAIT_VENDOR → WAIT_INTERNAL
+
+Manager notification may send.
+
+Vendor NO Flow
+
+Vendor sends
+
+NO can't today
+
+Updates
+
+VendorStatus = Declined
+
+Manager notified.
+
+10. Safety Controls
+Dry Run
+
+PropertyPolicy flag
+
+POLICY_ENGINE_DRY_RUN = TRUE
+
+Effects
+
+Rules match
+Actions logged
+NO vendor assignment
+NO SMS sent
+Idempotency / Spam Protection
+
+Dispatch prevented when
+
+AssignedType = Vendor
+AssignedId = same vendor
+VendorStatus not empty
+
+Log
+
+POLICY_VENDOR_ALREADY_ASSIGNED
+11. Logging Signals
+
+Key logs to monitor
+
+Policy
+POLICY_EVAL_MATCH
+Dispatch start
+POLICY_VENDOR_ASSIGN_START
+Vendor SMS
+DBG_NOTIFY_VENDOR
+Dispatch complete
+POLICY_VENDOR_ASSIGN_DONE
+Skip conditions
+POLICY_VENDOR_NO_VENDORID
+POLICY_VENDOR_BAD_ROW
+POLICY_VENDOR_ALREADY_ASSIGNED
+12. Expected Event Timeline
+
+Successful HVAC dispatch
+
+TICKET_CREATE
+WORKITEM_CREATED
+POLICY_EVAL_MATCH
+POLICY_VENDOR_ASSIGN_START
+DBG_NOTIFY_VENDOR
+OUT_SMS
+
+Vendor reply
+
+VENDOR_GATE
+VENDOR_ACCEPT
+WI_TRANSITION WAIT_VENDOR → WAIT_INTERNAL
+13. Key Files Involved
+PolicyEngine
+PolicyEngine.gs
+Vendor dispatch
+PROPERA MAIN.gs
+
+Functions used
+
+assignTicketFromRow_
+notifyVendorForTicket_
+readVendors_
+getVendorById_
+handleVendorAcceptDecline_
+14. What This System Automates
+
+Before
+
+Tenant issue
+↓
+Staff triage
+↓
+Staff calls vendor
+
+Now
+
+Tenant issue
+↓
+Ticket created
+↓
+PolicyEngine
+↓
+Vendor contacted automatically
+↓
+Vendor schedules job
+15. Future Improvements (Optional)
+
+These are safe upgrades later:
+
+Vendor dispatch templates
+
+Replace hardcoded SMS with template key.
+
+Category → vendor routing table
+
+Allow different vendors per category.
+
+Vendor load balancing
+
+Multiple HVAC vendors with rotation.
+
+After-hours vendor dispatch rules
+Vendor SLA tracking
+Final System Summary
+
+Your Propera system now has fully automated HVAC dispatch:
+
+Tenant → Ticket → Policy → Vendor → Scheduling
+
+No human dispatch required.

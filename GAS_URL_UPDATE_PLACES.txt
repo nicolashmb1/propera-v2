@@ -1,0 +1,6 @@
+WHEN CHANGING GAS URL DEPLOYMENT I NEED TO UPDATE VARIABLES IN THIS PLACE
+
+- twilio function
+- vercel variables
+- bot appsheet
+- lamda variables

@@ -1,0 +1,786 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>The Grand Management Group | Luxury Living in Elizabeth, NJ</title>
+  <meta name="description" content="The Grand Management Group offers a collection of luxury apartment buildings in Elizabeth, NJ with premium amenities including a modern gym and sauna/spa." />
+
+  <style>
+    :root{
+      --bg:#0b0c10;
+      --panel:#11131a;
+      --text:#f4f6ff;
+      --muted:#b7bccd;
+      --line:rgba(255,255,255,.12);
+      --accent:#c8a35a; /* warm gold */
+      --shadow:0 18px 60px rgba(0,0,0,.55);
+      --radius:18px;
+    }
+
+    *{ box-sizing:border-box; }
+    html,body{ height:100%; }
+    body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+      background: radial-gradient(1200px 800px at 30% 0%, rgba(200,163,90,.12), transparent 60%),
+                  radial-gradient(1000px 700px at 80% 20%, rgba(120,160,255,.10), transparent 60%),
+                  var(--bg);
+      color:var(--text);
+      line-height:1.5;
+      letter-spacing:.2px;
+    }
+
+    a{ color:inherit; text-decoration:none; }
+    .container{
+      width:min(1160px, calc(100% - 48px));
+      margin:0 auto;
+    }
+
+    /* NAV */
+    .nav{
+      position:sticky;
+      top:0;
+      z-index:50;
+      backdrop-filter: blur(10px);
+      background: rgba(11,12,16,.55);
+      border-bottom:1px solid var(--line);
+    }
+    .nav-inner{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding:14px 0;
+      gap:18px;
+    }
+    .brand{
+      display:flex;
+      align-items:center;
+      gap:12px;
+      min-width:220px;
+    }
+    .logo{
+      width:38px;
+      height:38px;
+      border-radius:12px;
+      background: linear-gradient(135deg, rgba(200,163,90,.95), rgba(200,163,90,.25));
+      box-shadow: 0 10px 30px rgba(200,163,90,.20);
+      display:grid;
+      place-items:center;
+      font-weight:700;
+      color:#141414;
+    }
+    .brand-name{
+      display:flex;
+      flex-direction:column;
+      line-height:1.1;
+    }
+    .brand-name strong{
+      font-size:14px;
+      letter-spacing:.9px;
+      text-transform:uppercase;
+    }
+    .brand-name span{
+      font-size:12px;
+      color:var(--muted);
+    }
+
+    .nav-links{
+      display:flex;
+      gap:18px;
+      align-items:center;
+      justify-content:center;
+      flex:1;
+      flex-wrap:wrap;
+    }
+    .nav-links a{
+      font-size:13px;
+      color:var(--muted);
+      padding:10px 10px;
+      border-radius:12px;
+      border:1px solid transparent;
+    }
+    .nav-links a:hover{
+      color:var(--text);
+      border-color:var(--line);
+      background: rgba(255,255,255,.04);
+    }
+
+    .nav-cta{
+      display:flex;
+      gap:10px;
+      align-items:center;
+      justify-content:flex-end;
+      min-width:220px;
+    }
+
+    /* BUTTONS */
+    .btn{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:10px;
+      padding:11px 14px;
+      border-radius:14px;
+      font-weight:600;
+      font-size:13px;
+      border:1px solid var(--line);
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      white-space:nowrap;
+      transition: transform .08s ease, background .2s ease, border-color .2s ease;
+    }
+    .btn:hover{ background: rgba(255,255,255,.07); border-color: rgba(255,255,255,.18); }
+    .btn:active{ transform: translateY(1px); }
+
+    .btn-primary{
+      background: linear-gradient(135deg, rgba(200,163,90,1), rgba(200,163,90,.75));
+      border-color: rgba(200,163,90,.65);
+      color: #161616;
+      box-shadow: 0 14px 40px rgba(200,163,90,.18);
+    }
+    .btn-primary:hover{
+      background: linear-gradient(135deg, rgba(214,176,98,1), rgba(200,163,90,.82));
+      border-color: rgba(214,176,98,.9);
+    }
+    .btn-ghost{
+      background: transparent;
+      border-color: rgba(255,255,255,.14);
+      color: var(--text);
+    }
+
+    /* HERO */
+    .hero{
+      padding:70px 0 26px;
+    }
+    .hero-grid{
+      display:grid;
+      grid-template-columns: 1.15fr .85fr;
+      gap:22px;
+      align-items:stretch;
+    }
+    .hero-left{
+      border-radius: var(--radius);
+      background:
+        linear-gradient(180deg, rgba(17,19,26,.0), rgba(17,19,26,.75)),
+        radial-gradient(900px 520px at 20% 10%, rgba(200,163,90,.22), transparent 55%),
+        linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+      border:1px solid var(--line);
+      box-shadow: var(--shadow);
+      padding:34px;
+      position:relative;
+      overflow:hidden;
+      min-height: 420px;
+    }
+    .hero-left::before{
+      content:"";
+      position:absolute;
+      inset:-2px;
+      background:
+        radial-gradient(380px 220px at 20% 10%, rgba(200,163,90,.30), transparent 60%),
+        radial-gradient(420px 260px at 70% 35%, rgba(120,160,255,.18), transparent 60%);
+      opacity:.85;
+      pointer-events:none;
+    }
+    .hero-left > *{ position:relative; z-index:1; }
+
+    .badge{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding:8px 12px;
+      border-radius:999px;
+      background: rgba(255,255,255,.06);
+      border:1px solid rgba(255,255,255,.12);
+      color: var(--muted);
+      font-size:12px;
+      width: fit-content;
+    }
+    .dot{
+      width:8px;height:8px;border-radius:50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 4px rgba(200,163,90,.16);
+    }
+
+    h1{
+      font-size: clamp(34px, 4vw, 52px);
+      line-height:1.05;
+      margin:14px 0 10px;
+      letter-spacing:-.6px;
+    }
+    .lead{
+      color: var(--muted);
+      font-size: 15px;
+      max-width: 54ch;
+      margin: 0 0 18px;
+    }
+    .hero-actions{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      margin-top: 16px;
+    }
+
+    .hero-stats{
+      margin-top: 22px;
+      display:flex;
+      gap:12px;
+      flex-wrap:wrap;
+    }
+    .stat{
+      flex:1;
+      min-width: 160px;
+      border-radius: 16px;
+      border:1px solid var(--line);
+      background: rgba(255,255,255,.04);
+      padding:14px 14px;
+    }
+    .stat strong{ display:block; font-size:14px; }
+    .stat span{ color:var(--muted); font-size:12px; }
+
+    .hero-right{
+      display:flex;
+      flex-direction:column;
+      gap:14px;
+    }
+    .card{
+      border-radius: var(--radius);
+      border:1px solid var(--line);
+      background: rgba(255,255,255,.03);
+      box-shadow: 0 12px 40px rgba(0,0,0,.35);
+      overflow:hidden;
+    }
+    .card-header{
+      padding:16px 16px 0;
+    }
+    .card h3{
+      margin:0;
+      font-size:14px;
+      letter-spacing:.8px;
+      text-transform:uppercase;
+      color: var(--text);
+    }
+    .card p{
+      margin:8px 0 0;
+      color: var(--muted);
+      font-size:13px;
+    }
+    .card-body{
+      padding:16px;
+      display:grid;
+      gap:10px;
+    }
+
+    .amenity{
+      display:flex;
+      align-items:flex-start;
+      gap:12px;
+      padding:12px;
+      border-radius:16px;
+      border:1px solid rgba(255,255,255,.10);
+      background: rgba(255,255,255,.03);
+    }
+    .icon{
+      width:36px;height:36px;
+      border-radius:14px;
+      background: rgba(200,163,90,.14);
+      border:1px solid rgba(200,163,90,.30);
+      display:grid;
+      place-items:center;
+      color: var(--accent);
+      flex:0 0 auto;
+      font-weight:700;
+    }
+    .amenity strong{ display:block; font-size:13px; }
+    .amenity span{ display:block; font-size:12px; color: var(--muted); margin-top:2px; }
+
+    /* SECTIONS */
+    section{
+      padding: 44px 0;
+    }
+    .section-title{
+      display:flex;
+      align-items:flex-end;
+      justify-content:space-between;
+      gap:14px;
+      margin-bottom: 16px;
+    }
+    .section-title h2{
+      margin:0;
+      font-size:22px;
+      letter-spacing:-.3px;
+    }
+    .section-title p{
+      margin:0;
+      color:var(--muted);
+      font-size:13px;
+      max-width: 60ch;
+    }
+
+    /* PROPERTIES GRID */
+    .grid{
+      display:grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap:14px;
+    }
+    .prop{
+      border-radius: var(--radius);
+      border:1px solid var(--line);
+      background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+      overflow:hidden;
+      transition: transform .12s ease, border-color .2s ease, background .2s ease;
+      min-height: 180px;
+    }
+    .prop:hover{
+      transform: translateY(-2px);
+      border-color: rgba(255,255,255,.20);
+      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+    }
+    .prop .img{
+      height: 92px;
+      background:
+        radial-gradient(420px 220px at 25% 20%, rgba(200,163,90,.25), transparent 60%),
+        radial-gradient(420px 260px at 75% 35%, rgba(120,160,255,.18), transparent 60%),
+        rgba(255,255,255,.04);
+      border-bottom: 1px solid rgba(255,255,255,.10);
+    }
+    .prop .content{
+      padding: 14px;
+    }
+    .prop strong{
+      display:block;
+      font-size:14px;
+      margin-bottom:4px;
+    }
+    .prop small{
+      color: var(--muted);
+      font-size:12px;
+    }
+    .prop .link{
+      margin-top:10px;
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      font-weight:600;
+      font-size:12px;
+      color: var(--text);
+      opacity:.9;
+    }
+    .prop .arrow{
+      width:18px;height:18px;
+      border-radius: 999px;
+      border:1px solid rgba(255,255,255,.18);
+      display:grid;
+      place-items:center;
+    }
+
+    /* LIFESTYLE */
+    .split{
+      display:grid;
+      grid-template-columns: 1fr 1fr;
+      gap:14px;
+      align-items:stretch;
+    }
+    .panel{
+      border-radius: var(--radius);
+      border:1px solid var(--line);
+      background: rgba(255,255,255,.03);
+      padding:18px;
+      min-height: 220px;
+    }
+    .list{
+      margin:10px 0 0;
+      padding:0;
+      list-style:none;
+      display:grid;
+      gap:10px;
+    }
+    .list li{
+      display:flex;
+      gap:10px;
+      align-items:flex-start;
+      color: var(--muted);
+      font-size:13px;
+    }
+    .check{
+      width:18px;height:18px;
+      border-radius: 6px;
+      background: rgba(200,163,90,.14);
+      border:1px solid rgba(200,163,90,.30);
+      display:grid;
+      place-items:center;
+      color: var(--accent);
+      margin-top:2px;
+      flex:0 0 auto;
+      font-size:12px;
+      font-weight:700;
+    }
+
+    /* CTA */
+    .cta{
+      padding: 54px 0 72px;
+    }
+    .cta-box{
+      border-radius: calc(var(--radius) + 6px);
+      border:1px solid rgba(200,163,90,.35);
+      background:
+        radial-gradient(700px 340px at 20% 10%, rgba(200,163,90,.22), transparent 55%),
+        linear-gradient(135deg, rgba(255,255,255,.05), rgba(255,255,255,.02));
+      padding: 26px;
+      box-shadow: var(--shadow);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:18px;
+      flex-wrap:wrap;
+    }
+    .cta-box h2{ margin:0; font-size:22px; }
+    .cta-box p{ margin:6px 0 0; color:var(--muted); font-size:13px; max-width: 70ch; }
+
+    /* FOOTER */
+    footer{
+      border-top:1px solid var(--line);
+      padding: 22px 0 34px;
+      color: var(--muted);
+      font-size:12px;
+    }
+    .footer-grid{
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:16px;
+      flex-wrap:wrap;
+    }
+    .footer-links{
+      display:flex;
+      gap:14px;
+      flex-wrap:wrap;
+    }
+    .footer-links a{
+      padding:8px 10px;
+      border-radius:12px;
+      border:1px solid transparent;
+      color: var(--muted);
+    }
+    .footer-links a:hover{
+      color: var(--text);
+      border-color: var(--line);
+      background: rgba(255,255,255,.03);
+    }
+
+    /* RESPONSIVE */
+    @media (max-width: 980px){
+      .hero-grid{ grid-template-columns: 1fr; }
+      .nav-cta{ min-width:auto; }
+    }
+    @media (max-width: 860px){
+      .grid{ grid-template-columns: 1fr; }
+      .split{ grid-template-columns: 1fr; }
+      .brand{ min-width:auto; }
+      .nav-links{ display:none; }
+    }
+  </style>
+</head>
+
+<body>
+  <!-- NAV -->
+  <div class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href="#top" aria-label="The Grand Management Group home">
+        <div class="logo">G</div>
+        <div class="brand-name">
+          <strong>The Grand</strong>
+          <span>Management Group</span>
+        </div>
+      </a>
+
+      <nav class="nav-links" aria-label="Primary">
+        <a href="#residences">Residences</a>
+        <a href="#amenities">Amenities</a>
+        <a href="#lifestyle">Lifestyle</a>
+        <a href="#about">About</a>
+        <a href="#contact">Contact</a>
+      </nav>
+
+      <div class="nav-cta">
+        <a class="btn btn-ghost" href="#residences">View Residences</a>
+        <a class="btn btn-primary" href="#contact">Schedule a Tour</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- HERO -->
+  <main id="top" class="hero">
+    <div class="container hero-grid">
+      <div class="hero-left">
+        <div class="badge"><span class="dot"></span> Luxury residences • Elizabeth, NJ</div>
+
+        <h1>Elevated living across a collection of modern luxury buildings.</h1>
+
+        <p class="lead">
+          The Grand Management Group offers five premium properties in Elizabeth, New Jersey—designed around wellness,
+          comfort, and a lifestyle you’ll love. Enjoy a modern fitness experience and a true sauna/spa retreat.
+        </p>
+
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="#residences">Explore Properties</a>
+          <a class="btn" href="#amenities">See Amenities</a>
+        </div>
+
+        <div class="hero-stats" aria-label="Key highlights">
+          <div class="stat">
+            <strong>5 Luxury Properties</strong>
+            <span>Curated buildings across Elizabeth</span>
+          </div>
+          <div class="stat">
+            <strong>Wellness Amenities</strong>
+            <span>Modern gym + sauna/spa experience</span>
+          </div>
+          <div class="stat">
+            <strong>Professional Management</strong>
+            <span>Responsive service & resident-first care</span>
+          </div>
+        </div>
+      </div>
+
+      <aside class="hero-right">
+        <div class="card" id="amenities">
+          <div class="card-header">
+            <h3>Amenities that feel like a private club</h3>
+            <p>Designed for wellness, recovery, and daily comfort.</p>
+          </div>
+          <div class="card-body">
+            <div class="amenity">
+              <div class="icon">GY</div>
+              <div>
+                <strong>Modern Fitness Center</strong>
+                <span>Premium equipment and an energizing space to train.</span>
+              </div>
+            </div>
+            <div class="amenity">
+              <div class="icon">SP</div>
+              <div>
+                <strong>Sauna / Spa Retreat</strong>
+                <span>Unwind, recover, and reset—right at home.</span>
+              </div>
+            </div>
+            <div class="amenity">
+              <div class="icon">SC</div>
+              <div>
+                <strong>Secure Access</strong>
+                <span>Peace of mind with safety-first building access.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="contact">
+          <div class="card-header">
+            <h3>Schedule a tour</h3>
+            <p>Tell us what you’re looking for and we’ll follow up quickly.</p>
+          </div>
+          <div class="card-body">
+            <form onsubmit="event.preventDefault(); alert('Thanks! We will contact you shortly.');">
+              <label style="display:grid; gap:6px; font-size:12px; color:var(--muted);">
+                Full name
+                <input required type="text" placeholder="Your name"
+                  style="padding:12px 12px; border-radius:14px; border:1px solid var(--line); background:rgba(255,255,255,.03); color:var(--text);" />
+              </label>
+
+              <label style="display:grid; gap:6px; font-size:12px; color:var(--muted);">
+                Phone or email
+                <input required type="text" placeholder="(555) 555-5555 or you@email.com"
+                  style="padding:12px 12px; border-radius:14px; border:1px solid var(--line); background:rgba(255,255,255,.03); color:var(--text);" />
+              </label>
+
+              <label style="display:grid; gap:6px; font-size:12px; color:var(--muted);">
+                Preferred property (optional)
+                <select style="padding:12px 12px; border-radius:14px; border:1px solid var(--line); background:rgba(255,255,255,.03); color:var(--text);">
+                  <option value="">Select one</option>
+                  <option>The Grand at Penn</option>
+                  <option>The Grand Westfield</option>
+                  <option>The Grand (Property 3)</option>
+                  <option>The Grand (Property 4)</option>
+                  <option>The Grand (Property 5)</option>
+                </select>
+              </label>
+
+              <button class="btn btn-primary" type="submit" style="width:100%; margin-top:2px;">
+                Request Tour
+              </button>
+
+              <div style="color:var(--muted); font-size:11px; margin-top:10px;">
+                By submitting, you agree to be contacted regarding availability and tours.
+              </div>
+            </form>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <!-- PROPERTIES -->
+  <section id="residences">
+    <div class="container">
+      <div class="section-title">
+        <div>
+          <h2>The Grand Collection</h2>
+          <p>Explore five luxury properties across Elizabeth, NJ—each with its own character, all under one elevated standard.</p>
+        </div>
+        <a class="btn" href="#contact">Tour Availability</a>
+      </div>
+
+      <div class="grid">
+        <a class="prop" href="#" aria-label="Explore The Grand at Penn">
+          <div class="img" aria-hidden="true"></div>
+          <div class="content">
+            <strong>The Grand at Penn</strong>
+            <small>Elizabeth, NJ • Modern finishes • Transit-friendly</small>
+            <div class="link"><span class="arrow">→</span> Explore Property</div>
+          </div>
+        </a>
+
+        <a class="prop" href="#" aria-label="Explore The Grand Westfield">
+          <div class="img" aria-hidden="true"></div>
+          <div class="content">
+            <strong>The Grand Westfield</strong>
+            <small>Elizabeth, NJ • Wellness amenities • Premium living</small>
+            <div class="link"><span class="arrow">→</span> Explore Property</div>
+          </div>
+        </a>
+
+        <a class="prop" href="#" aria-label="Explore Property 3">
+          <div class="img" aria-hidden="true"></div>
+          <div class="content">
+            <strong>The Grand (Property 3)</strong>
+            <small>Elizabeth, NJ • Luxury residences • Secure access</small>
+            <div class="link"><span class="arrow">→</span> Explore Property</div>
+          </div>
+        </a>
+
+        <a class="prop" href="#" aria-label="Explore Property 4">
+          <div class="img" aria-hidden="true"></div>
+          <div class="content">
+            <strong>The Grand (Property 4)</strong>
+            <small>Elizabeth, NJ • Modern interiors • Resident comfort</small>
+            <div class="link"><span class="arrow">→</span> Explore Property</div>
+          </div>
+        </a>
+
+        <a class="prop" href="#" aria-label="Explore Property 5">
+          <div class="img" aria-hidden="true"></div>
+          <div class="content">
+            <strong>The Grand (Property 5)</strong>
+            <small>Elizabeth, NJ • Elevated design • Professional management</small>
+            <div class="link"><span class="arrow">→</span> Explore Property</div>
+          </div>
+        </a>
+
+        <div class="prop" style="display:grid; place-items:center; padding:18px;">
+          <div style="text-align:center; max-width:34ch;">
+            <strong style="display:block; font-size:14px; margin-bottom:6px;">Looking for availability?</strong>
+            <small>Tell us what you need and we’ll recommend the best fit across the collection.</small>
+            <div style="margin-top:12px;">
+              <a class="btn btn-primary" href="#contact">Request Options</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- LIFESTYLE + ABOUT -->
+  <section id="lifestyle">
+    <div class="container">
+      <div class="section-title">
+        <div>
+          <h2>Wellness, comfort, and convenience—built into your routine</h2>
+          <p>Luxury living isn’t only about finishes. It’s the daily experience: quiet comfort, great amenities, and a team that cares.</p>
+        </div>
+      </div>
+
+      <div class="split">
+        <div class="panel">
+          <h3 style="margin:0 0 6px; font-size:16px;">Lifestyle highlights</h3>
+          <div style="color:var(--muted); font-size:13px;">
+            Enjoy the best of Elizabeth with convenient access to transit, dining, and neighborhood essentials.
+          </div>
+
+          <ul class="list">
+            <li><span class="check">✓</span><span>Wellness-first amenities: gym and sauna/spa experience</span></li>
+            <li><span class="check">✓</span><span>Secure, professional management and responsive service</span></li>
+            <li><span class="check">✓</span><span>Modern design that feels refined—not generic</span></li>
+            <li><span class="check">✓</span><span>Convenient access to major routes and local destinations</span></li>
+          </ul>
+        </div>
+
+        <div class="panel" id="about">
+          <h3 style="margin:0 0 6px; font-size:16px;">About The Grand Management Group</h3>
+          <div style="color:var(--muted); font-size:13px;">
+            We manage a curated collection of luxury buildings with a resident-first approach. Our goal is simple:
+            deliver a consistently elevated living experience across every property we operate.
+          </div>
+
+          <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:14px;">
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+              <span class="badge"><span class="dot"></span> Resident-first service</span>
+              <span class="badge"><span class="dot"></span> Clean, modern standards</span>
+              <span class="badge"><span class="dot"></span> Wellness amenities</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="cta">
+    <div class="container">
+      <div class="cta-box">
+        <div>
+          <h2>Ready to tour The Grand?</h2>
+          <p>
+            Explore the collection, compare properties, and schedule a visit. We’ll help you find the right building—fast.
+          </p>
+        </div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <a class="btn btn-ghost" href="#residences">View Residences</a>
+          <a class="btn btn-primary" href="#contact">Schedule a Tour</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer>
+    <div class="container footer-grid">
+      <div>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <div class="logo" style="width:34px;height:34px;border-radius:12px;">G</div>
+          <div>
+            <div style="font-weight:700; color:var(--text); letter-spacing:.7px; text-transform:uppercase; font-size:12px;">
+              The Grand Management Group
+            </div>
+            <div>Elizabeth, NJ</div>
+          </div>
+        </div>
+        <div style="margin-top:10px;">
+          © <span id="year"></span> The Grand Management Group. All rights reserved.
+        </div>
+      </div>
+
+      <div class="footer-links" aria-label="Footer links">
+        <a href="#">Privacy Policy</a>
+        <a href="#">Terms</a>
+        <a href="#">Fair Housing</a>
+        <a href="#contact">Contact</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // Small enhancement only: set year
+    document.getElementById("year").textContent = new Date().getFullYear();
+  </script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+---
+description: Always consult Propera guardrails and North Compass before writing or changing code
+alwaysApply: true
+---
+
+# Propera agent guardrails and North Compass
+
+**North Compass (mission and end goal):** Consult **PROPERA_NORTH_COMPASS.md** for architecture doctrine. Propera is the responsibility-aware orchestration engine; the system must always answer *Given this signal, who owns the next action?* Do not bypass the resolver or lifecycle engine. AI is expression layer, not control layer; deterministic core, adaptive edges.
+
+**Before writing or modifying any code**, read and apply the constraints in **PROPERA_AGENT_GUARDRAILS.md** at the repo root.
+
+- **Patch Law**: Answer which module is targeted, that the fix stays in that module’s allowed zone, and that the canonical flow still holds.
+- **Module boundaries**: Respect M1–M11 boundaries; do not touch forbidden areas for a module.
+- **Safety**: No hardcoded tenant strings outside Messaging; correct lock discipline; no breaking of dedupe or stage resolution.
+- **Containment**: Prefer single-module patches; if a change would touch 3+ modules, stop and propose an interface instead.
+
+When proposing patches, follow the PATCH.md format and risk check described in the guardrails. Do not propose changes that violate the “Architect override” list without explicit approval.

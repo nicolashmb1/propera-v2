@@ -1,0 +1,6 @@
+{
+  "name": "propera-telegram-proxy",
+  "version": "1.0.0",
+  "description": "Transport-only Telegram webhook proxy → Propera Apps Script",
+  "private": true
+}

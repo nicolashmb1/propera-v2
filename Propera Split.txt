@@ -1,0 +1,33 @@
+Recommended approach: Option A
+1. Load order (Apps Script concatenates in file order)
+Propera_Config.gs — Constants, DIR_COL, COL, props
+Propera_DAL.gs — Data access (used everywhere)
+Propera_IssueParse.gs — Issue parsing (used by compiler and draft)
+Propera_Compiler.gs — M4
+Propera_Draft.gs — M5
+Propera_State.gs — M6
+Propera_LLM.gs — LLM helpers
+Propera_Sheets.gs — Sheet helpers
+Propera_Messaging.gs — M8
+Propera_Router.gs — M2
+Propera_Gateway.gs — M1
+Propera_Pipeline.gs — M3
+Propera_Workflow.gs — M7
+PROPERA MAIN.gs — Entry points (doPost, onOpen, etc.)
+2. Migration steps
+Create new .gs files in the Apps Script project.
+Cut/paste each module into its file (keep the same function names).
+Ensure no circular dependencies (DAL → no deps; IssueParse → no DAL; etc.).
+Remove moved code from PROPERA MAIN.gs.
+Run tests after each move.
+3. Apps Script specifics
+All .gs files are merged at runtime; splitting is for organization and tooling.
+File order matters for function definition order.
+Shared globals (DIR_COL, COL, props) must be defined before use.
+Use Propera_ prefix so modules are easy to spot in the project.
+Expected impact
+Metric	Before	After (Option A)
+Largest file	~19,200 lines	~5,500 lines
+Typical edit scope	Whole file	1 module (~500–1,500 lines)
+Cursor context	Often full file	One module at a time
+If you want, I can turn this into a step-by-step migration checklist (e.g. “Move M5 first, then M6, then M4…”) with exact line ranges for each cut.

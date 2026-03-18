@@ -1,0 +1,28 @@
+# Env / secrets (never commit)
+.env
+.env.local
+.env.*.local
+telegram-proxy/.env
+telegram-proxy/.env.local
+
+# Dependencies / runtime
+node_modules/
+runs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+
+# Vercel
+.vercel
