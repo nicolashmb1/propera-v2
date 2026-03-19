@@ -12,6 +12,11 @@
 var LIFECYCLE_ALLOWED_TRANSITIONS_ = {
   "STAFF_TRIAGE->WAIT_STAFF_UPDATE": true,
   "STAFF_TRIAGE->UNSCHEDULED": true,
+  "STAFF_TRIAGE->DONE": true,
+  "STAFF_TRIAGE->VERIFYING_RESOLUTION": true,
+  "STAFF_TRIAGE->INHOUSE_WORK": true,
+  "STAFF_TRIAGE->WAIT_PARTS": true,
+  "STAFF_TRIAGE->VENDOR_DISPATCH": true,
   "WAIT_STAFF_UPDATE->INHOUSE_WORK": true,
   "WAIT_STAFF_UPDATE->WAIT_PARTS": true,
   "WAIT_STAFF_UPDATE->VENDOR_DISPATCH": true,
@@ -393,6 +398,20 @@ function evaluateLifecyclePolicy_(facts, signal, eventType) {
     };
   }
 
+  if (eventType === "SCHEDULE_SET") {
+    var stateNow = facts.currentState ? String(facts.currentState).trim().toUpperCase() : "";
+    if (stateNow !== "UNSCHEDULED") {
+      lifecycleLog_("SCHEDULE_SET_BAD_STATE", prop, facts.wiId, { currentState: stateNow });
+      return { decision: "HOLD" };
+    }
+    if (!(facts.scheduledEndAt instanceof Date) || !isFinite(facts.scheduledEndAt.getTime())) {
+      lifecycleLog_("SCHEDULE_SET_MISSING_SCHEDULE_END", prop, facts.wiId, { scheduledEndAt: facts.scheduledEndAt });
+      return { decision: "HOLD" };
+    }
+    var scheduleLabel = signal && signal.scheduleLabel != null ? String(signal.scheduleLabel || "").trim() : "";
+    return { decision: "PROCEED", action: "APPLY_SCHEDULE_SET", scheduleLabel: scheduleLabel };
+  }
+
   if (eventType === "STAFF_UPDATE") {
     if (!facts.currentState) {
       lifecycleLog_("LIFECYCLE_SIGNAL_BAD", prop, facts.wiId, { reason: "missing_wi_state_for_staff_update" });
@@ -633,6 +652,72 @@ function executeLifecycleDecision_(decision, facts, signal) {
     lifecycleWriteTimer_(wiId, prop, decision.timerType || "PING_STAFF_UPDATE", decision.runAt, {});
     lifecycleLog_("TIMER_WRITTEN", prop, wiId, Object.assign(getActorFacts_(signal) || {}, { timerType: decision.timerType, runAt: decision.runAt }));
     return true;
+  }
+
+  if (decision.action === "APPLY_SCHEDULE_SET") {
+    if (!wi || !wiId) return false;
+
+    lifecycleCancelTimersForWi_(wiId);
+
+    var fromState = String(wi.state || "").trim().toUpperCase();
+    var toState = "ACTIVE_WORK";
+
+    var resolved = lifecycleResolveTicketRowForSync_(wi);
+    var ticketRow = resolved && typeof resolved.row === "number" ? resolved.row : 0;
+
+    var sheet = (typeof getLogSheet_ === "function") ? getLogSheet_() : null;
+    if (!sheet && typeof getSheetSafe_ === "function") sheet = getSheetSafe_("Sheet1");
+    if (!sheet && typeof SpreadsheetApp !== "undefined") {
+      try {
+        var ss = typeof LOG_SHEET_ID !== "undefined" ? SpreadsheetApp.openById(LOG_SHEET_ID) : SpreadsheetApp.getActive();
+        sheet = ss ? ss.getSheetByName("Sheet1") : null;
+      } catch (_) {}
+    }
+
+    if (!sheet || ticketRow < 2 || typeof COL === "undefined" || !COL.PREF_WINDOW || !COL.SCHEDULED_END_AT || !COL.STATUS) {
+      lifecycleLog_("SCHEDULE_SET_APPLY_FAIL", prop, wiId, {
+        ticketRow: ticketRow,
+        fromState: fromState
+      });
+      return false;
+    }
+
+    var now = new Date();
+    var scheduleEndAt = facts.scheduledEndAt;
+    var scheduleLabel = String(decision.scheduleLabel || (signal && signal.scheduleLabel) || "").trim();
+
+    try {
+      if (typeof withWriteLock_ === "function") {
+        withWriteLock_("LIFECYCLE_APPLY_SCHEDULE_SET", function () {
+          sheet.getRange(ticketRow, COL.PREF_WINDOW).setValue(scheduleLabel);
+          sheet.getRange(ticketRow, COL.SCHEDULED_END_AT).setValue(scheduleEndAt);
+          sheet.getRange(ticketRow, COL.STATUS).setValue("Scheduled");
+          if (COL.LAST_UPDATE) sheet.getRange(ticketRow, COL.LAST_UPDATE).setValue(now);
+        });
+      } else {
+        sheet.getRange(ticketRow, COL.PREF_WINDOW).setValue(scheduleLabel);
+        sheet.getRange(ticketRow, COL.SCHEDULED_END_AT).setValue(scheduleEndAt);
+        sheet.getRange(ticketRow, COL.STATUS).setValue("Scheduled");
+        if (COL.LAST_UPDATE) sheet.getRange(ticketRow, COL.LAST_UPDATE).setValue(now);
+      }
+    } catch (e) {
+      lifecycleLog_("SCHEDULE_SET_APPLY_WRITE_FAIL", prop, wiId, { error: String(e && e.message ? e.message : e) });
+      return false;
+    }
+
+    var okWi = typeof workItemUpdate_ === "function" ? workItemUpdate_(wiId, { state: toState, substate: "" }) : false;
+    lifecycleLog_("SCHEDULE_SET_APPLIED", prop, wiId, Object.assign(getActorFacts_(signal), {
+      fromState: fromState,
+      toState: toState,
+      scheduledEndAt: scheduleEndAt,
+      scheduleLabel: scheduleLabel
+    }));
+
+    if (okWi && typeof onWorkItemActiveWork_ === "function") {
+      try { onWorkItemActiveWork_(wiId, prop, { scheduledEndAt: scheduleEndAt }); } catch (_) {}
+    }
+
+    return !!okWi;
   }
 
   if (decision.action === "ENTER_UNSCHEDULED") {

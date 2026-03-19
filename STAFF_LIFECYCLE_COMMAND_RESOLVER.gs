@@ -538,6 +538,49 @@ function lifecycleNormalizeStaffOutcome_(bodyTrim) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SCHEDULE SET — staff natural commands (Phase 3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function staffEscapeRe_(s) {
+  return String(s || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Strip the {property + unit} targeting prefix from a staff message.
+ * This isolates the "schedule remainder" so the shared parser doesn't treat
+ * unit numbers (e.g. 403) as schedule time.
+ */
+function staffExtractScheduleRemainderFromTarget_(bodyTrim, unitFromBody, propertyHint) {
+  var remainder = String(bodyTrim || "").trim();
+  if (!remainder) return "";
+
+  // 1) If message starts with property, remove it first.
+  if (propertyHint) {
+    var reP0 = new RegExp("^\\s*" + staffEscapeRe_(propertyHint) + "\\b\\s*", "i");
+    remainder = remainder.replace(reP0, "");
+  }
+
+  // 2) If message now starts with unit (with optional prefixes), remove it.
+  if (unitFromBody) {
+    var u = staffEscapeRe_(unitFromBody);
+    remainder = remainder.replace(new RegExp("^\\s*(?:unit|apt)\\s*[:\\s]*" + u + "\\b\\s*", "i"), "");
+    remainder = remainder.replace(new RegExp("^\\s*#\\s*" + u + "\\b\\s*", "i"), "");
+    remainder = remainder.replace(new RegExp("^\\s*no\\.?\\s*" + u + "\\b\\s*", "i"), "");
+    remainder = remainder.replace(new RegExp("^\\s*" + u + "\\b\\s*", "i"), "");
+  }
+
+  // 3) If message now starts with property again (unit → property order), remove it.
+  if (propertyHint) {
+    var reP1 = new RegExp("^\\s*" + staffEscapeRe_(propertyHint) + "\\b\\s*", "i");
+    remainder = remainder.replace(reP1, "");
+  }
+
+  // 4) Strip leading punctuation/separators.
+  remainder = remainder.replace(/^[\\s,:;\\-]+/, "").trim();
+  return remainder;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ENTRYPOINT — staffHandleLifecycleCommand_
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -572,6 +615,77 @@ function staffHandleLifecycleCommand_(phone, rawText) {
       dispatchOutboundIntent_(lifecycleOutboundIntent_(staffId, phone, "STAFF_CLARIFICATION", "STAFF_CLARIFICATION", clarifyVars, "REPLY_SAME_CHANNEL", resolved.reason || "STAFF_TARGET_UNRESOLVED"));
     }
     return true;
+  }
+
+  // Phase 3 — schedule intent for UNSCHEDULED tickets.
+  // Only the resolver does natural-language extraction; lifecycle applies the canonical schedule payload.
+  var wiForSchedule = typeof workItemGetById_ === "function" ? workItemGetById_(wiId) : null;
+  var wiState = wiForSchedule ? String(wiForSchedule.state || "").trim().toUpperCase() : "";
+  if (wiState === "UNSCHEDULED" && typeof parsePreferredWindowShared_ === "function") {
+    // Avoid overriding explicit staff outcomes.
+    var lower = body.toLowerCase();
+    var hasDoneOrStatus =
+      /\b(done|complete|completed|finished|fixed|resolved)\b/.test(lower) ||
+      /\b(in progress|working on it|started|on it)\b/.test(lower) ||
+      /\b(waiting on parts|parts ordered|waiting for parts|backorder)\b/.test(lower) ||
+      /\b(vendor|contractor|need to send|dispatch)\b/.test(lower) ||
+      /\b(access|key|entry|no access|couldn't get in)\b/.test(lower);
+
+    if (!hasDoneOrStatus) {
+      var unitFromBody = lifecycleExtractUnitFromBody_(body);
+      var propertyHint = lifecycleExtractPropertyHintFromBody_(body);
+      var scheduleRemainder = staffExtractScheduleRemainderFromTarget_(body, unitFromBody, propertyHint);
+
+      if (scheduleRemainder && scheduleRemainder.length >= 2) {
+        var scheduleParsed = null;
+        try {
+          // stageDay intentionally null: staff schedule replies should include an explicit day/time.
+          scheduleParsed = parsePreferredWindowShared_(scheduleRemainder, null);
+        } catch (_) {}
+
+        if (scheduleParsed && scheduleParsed.end instanceof Date && isFinite(scheduleParsed.end.getTime())) {
+          var propertyIdForSchedule = wiForSchedule ? String(wiForSchedule.propertyId || "").trim().toUpperCase() : "GLOBAL";
+          var scheduleSignal = {
+            eventType: "SCHEDULE_SET",
+            wiId: wiId,
+            propertyId: propertyIdForSchedule,
+            scheduledEndAt: scheduleParsed.end,
+            scheduleLabel: scheduleParsed.label,
+            scheduleKind: scheduleParsed.kind,
+            phone: phone,
+            actorType: "STAFF",
+            actorId: phone,
+            reasonCode: "STAFF_SCHEDULE_SET",
+            rawText: body.slice(0, 500),
+            scheduleText: scheduleRemainder
+          };
+
+          var resultSchedule = handleLifecycleSignal_(scheduleSignal);
+          if (typeof dispatchOutboundIntent_ === "function") {
+            if (resultSchedule === "OK") {
+              // Schedule application is a different semantic event than generic work-progress updates.
+              // Use schedule-specific ACK wording instead of reusing STAFF_UPDATE_ACK.
+              dispatchOutboundIntent_(
+                lifecycleOutboundIntent_(
+                  staffId,
+                  phone,
+                  "STAFF_SCHEDULE_ACK",
+                  "STAFF_SCHEDULE_ACK",
+                  { scheduleLabel: String(scheduleSignal && scheduleSignal.scheduleLabel ? scheduleSignal.scheduleLabel : "").trim() },
+                  "REPLY_SAME_CHANNEL",
+                  "STAFF_SCHEDULE_SET"
+                )
+              );
+            } else {
+              var clarifyVarsReject2 = { reasonCode: resultSchedule };
+              if (resultSchedule === "REJECTED") clarifyVarsReject2.transitionRejected = true;
+              dispatchOutboundIntent_(lifecycleOutboundIntent_(staffId, phone, "STAFF_CLARIFICATION", "STAFF_CLARIFICATION", clarifyVarsReject2, "REPLY_SAME_CHANNEL", resultSchedule === "REJECTED" ? "STAFF_TRANSITION_REJECTED" : "STAFF_HOLD_OR_REJECT"));
+            }
+          }
+          return true;
+        }
+      }
+    }
   }
 
   var normalized = lifecycleNormalizeStaffOutcome_(body);
