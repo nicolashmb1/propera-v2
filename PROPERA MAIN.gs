@@ -3018,16 +3018,6 @@
             withWriteLock_("MULTI_SCHEDULE_APPLY", () => {
               sheet.getRange(loggedRow, COL.PREF_WINDOW).setValue(String(opts.capturedScheduleLabel));
               sheet.getRange(loggedRow, COL.LAST_UPDATE).setValue(now);
-              // Write structured end datetime for lifecycle engine.
-              try {
-                var _schedLabel = String(sheet.getRange(loggedRow, COL.PREF_WINDOW).getValue() || "").trim();
-                var _schedParsed = (_schedLabel && typeof parsePreferredWindowShared_ === "function") ? parsePreferredWindowShared_(_schedLabel, null) : null;
-                if (_schedParsed && _schedParsed.end instanceof Date) {
-                  sheet.getRange(loggedRow, COL.SCHEDULED_END_AT).setValue(_schedParsed.end);
-                } else {
-                  sheet.getRange(loggedRow, COL.SCHEDULED_END_AT).clearContent();
-                }
-              } catch (_) {}
             });
           } else if (!ticketWindow) {
             const draftRaw = String(dir.getRange(dirRow, DIR_COL.DRAFT_SCHEDULE_RAW).getValue() || "").trim();
@@ -3036,20 +3026,16 @@
                 sheet.getRange(loggedRow, COL.PREF_WINDOW).setValue(draftRaw);
                 sheet.getRange(loggedRow, COL.LAST_UPDATE).setValue(now);
                 dir.getRange(dirRow, DIR_COL.DRAFT_SCHEDULE_RAW).setValue("");
-                // Write structured end datetime for lifecycle engine.
-                try {
-                  var _schedLabel = String(sheet.getRange(loggedRow, COL.PREF_WINDOW).getValue() || "").trim();
-                  var _schedParsed = (_schedLabel && typeof parsePreferredWindowShared_ === "function") ? parsePreferredWindowShared_(_schedLabel, null) : null;
-                  if (_schedParsed && _schedParsed.end instanceof Date) {
-                    sheet.getRange(loggedRow, COL.SCHEDULED_END_AT).setValue(_schedParsed.end);
-                  } else {
-                    sheet.getRange(loggedRow, COL.SCHEDULED_END_AT).clearContent();
-                  }
-                } catch (_) {}
               });
               try { logDevSms_(phone, issue, "DRAFT_SCHEDULE_APPLIED_TO_TICKET"); } catch (_) {}
             }
           }
+          // Always sync ScheduledEndAt from the ticket's final PreferredWindow value.
+          // Covers create paths where PREF_WINDOW was already populated upstream.
+          try {
+            var _finalSchedLabel = String(sheet.getRange(loggedRow, COL.PREF_WINDOW).getValue() || "").trim();
+            syncScheduledEndAtFromRawWindow_(sheet, loggedRow, _finalSchedLabel);
+          } catch (_) {}
         }
       } catch (_) {}
     }
@@ -3539,6 +3525,95 @@
     return { ok: true, ticketId: ticketId, ticketRow: ticketRow, attachments: merged, addedCount: addedCount };
   }
 
+  /**
+   * Resolve ScheduledEndAt column on Sheet1 with header-based fallback.
+   */
+  function resolveScheduledEndAtCol_(sheet) {
+    var schedEndCol = (typeof COL !== "undefined" && COL.SCHEDULED_END_AT) ? Number(COL.SCHEDULED_END_AT) : 0;
+    try {
+      if (sheet && typeof getHeaderMap_ === "function") {
+        var hMap = getHeaderMap_(sheet) || {};
+        var dynamicCol = Number(hMap["ScheduledEndAt"] || hMap["SCHEDULED_END_AT"] || 0);
+        if (dynamicCol > 0) schedEndCol = dynamicCol;
+      }
+    } catch (_) {}
+    return schedEndCol;
+  }
+
+  /**
+   * Keep structured ScheduledEndAt in sync with PreferredWindow text.
+   */
+  function syncScheduledEndAtFromRawWindow_(sheet, row, scheduleRaw) {
+    if (!sheet || !row || row < 2) return;
+    var schedEndCol = resolveScheduledEndAtCol_(sheet);
+    if (schedEndCol <= 0) {
+      try {
+        if (typeof logDevSms_ === "function") {
+          logDevSms_("", "", "SCHED_SYNC_SKIP_NO_COL row=" + row + " sheet=" + (sheet && sheet.getName ? sheet.getName() : ""));
+        }
+      } catch (_) {}
+      return;
+    }
+
+    var schedRaw = String(scheduleRaw != null ? scheduleRaw : "").trim();
+    var schedParsed = null;
+    try {
+      if (typeof logDevSms_ === "function") {
+        logDevSms_("", "", "SCHED_SYNC_START row=" + row + " col=" + schedEndCol + " sheet=" + (sheet && sheet.getName ? sheet.getName() : "") + " raw=[" + schedRaw.slice(0, 120) + "]");
+      }
+    } catch (_) {}
+    try {
+      schedParsed = (schedRaw && typeof parsePreferredWindowShared_ === "function")
+        ? parsePreferredWindowShared_(schedRaw, null)
+        : null;
+    } catch (parseErr) {
+      try {
+        if (typeof logDevSms_ === "function") {
+          logDevSms_("", "", "SCHED_SYNC_PARSE_ERR row=" + row + " err=" + String(parseErr && parseErr.message ? parseErr.message : parseErr));
+        }
+      } catch (_) {}
+    }
+    try {
+      if (typeof logDevSms_ === "function") {
+        var startIso = (schedParsed && schedParsed.start instanceof Date && isFinite(schedParsed.start.getTime())) ? schedParsed.start.toISOString() : "";
+        var endIso = (schedParsed && schedParsed.end instanceof Date && isFinite(schedParsed.end.getTime())) ? schedParsed.end.toISOString() : "";
+        logDevSms_("", "", "SCHED_SYNC_PARSED row=" + row + " kind=" + String(schedParsed && schedParsed.kind || "") + " label=[" + String(schedParsed && schedParsed.label || "").slice(0, 120) + "] start=" + startIso + " end=" + endIso);
+      }
+    } catch (_) {}
+
+    if (schedParsed && schedParsed.end instanceof Date) {
+      try {
+        sheet.getRange(row, schedEndCol).setValue(schedParsed.end);
+        try {
+          if (typeof logDevSms_ === "function") {
+            logDevSms_("", "", "SCHED_SYNC_WRITE_OK row=" + row + " col=" + schedEndCol + " end=" + schedParsed.end.toISOString());
+          }
+        } catch (_) {}
+      } catch (writeErr) {
+        try {
+          if (typeof logDevSms_ === "function") {
+            logDevSms_("", "", "SCHED_SYNC_WRITE_ERR row=" + row + " col=" + schedEndCol + " err=" + String(writeErr && writeErr.message ? writeErr.message : writeErr));
+          }
+        } catch (_) {}
+      }
+    } else {
+      try {
+        sheet.getRange(row, schedEndCol).clearContent();
+        try {
+          if (typeof logDevSms_ === "function") {
+            logDevSms_("", "", "SCHED_SYNC_CLEAR row=" + row + " col=" + schedEndCol + " raw=[" + schedRaw.slice(0, 120) + "]");
+          }
+        } catch (_) {}
+      } catch (clearErr) {
+        try {
+          if (typeof logDevSms_ === "function") {
+            logDevSms_("", "", "SCHED_SYNC_CLEAR_ERR row=" + row + " col=" + schedEndCol + " err=" + String(clearErr && clearErr.message ? clearErr.message : clearErr));
+          }
+        } catch (_) {}
+      }
+    }
+  }
+
   var PORTAL_EDIT_ALLOWED_STATUS_ = ['Open', 'Scheduled', 'In Progress', 'Completed', 'Waiting Parts', 'Cancelled', 'Waiting on Tenant', 'Canceled', 'Waiting Vendor'];
   var PORTAL_EDIT_ALLOWED_URGENCY_ = ['Low', 'Normal', 'High'];
   var PORTAL_EDIT_ALLOWED_CATEGORY_ = ['Appliance', 'Cleaning', 'Eletrical', 'General', 'HVAC', 'Lock/Key', 'Plumbing', 'Paint/Repair', 'Pest', 'Safety', 'Others'];
@@ -3600,14 +3675,7 @@
         var _schedRaw = String(body.schedule != null ? body.schedule : '').trim();
         sheet.getRange(row, COL.PREF_WINDOW).setValue(_schedRaw);
         // Parse and write structured end datetime for lifecycle engine.
-        try {
-          var _schedParsed = (_schedRaw && typeof parsePreferredWindowShared_ === "function") ? parsePreferredWindowShared_(_schedRaw, null) : null;
-          if (_schedParsed && _schedParsed.end instanceof Date) {
-            sheet.getRange(row, COL.SCHEDULED_END_AT).setValue(_schedParsed.end);
-          } else {
-            sheet.getRange(row, COL.SCHEDULED_END_AT).clearContent();
-          }
-        } catch (_) {}
+        try { syncScheduledEndAtFromRawWindow_(sheet, row, _schedRaw); } catch (_) {}
       }
       sheet.getRange(row, COL.LAST_UPDATE).setValue(new Date());
     });
