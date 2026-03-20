@@ -1,11 +1,15 @@
 /**
  * Propera Telegram Ingress Proxy — Phase 1
  *
- * Transport-only: accept POST, return 200 immediately, forward raw body to Apps Script.
+ * Transport-only: accept POST, forward raw body to Apps Script, then respond.
+ * Telegram only gets 200 after GAS returns success (so Telegram can retry on failure).
  * No business logic. Transport logs only.
  *
  * Env: PROPERA_TELEGRAM_FORWARD_URL (required), PROPERA_PROXY_SECRET (optional)
  */
+
+/** Max time to wait for GAS before aborting (Telegram + proxy stay responsive). */
+var GAS_FORWARD_TIMEOUT_MS = 20000;
 
 function generateRequestId() {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
@@ -23,7 +27,6 @@ function getRawBody(req) {
 export default async function handler(req, res) {
   const proxyRequestId = generateRequestId();
 
-  // Transport log: received
   console.log("received webhook", { proxyRequestId });
 
   if (req.method !== "POST") {
@@ -34,53 +37,72 @@ export default async function handler(req, res) {
   const forwardUrl = process.env.PROPERA_TELEGRAM_FORWARD_URL;
   if (!forwardUrl || !forwardUrl.trim()) {
     console.log("forward failed", { proxyRequestId, error: "PROPERA_TELEGRAM_FORWARD_URL not set" });
-    res.status(200).json({ ok: true });
+    res.status(500).json({ ok: false });
     return;
   }
 
   const secret = process.env.PROPERA_PROXY_SECRET;
   if (secret && secret.trim()) {
     const got = req.headers["x-webhook-secret"] || req.query?.secret || "";
-    if (got.trim() !== secret.trim()) {
-      console.log("acked Telegram (secret mismatch)", { proxyRequestId });
-      res.status(200).json({ ok: true });
+    if (String(got).trim() !== secret.trim()) {
+      console.log("secret mismatch", { proxyRequestId });
+      res.status(403).json({ ok: false });
       return;
     }
   }
 
   const rawBody = getRawBody(req);
   if (!rawBody || !rawBody.trim()) {
-    console.log("acked Telegram (no body)", { proxyRequestId });
-    res.status(200).json({ ok: true });
+    console.log("forward failed", { proxyRequestId, error: "empty body" });
+    res.status(400).json({ ok: false });
     return;
   }
 
-  // Ack Telegram immediately
-  console.log("acked Telegram", { proxyRequestId });
-  res.status(200).json({ ok: true });
-
-  // Fire-and-forget forward (do not await; response already sent)
   const url = forwardUrl.trim();
   const headers = {
     "Content-Type": "application/json",
     "X-Propera-Proxy-Id": proxyRequestId,
   };
 
-  (async () => {
-    console.log("forward started", { proxyRequestId });
-    try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers,
-        body: rawBody,
+  console.log("forward started", { proxyRequestId });
+
+  const controller = new AbortController();
+  const timeout = setTimeout(function () {
+    controller.abort();
+  }, GAS_FORWARD_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: headers,
+      body: rawBody,
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      var respText = "";
+      try {
+        respText = await response.text();
+      } catch (_) {}
+      console.log("forward failed", {
+        proxyRequestId: proxyRequestId,
+        status: response.status,
+        body: respText.slice(0, 500),
       });
-      if (response.ok) {
-        console.log("forward success", { proxyRequestId, status: response.status });
-      } else {
-        console.log("forward failed", { proxyRequestId, status: response.status });
-      }
-    } catch (err) {
-      console.log("forward failed", { proxyRequestId, error: err && err.message ? err.message : String(err) });
+      res.status(502).json({ ok: false });
+      return;
     }
-  })();
+
+    console.log("forward success", { proxyRequestId: proxyRequestId, status: response.status });
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    clearTimeout(timeout);
+    console.log("forward failed", {
+      proxyRequestId: proxyRequestId,
+      error: err && err.message ? err.message : String(err),
+    });
+    res.status(502).json({ ok: false });
+  }
 }
