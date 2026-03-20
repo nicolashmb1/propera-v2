@@ -168,13 +168,58 @@ function telegramEnqueuePackage_(updateId, payloadJson) {
       new Date().toISOString()
     ]);
 
-    try {
-      ScriptApp.newTrigger("processTelegramQueue_").timeBased().after(5000).create();
-    } catch (_) {}
-
     return true;
   } catch (_) {
     return false;
+  }
+}
+
+/**
+ * One-time installer for the standing Telegram queue worker trigger.
+ * Creates exactly one recurring trigger for processTelegramQueue_ (every minute).
+ */
+function installTelegramQueueWorkerTrigger_() {
+  try {
+    var triggers = [];
+    try { triggers = ScriptApp.getProjectTriggers() || []; } catch (_) { triggers = []; }
+    for (var i = 0; i < triggers.length; i++) {
+      try {
+        var fn = triggers[i] && typeof triggers[i].getHandlerFunction === "function" ? triggers[i].getHandlerFunction() : "";
+        if (fn === "processTelegramQueue_") {
+          try { debugLogToSheet_("TELEGRAM_WORKER_TRIGGER_EXISTS", "", ""); } catch (_) {}
+          return;
+        }
+      } catch (_) {}
+    }
+
+    ScriptApp.newTrigger("processTelegramQueue_").timeBased().everyMinutes(1).create();
+    try { debugLogToSheet_("TELEGRAM_WORKER_TRIGGER_CREATED", "", ""); } catch (_) {}
+  } catch (err) {
+    try { debugLogToSheet_("TELEGRAM_WORKER_TRIGGER_CREATE_ERR", "", "err=" + String(err && err.message ? err.message : err)); } catch (_) {}
+  }
+}
+
+/**
+ * Cleanup helper to remove all processTelegramQueue_ worker triggers.
+ * Not called automatically from runtime.
+ */
+function removeTelegramQueueWorkerTriggers_() {
+  var removed = 0;
+  try {
+    var triggers = [];
+    try { triggers = ScriptApp.getProjectTriggers() || []; } catch (_) { triggers = []; }
+    for (var i = 0; i < triggers.length; i++) {
+      try {
+        var t = triggers[i];
+        var fn = t && typeof t.getHandlerFunction === "function" ? t.getHandlerFunction() : "";
+        if (fn === "processTelegramQueue_") {
+          ScriptApp.deleteTrigger(t);
+          removed++;
+        }
+      } catch (_) {}
+    }
+  } finally {
+    try { debugLogToSheet_("TELEGRAM_WORKER_TRIGGER_REMOVED", "count=" + String(removed), ""); } catch (_) {}
   }
 }
 
@@ -187,17 +232,35 @@ function processTelegramQueue_() {
   try {
     lock.waitLock(8000);
   } catch (_) {
+    if (typeof debugLogToSheet_ === "function") {
+      try { debugLogToSheet_("TELEGRAM_QUEUE_WORKER_LOCK_FAIL", "", ""); } catch (_) {}
+    }
     return;
   }
 
   try {
+    try {
+      if (typeof debugLogToSheet_ === "function") {
+        try { debugLogToSheet_("TELEGRAM_QUEUE_WORKER_START", "", ""); } catch (_) {}
+      }
+    } catch (_) {}
+
     var ss = telegramQueueSpreadsheet_();
-    if (!ss) return;
+    if (!ss) {
+      try { debugLogToSheet_("TELEGRAM_QUEUE_WORKER_EARLY_EXIT", "", "reason=NO_SS"); } catch (_) {}
+      return;
+    }
 
     var sh = ss.getSheetByName(TELEGRAM_QUEUE_SHEET_);
-    if (!sh || sh.getLastRow() < 2) return;
+    if (!sh || sh.getLastRow() < 2) {
+      try { debugLogToSheet_("TELEGRAM_QUEUE_WORKER_EARLY_EXIT", "", "reason=NO_QUEUE_ROWS"); } catch (_) {}
+      return;
+    }
 
-    if (typeof handleSmsRouter_ !== "function") return;
+    if (typeof handleSmsRouter_ !== "function") {
+      try { debugLogToSheet_("TELEGRAM_QUEUE_WORKER_EARLY_EXIT", "", "reason=NO_HANDLE_SMS_ROUTER"); } catch (_) {}
+      return;
+    }
     var _cache = null;
     try { _cache = CacheService.getScriptCache(); } catch (_) {}
 
@@ -242,6 +305,12 @@ function processTelegramQueue_() {
         }
         continue;
       }
+
+      try {
+        if (typeof debugLogToSheet_ === "function") {
+          try { debugLogToSheet_("TELEGRAM_QUEUE_WORKER_CONSUME", "update_id=" + updateId, ""); } catch (_) {}
+        }
+      } catch (_) {}
 
       var media = [];
       var inbound = normalizeInboundEvent_("telegram", {

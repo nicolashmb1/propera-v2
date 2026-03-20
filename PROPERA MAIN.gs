@@ -3008,6 +3008,9 @@
       enqueueAiEnrichment_(ticketId, propCode, propName, unit, phone, issueForTicket);
     } catch (_) {}
 
+    // Keep a canonical in-memory scheduled end fact for post-create lifecycle branching.
+    var postCreateScheduledEndAt = null;
+
     // Apply draft schedule to ticket when pointer just set and ticket PREF_WINDOW empty
     if (loggedRow >= 2 && typeof COL !== "undefined" && typeof DIR_COL !== "undefined") {
       try {
@@ -3034,6 +3037,14 @@
           // Covers create paths where PREF_WINDOW was already populated upstream.
           try {
             var _finalSchedLabel = String(sheet.getRange(loggedRow, COL.PREF_WINDOW).getValue() || "").trim();
+            if (_finalSchedLabel && typeof parsePreferredWindowShared_ === "function") {
+              try {
+                var _schedParsed = parsePreferredWindowShared_(_finalSchedLabel, null);
+                if (_schedParsed && _schedParsed.end instanceof Date && isFinite(_schedParsed.end.getTime())) {
+                  postCreateScheduledEndAt = _schedParsed.end;
+                }
+              } catch (_) {}
+            }
             syncScheduledEndAtFromRawWindow_(sheet, loggedRow, _finalSchedLabel);
           } catch (_) {}
         }
@@ -3207,19 +3218,63 @@
       }, "FINALIZE_DRAFT");
     } catch (_) {}
 
-    // ── UNSCHEDULED lifecycle: owner set but no schedule (hallway ticket) ──
-    if (createdWi && asn && asn.ownerId && !isEmergencyTicket && typeof onWorkItemCreatedUnscheduled_ === "function") {
+    // ── Post-create lifecycle branch (business-fact based, channel-neutral) ──
+    // assigned + scheduled + non-emergency => ACTIVE_WORK + ACTIVE_WORK_ENTERED
+    // assigned + unscheduled + non-emergency => UNSCHEDULED hook (existing behavior)
+    if (createdWi && asn && asn.ownerId && !isEmergencyTicket) {
+      var resolvedScheduledEndAt = null;
       var hasSched = false;
       try {
-        if (sheet && loggedRow >= 2 && typeof COL !== "undefined" && COL.SCHEDULED_END_AT) {
-          var schedVal = sheet.getRange(loggedRow, COL.SCHEDULED_END_AT).getValue();
-          hasSched = !!(schedVal && (schedVal instanceof Date && isFinite(schedVal.getTime())));
+        if (postCreateScheduledEndAt instanceof Date && isFinite(postCreateScheduledEndAt.getTime())) {
+          resolvedScheduledEndAt = postCreateScheduledEndAt;
+          hasSched = true;
+        } else if (sheet && loggedRow >= 2) {
+          var schedCol = (typeof resolveScheduledEndAtCol_ === "function") ? resolveScheduledEndAtCol_(sheet) : (typeof COL !== "undefined" ? Number(COL.SCHEDULED_END_AT || 0) : 0);
+          if (schedCol > 0) {
+            var schedVal = sheet.getRange(loggedRow, schedCol).getValue();
+            if (schedVal instanceof Date && isFinite(schedVal.getTime())) {
+              resolvedScheduledEndAt = schedVal;
+              hasSched = true;
+            }
+          }
         }
-      }
-      catch (_) {}
+      } catch (_) {}
 
-      if (!hasSched) {
-        try { onWorkItemCreatedUnscheduled_(createdWi, propCode); } catch (e) { try { logDevSms_(phone, "", "UNSCHEDULED_HOOK_ERR " + String(e && e.message ? e.message : e)); } catch (_) {} }
+      try {
+        var wiNow = (typeof workItemGetById_ === "function") ? workItemGetById_(createdWi) : wiCached;
+        var wiStateNow = wiNow ? String(wiNow.state || "").trim().toUpperCase() : "";
+        var wiStatusNow = wiNow ? String(wiNow.status || "").trim().toUpperCase() : "";
+        var isTerminalNow = (wiStateNow === "DONE" || wiStateNow === "COMPLETED" || wiStatusNow === "COMPLETED");
+
+        if (hasSched && resolvedScheduledEndAt && !isTerminalNow) {
+          if (wiStateNow === "ACTIVE_WORK") {
+            try { logDevSms_(phone, "", "POST_CREATE_LIFECYCLE_SKIP wi=" + createdWi + " reason=ALREADY_ACTIVE_WORK"); } catch (_) {}
+          } else {
+            try {
+              workItemUpdate_(createdWi, { state: "ACTIVE_WORK", substate: "" });
+              if (typeof onWorkItemActiveWork_ === "function") {
+                onWorkItemActiveWork_(createdWi, propCode, { scheduledEndAt: resolvedScheduledEndAt });
+              }
+              logDevSms_(phone, "", "POST_CREATE_LIFECYCLE_SCHEDULED_ENTER_ACTIVE wi=" + createdWi + " runAt=" + resolvedScheduledEndAt.toISOString());
+            } catch (schedErr) {
+              try { logDevSms_(phone, "", "POST_CREATE_LIFECYCLE_ERROR wi=" + createdWi + " branch=SCHEDULED err=" + String(schedErr && schedErr.message ? schedErr.message : schedErr)); } catch (_) {}
+            }
+          }
+        } else if (!hasSched && typeof onWorkItemCreatedUnscheduled_ === "function" && !isTerminalNow) {
+          try {
+            onWorkItemCreatedUnscheduled_(createdWi, propCode);
+            try { logDevSms_(phone, "", "POST_CREATE_LIFECYCLE_UNSCHEDULED wi=" + createdWi); } catch (_) {}
+          } catch (e) {
+            try { logDevSms_(phone, "", "UNSCHEDULED_HOOK_ERR " + String(e && e.message ? e.message : e)); } catch (_) {}
+            try { logDevSms_(phone, "", "POST_CREATE_LIFECYCLE_ERROR wi=" + createdWi + " branch=UNSCHEDULED err=" + String(e && e.message ? e.message : e)); } catch (_) {}
+          }
+        } else {
+          try {
+            logDevSms_(phone, "", "POST_CREATE_LIFECYCLE_SKIP wi=" + createdWi + " reason=" + (isTerminalNow ? "TERMINAL" : "NO_BRANCH_TAKEN"));
+          } catch (_) {}
+        }
+      } catch (postCreateErr) {
+        try { logDevSms_(phone, "", "POST_CREATE_LIFECYCLE_ERROR wi=" + createdWi + " err=" + String(postCreateErr && postCreateErr.message ? postCreateErr.message : postCreateErr)); } catch (_) {}
       }
     }
 

@@ -1577,6 +1577,24 @@
     return t + " (" + qual + ")";
   }
 
+  /** Build one deterministic summary from multiple problem clauses (order preserved, semicolon-separated). Used for staff capture multi-issue title only. */
+  function buildCombinedIssueTitleFromClauses_(clauses) {
+    if (!clauses || !clauses.length) return "";
+    var parts = [];
+    for (var i = 0; i < clauses.length; i++) {
+      var c = clauses[i];
+      if (!c || !c.title) continue;
+      var t = String(c.title).trim();
+      if (!t) continue;
+      if (typeof normalizeIssueText_ === "function") {
+        try { t = normalizeIssueText_(t); } catch (_) {}
+      }
+      t = t.replace(/^\s*also\s+/i, "").trim();
+      if (t) parts.push(t);
+    }
+    return parts.join("; ");
+  }
+
 
   // ------------------------------------------------------------
   // Details builder: keep only useful non-schedule, non-ack content
@@ -1807,6 +1825,7 @@
           const isGreet   = (typeof looksLikeGreetingOnly_ === "function") && looksLikeGreetingOnly_(bodyTrim.toLowerCase());
           var issueText = issueCandidate || bodyTrim;
           var parsedIssue = null;
+          var effectiveIssueTitle = "";
           var isActionable = false;
           if (structuredIntake && (turnFacts && turnFacts.issue ? String(turnFacts.issue).trim() : bodyTrim).length >= 4) {
             issueText = (turnFacts && turnFacts.issue) ? String(turnFacts.issue).trim() : bodyTrim;
@@ -1826,16 +1845,24 @@
               : issueText;
             isActionable = (typeof looksActionableIssue_ === "function") && looksActionableIssue_(actionableText);
 
-            try {
-              if (parsedIssue && parsedIssue.title) {
+            // Effective issue title: for staff capture with multiple actionable clauses, combine all (order preserved); else single winner
+            effectiveIssueTitle = (parsedIssue && (parsedIssue.title || parsedIssue.bestClauseText)) ? String(parsedIssue.title || parsedIssue.bestClauseText).trim() : "";
+            var isStaffCaptureMultiIssue = sessionOpt && sessionOpt.staffCapture && parsedIssue && parsedIssue.clauses && parsedIssue.clauses.length > 1;
+            if (isStaffCaptureMultiIssue && typeof buildCombinedIssueTitleFromClauses_ === "function") {
+              effectiveIssueTitle = buildCombinedIssueTitleFromClauses_(parsedIssue.clauses);
+              try {
+                logDevSms_(phone, "", "STAFF_MULTI_ISSUE_COMBINED count=" + parsedIssue.clauses.length + " summary=[" + String(effectiveIssueTitle || "").slice(0, 120) + "]");
+              } catch (_) {}
+            } else if (parsedIssue && parsedIssue.title) {
+              try {
                 logDevSms_(phone, parsedIssue.title.slice(0, 80), "ISSUE_PICK_WIN dbg=[" + (parsedIssue.debug || "") + "]");
-              }
-            } catch (_) {}
+              } catch (_) {}
+            }
 
             try {
-              if (parsedIssue && parsedIssue.title) {
+              if (parsedIssue && effectiveIssueTitle) {
                 logDevSms_(phone, (bodyTrim || "").slice(0, 60),
-                  "ISSUE_PARSE title=[" + String(parsedIssue.title || "").slice(0, 60) + "]" +
+                  "ISSUE_PARSE title=[" + String(effectiveIssueTitle || "").slice(0, 60) + "]" +
                   " cat=[" + String(parsedIssue.category || "") + "]" +
                   " urg=[" + String(parsedIssue.urgency || "") + "]" +
                   " n=" + (parsedIssue.clauses ? parsedIssue.clauses.length : 0) +
@@ -1846,8 +1873,9 @@
           }
 
           if (!skipIssueAppend && !schemaApplied && !isAck && !isGreet && isActionable) {
-            // Preserve winning clause as main draftIssue title (parsedIssue.title or bestClauseText)
+            // Draft/ticket title: use effectiveIssueTitle when we have it (single winner or staff-capture combined), else turnFacts/session
             const newDetail =
+              (parsedIssue && effectiveIssueTitle) ? effectiveIssueTitle :
               (parsedIssue && (parsedIssue.title || parsedIssue.bestClauseText)) ? String(parsedIssue.title || parsedIssue.bestClauseText).trim() :
               (turnFacts && turnFacts.issue)     ? String(turnFacts.issue).trim() :
                                                   String(issueText || "").trim();
@@ -3068,12 +3096,13 @@
         propertyId:   propCode,
         unitId:       unit,
         ticketRow:    loggedRow,
+        ticketKey:    (ticket && ticket.ticketKey) ? String(ticket.ticketKey).trim() : "",
         metadataJson: JSON.stringify({
           source:     opts.createdByManager ? "MGR_DRAFT" : "DRAFT",
           inboundKey: String(opts.inboundKey || "")
         }),
 
-        // NEW: persisted ownership fields (policy-driven)
+        // persisted ownership fields (policy-driven)
         ownerType:         (asn && asn.ownerType) || "",
         ownerId:           (asn && asn.ownerId) || "",
         assignedByPolicy:  (asn && asn.assignedByPolicy) || "",
@@ -3191,6 +3220,22 @@
         lastIntent:        "MAINT"
       }, "FINALIZE_DRAFT");
     } catch (_) {}
+
+    // ── UNSCHEDULED lifecycle: owner set but no schedule (hallway ticket) ──
+    if (createdWi && asn && asn.ownerId && !isEmergencyTicket && typeof onWorkItemCreatedUnscheduled_ === "function") {
+      var hasSched = false;
+      try {
+        if (sheet && loggedRow >= 2 && typeof COL !== "undefined" && COL.SCHEDULED_END_AT) {
+          var schedVal = sheet.getRange(loggedRow, COL.SCHEDULED_END_AT).getValue();
+          hasSched = !!(schedVal && (schedVal instanceof Date && isFinite(schedVal.getTime())));
+        }
+      }
+      catch (_) {}
+
+      if (!hasSched) {
+        try { onWorkItemCreatedUnscheduled_(createdWi, propCode); } catch (e) { try { logDevSms_(phone, "", "UNSCHEDULED_HOOK_ERR " + String(e && e.message ? e.message : e)); } catch (_) {} }
+      }
+    }
 
     try { logDevSms_(phone, issue, "FINALIZE_DRAFT_OK row=[" + loggedRow + "] tid=[" + ticketId + "] wi=[" + createdWi + "] next=[" + nextStage + "]"); } catch (_) {}
 
@@ -3387,6 +3432,22 @@
     var ids = sheet.getRange(2, COL.TICKET_ID, lastRow, COL.TICKET_ID).getValues();
     for (var i = 0; i < ids.length; i++) {
       if (String(ids[i][0] || '').trim() === tid) return i + 2;
+    }
+    return 0;
+  }
+
+  /** Returns 1-based Sheet1 row for the given TicketKey, or 0 if not found. For lifecycle/policy lookup only (runtime resolution). */
+  function findTicketRowByTicketKey_(sheet, ticketKey) {
+    if (!sheet || !ticketKey || typeof ticketKey !== "string") return 0;
+    var key = String(ticketKey).trim();
+    if (!key) return 0;
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return 0;
+    var col = (typeof COL !== "undefined" && COL.TICKET_KEY) ? COL.TICKET_KEY : 0;
+    if (!col || col < 1) return 0;
+    var vals = sheet.getRange(2, col, lastRow, col).getValues();
+    for (var i = 0; i < vals.length; i++) {
+      if (String(vals[i][0] || "").trim() === key) return i + 2;
     }
     return 0;
   }
@@ -3729,6 +3790,7 @@
           workItemCreate_({
             type: "MAINT", status: "OPEN", state: "QUEUED", substate: "",
             phoneE164: phone, propertyId: propCode, unitId: unit, ticketRow: loggedRow,
+            ticketKey: (ticket && ticket.ticketKey) ? String(ticket.ticketKey).trim() : "",
             metadataJson: JSON.stringify({ source: "MGR_QUEUED", originPhone })
           });
         } catch (_) {}
@@ -3960,9 +4022,9 @@
   function ensureWorkBackbone_() {
     getOrCreateSheet_(WORKITEMS_SHEET, [
       "WorkItemId","Type","Status","State","Substate","PhoneE164","PropertyId","UnitId","TicketRow","MetadataJson","CreatedAt","UpdatedAt",
-      "OwnerType","OwnerId","AssignedByPolicy","AssignedAt"
+      "OwnerType","OwnerId","AssignedByPolicy","AssignedAt","TicketKey"
     ]);
-    // Upgrade-in-place: if WorkItems exists but is missing ownership headers, append them (avoids shifted columns)
+    // Upgrade-in-place: append missing headers at end (TicketKey last so we never shift existing columns)
     try {
       var wiSh = getActiveSheetByNameCached_(WORKITEMS_SHEET);
       if (wiSh && wiSh.getLastRow() >= 1) {
@@ -3970,6 +4032,7 @@
         var row1 = wiSh.getRange(1, 1, 1, lastCol).getValues()[0];
         var hdr = row1.map(function (x) { return String(x || "").trim(); });
         var needOwner = ["OwnerType", "OwnerId", "AssignedByPolicy", "AssignedAt"];
+        if (hdr.indexOf("TicketKey") < 0) needOwner.push("TicketKey");
         var missing = [];
         for (var i = 0; i < needOwner.length; i++) {
           if (hdr.indexOf(needOwner[i]) < 0) missing.push(needOwner[i]);
@@ -4014,11 +4077,14 @@
       now,
       now,
 
-      // NEW: ownership fields (these headers already exist in your sheet)
+      // ownership fields
       String(obj.ownerType || "").trim(),
       String(obj.ownerId || "").trim(),
       String(obj.assignedByPolicy || "").trim(),
-      (obj.assignedAt instanceof Date) ? obj.assignedAt : (obj.assignedAt ? new Date(obj.assignedAt) : "")
+      (obj.assignedAt instanceof Date) ? obj.assignedAt : (obj.assignedAt ? new Date(obj.assignedAt) : ""),
+
+      // TicketKey last (append-only; avoids shifting columns)
+      String(obj.ticketKey || "").trim()
     ];
 
     withWriteLock_("WORKITEM_CREATE", function () {
@@ -4041,7 +4107,7 @@
       var c = map[key];
       return (c >= 1 && c <= vals.length) ? vals[c - 1] : undefined;
     }
-    // minimal object (include assignment fields for Sheet1 sync)
+    // minimal object (include assignment fields for Sheet1 sync; ticketKey = canonical WI↔ticket link)
     return {
       row: r,
       workItemId: v_("WorkItemId"),
@@ -4053,6 +4119,7 @@
       propertyId: v_("PropertyId"),
       unitId: v_("UnitId"),
       ticketRow: v_("TicketRow"),
+      ticketKey: v_("TicketKey"),
       metadataJson: v_("MetadataJson"),
       ownerType: v_("OwnerType"),
       ownerId: v_("OwnerId"),
@@ -4075,6 +4142,7 @@
       if (patch.propertyId !== undefined) sh.getRange(r, col_(sh, "PropertyId")).setValue(String(patch.propertyId));
       if (patch.unitId !== undefined) sh.getRange(r, col_(sh, "UnitId")).setValue(String(patch.unitId));
       if (patch.ticketRow !== undefined) sh.getRange(r, col_(sh, "TicketRow")).setValue(patch.ticketRow ? Number(patch.ticketRow) : "");
+      if (patch.ticketKey !== undefined) sh.getRange(r, col_(sh, "TicketKey")).setValue(String(patch.ticketKey || "").trim());
       if (patch.metadataJson !== undefined) sh.getRange(r, col_(sh, "MetadataJson")).setValue(String(patch.metadataJson || ""));
       sh.getRange(r, col_(sh, "UpdatedAt")).setValue(new Date());
     });
@@ -5338,13 +5406,24 @@
     const phone = normalizePhone_(fromForNormalize);
     if (!phone) return;
 
+    // STAFF_CHECK: always log for non-# so we see why staff path is taken or skipped (unconditional).
+    if (bodyTrim && bodyTrim.charAt(0) !== "#") {
+      var _hasIsStaff = typeof isStaffSender_ === "function";
+      var _hasRoute = typeof staffHandleLifecycleCommand_ === "function";
+      var _isStaff = _hasIsStaff ? isStaffSender_(phone) : false;
+      var _lifecycleOn = (typeof lifecycleEnabled_ !== "function") ? true : lifecycleEnabled_("GLOBAL");
+      try {
+        logDevSms_(phone, bodyTrim,
+          "STAFF_CHECK phone=[" + String(phone || "") + "] hasIsStaff=[" + _hasIsStaff + "] hasRoute=[" + _hasRoute + "] isStaff=[" + _isStaff + "] lifecycleOn=[" + _lifecycleOn + "]");
+      } catch (_) {}
+    }
+
     // Non-# staff operational: lifecycle handles updates; # remains canonical STAFF CAPTURE in core.
     // When LIFECYCLE_ENABLED is false, skip lifecycle routing so message continues to existing Propera Main flow.
-    if (bodyTrim && bodyTrim.charAt(0) !== "#" &&
-        typeof isStaffSender_ === "function" && typeof routeStaffInbound_ === "function" &&
+    if (bodyTrim && bodyTrim.charAt(0) !== "#" && typeof isStaffSender_ === "function" && typeof staffHandleLifecycleCommand_ === "function" &&
         (typeof lifecycleEnabled_ !== "function" || lifecycleEnabled_("GLOBAL")) &&
         isStaffSender_(phone)) {
-      var handled = routeStaffInbound_(phone, bodyTrim);
+      var handled = staffHandleLifecycleCommand_(phone, bodyTrim);
       if (handled) return;
     }
 
@@ -6166,7 +6245,7 @@
 
           // Compass-safe fallback message (no state mutation) — via Outgate when available
           if (fromKey) {
-            var _ogCrash = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ERR_CRASH_FALLBACK", templateKey: "ERR_CRASH_FALLBACK", recipientType: "TENANT", recipientRef: fromKey, lang: "en", channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: {}, meta: { source: "doPost", stage: "ROUTER_CRASH", flow: "FALLBACK" } }) : { ok: false };
+            var _ogCrash = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ERROR_CRASH_FALLBACK", recipientType: "TENANT", recipientRef: fromKey, lang: "en", channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: {}, meta: { source: "doPost", stage: "ROUTER_CRASH", flow: "FALLBACK" } }) : { ok: false };
             if (!(_ogCrash && _ogCrash.ok)) sendRouterSms_(fromKey, renderTenantKey_("ERR_CRASH_FALLBACK", "en", {}), "CRASH_FALLBACK");
           }
         } catch (_) {}
@@ -10704,10 +10783,10 @@
       setStatus_(sheet, row, "In Progress");
 
       if (tid) {
-        var _ogE = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "EMERGENCY_CONFIRMED_DISPATCHED_WITH_TID", templateKey: "EMERGENCY_CONFIRMED_DISPATCHED_WITH_TID", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: Object.assign({}, baseVars, { ticketId: tid }), meta: { source: "finishEmergencyIfReady_", stage: "EMERGENCY_DONE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+        var _ogE = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "EMERGENCY_CONFIRMED_WITH_TICKET", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: Object.assign({}, baseVars, { ticketId: tid }), meta: { source: "finishEmergencyIfReady_", stage: "EMERGENCY_DONE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
         if (!(_ogE && _ogE.ok)) reply_(renderTenantKey_("EMERGENCY_CONFIRMED_DISPATCHED_WITH_TID", lang, { ...baseVars, ticketId: tid }));
       } else {
-        var _ogE2 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "EMERGENCY_CONFIRMED_DISPATCHED", templateKey: "EMERGENCY_CONFIRMED_DISPATCHED", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "finishEmergencyIfReady_", stage: "EMERGENCY_DONE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+        var _ogE2 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "EMERGENCY_CONFIRMED", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "finishEmergencyIfReady_", stage: "EMERGENCY_DONE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
         if (!(_ogE2 && _ogE2.ok)) reply_(renderTenantKey_("EMERGENCY_CONFIRMED_DISPATCHED", lang, baseVars));
       }
       return true;
@@ -13539,7 +13618,7 @@
       // Soft fallback reply (template-driven) — via Outgate when available
       try {
         const baseVars = { brandName: BRAND.name, teamName: BRAND.team, __welcomeLine: welcomeLine };
-        var _ogErr = (typeof dispatchOutboundIntent_ === "function" && from) ? dispatchOutboundIntent_({ intentType: "ERR_GENERIC_TRY_AGAIN", templateKey: "ERR_GENERIC_TRY_AGAIN", recipientType: "TENANT", recipientRef: from, lang: "en", channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "handleSmsSafe_", stage: "CRASH", flow: "FALLBACK" } }) : { ok: false };
+        var _ogErr = (typeof dispatchOutboundIntent_ === "function" && from) ? dispatchOutboundIntent_({ intentType: "ERROR_TRY_AGAIN", recipientType: "TENANT", recipientRef: from, lang: "en", channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "handleSmsSafe_", stage: "CRASH", flow: "FALLBACK" } }) : { ok: false };
         if (!(_ogErr && _ogErr.ok)) reply_(renderTenantKey_("ERR_GENERIC_TRY_AGAIN", "en", baseVars));
       } catch (_) {}
 
@@ -13812,8 +13891,8 @@
           turnFacts.meta.hasMediaOnly = (_numMediaStaff > 0) && weakStaff;
           if (staffMediaFacts.syntheticBody && (typeof isWeakIssue_ === "function" && !isWeakIssue_(staffMediaFacts.syntheticBody))) turnFacts.meta.hasMediaOnly = false;
 
-          // 3) Draft upsert (UNCHANGED FUNCTION)
-          draftUpsertFromTurn_(dir, dirRow, turnFacts, mergedPayloadText, draftPhone);
+          // 3) Draft upsert (staffCapture so multi-issue gets combined title)
+          draftUpsertFromTurn_(dir, dirRow, turnFacts, mergedPayloadText, draftPhone, { staffCapture: true });
 
           // 4) Recompute expected stage
           try { recomputeDraftExpected_(dir, dirRow, draftPhone); } catch (_) {}
@@ -14644,7 +14723,7 @@
       if (earlyResult && earlyResult.handled) {
         earlyCleaningHandled = true;
         if (typeof clearMaintenanceDraftResidue_ === "function") clearMaintenanceDraftResidue_(dir, dirRow, phone);
-        try { var _ogC0 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "CLEANING_WORKITEM_ACK", templateKey: "CLEANING_WORKITEM_ACK", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "CLEANING_EARLY", flow: "MAINTENANCE_INTAKE" } }) : { ok: false }; if (!(_ogC0 && _ogC0.ok)) replyNoHeader_(renderTenantKey_("CLEANING_WORKITEM_ACK", lang, baseVars)); } catch (_) {}
+        try { var _ogC0 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "CLEANING_WORKITEM_ACK", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "CLEANING_EARLY", flow: "MAINTENANCE_INTAKE" } }) : { ok: false }; if (!(_ogC0 && _ogC0.ok)) replyNoHeader_(renderTenantKey_("CLEANING_WORKITEM_ACK", lang, baseVars)); } catch (_) {}
         return;
       }
     } catch (_) {}
@@ -14913,7 +14992,7 @@
       const hasPending = !!(ctx && ctx.pendingExpected && String(ctx.pendingExpected).trim());
 
       if (ackOnly && !hasPending) {
-        var _ogA = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TENANT_ACK_NO_PENDING", templateKey: "TENANT_ACK_NO_PENDING", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "ACK_ONLY", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+        var _ogA = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TENANT_ACK_NO_PENDING", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "ACK_ONLY", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
         if (!(_ogA && _ogA.ok)) reply_(renderTenantKey_("TENANT_ACK_NO_PENDING", lang, baseVars));
         try { logDevSms_(originPhone, String(bodyTrim || ""), "CORE_ACK_ONLY_NO_PENDING"); } catch (_) {}
         return;
@@ -15185,7 +15264,7 @@
 
         // If not actionable, skip confirm gate entirely — unless we have draft data (then do not send HELP_INTRO).
         if ((isGreeting || isAck || !actionable) && !hasDraftData) {
-          var _ogH = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "HELP_INTRO", templateKey: "HELP_INTRO", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "CONFIRM_GATE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+          var _ogH = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "SHOW_HELP", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "CONFIRM_GATE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
           if (!(_ogH && _ogH.ok)) replyNoHeader_(renderTenantKey_("HELP_INTRO", lang, baseVars));
           try { logDevSms_(phone, bodyTrim, "SKIP_CONFIRM_GATE non_issue greeting=" + String(!!isGreeting) + " ack=" + String(!!isAck) + " actionable=" + String(!!actionable), "CONFIRM_GATE_SKIP"); } catch (_) {}
           return;
@@ -15216,7 +15295,7 @@
 
     const msgLower0 = String(bodyTrim || "").toLowerCase().trim();
     if (looksLikeGreetingOnly_(msgLower0) || looksLikeAckOnly_(msgLower0)) {
-      var _ogH2 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "HELP_INTRO", templateKey: "HELP_INTRO", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "TENANT_DB_GATE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+      var _ogH2 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "SHOW_HELP", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "TENANT_DB_GATE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
       if (!(_ogH2 && _ogH2.ok)) replyNoHeader_(tenantMsg_("HELP_INTRO", lang, baseVars));
       try { logDevSms_(phone, bodyTrim, "TENANT_DB_GATE_SKIP_GREETING_ACK"); } catch (_) {}
       return;
@@ -15367,7 +15446,7 @@
             try { logDevSms_(phone, bodyTrim, "CONFIRM_YES_BLOCKED_REROUTE stage=[" + effectiveStage + "]"); } catch (_) {}
             // Do NOT return — let execution continue into stage handler
           } else {
-            var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ERR_DRAFT_FINALIZE_FAILED", templateKey: "ERR_DRAFT_FINALIZE_FAILED", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+            var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ERROR_DRAFT_FINALIZE_FAILED", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
             return;
           }
         } else if (result.multiIssuePending) {
@@ -15379,7 +15458,7 @@
           if (result.nextStage === "SCHEDULE" || result.nextStage === "SCHEDULE_DRAFT_MULTI") {
             var combined = (result.summaryMsg && String(result.summaryMsg).trim()) ? String(result.summaryMsg).trim() : renderTenantKey_("ASK_WINDOW_SIMPLE", lang, baseVars);
             try { logDevSms_(phone, combined.slice(0, 120), "MULTI_COMBINED_OUT"); } catch (_) {}
-            var _ogC = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "MULTI_SUMMARY_ASK_SCHEDULE", templateKey: "MULTI_SUMMARY_ASK_SCHEDULE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", preRenderedBody: combined, meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+            var _ogC = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_ASK_SCHEDULE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars || {}, { summaryText: combined }), meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
             if (!(_ogC && _ogC.ok)) replyNoHeader_(combined);
             return;
           }
@@ -15387,7 +15466,7 @@
         } else {
           if (result.nextStage === "") {
             if (!result.ackOwnedByPolicy) {
-              var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_COMMON_AREA", templateKey: "TICKET_CREATED_COMMON_AREA", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, { ticketId: String(result.ticketId || "") }), meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+              var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_COMMON_AREA", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, { ticketId: String(result.ticketId || "") }), meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
               try { if (dirRow > 0 && typeof advanceTenantQueueOrClear_ === "function") advanceTenantQueueOrClear_(sheet, dir, dirRow, phone, lang); } catch (_) {}
             } else {
               try { logDevSms_(phone, "", "ACK_SUPPRESSED_BY_POLICY workItemId=" + (result.createdWi || "") + " rule=" + (result.policyRuleId || "")); } catch (_) {}
@@ -15430,7 +15509,7 @@
         if (_out && _out.ok) replied = true;
       }
       else {
-        var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ASK_ISSUE_GENERIC", templateKey: "ASK_ISSUE_GENERIC", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "ISSUE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+        var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ASK_FOR_ISSUE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "ISSUE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
         if (_og && _og.ok) replied = true;
       }
       return;
@@ -15591,7 +15670,7 @@
       } catch (_) {}
     }
 
-    var _ogEu = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "EMERGENCY_UPDATE_ACK", templateKey: "EMERGENCY_UPDATE_ACK", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "EMERGENCY", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+    var _ogEu = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "EMERGENCY_UPDATE_ACK", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "EMERGENCY", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
     if (!(_ogEu && _ogEu.ok)) reply_(renderTenantKey_("EMERGENCY_UPDATE_ACK", lang, baseVars));
     return;
   }
@@ -15614,7 +15693,7 @@
   var ticketBoundNoRow = (effectiveStage === "SCHEDULE" || effectiveStage === "DETAIL") && (pendingRow < 2);
   if (ticketBoundNoRow) {
     try { logDevSms_(phone, (bodyTrim || "").slice(0, 40), "STAGE_REQUIRES_ROW_BUT_NONE stage=[" + effectiveStage + "] action=NORMALIZE_TO_ISSUE"); } catch (_) {}
-    var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ASK_ISSUE_GENERIC", templateKey: "ASK_ISSUE_GENERIC", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "ISSUE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+    var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ASK_FOR_ISSUE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "ISSUE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
     if (_og && _og.ok) replied = true;
     try { dalSetPendingStage_(dir, dirRow, "", phone, "NORMALIZE_STAGE_NO_ROW"); } catch (_) {}
     try { ctxUpsert_(phone, { pendingExpected: "", pendingExpiresAt: "" }, "normalize_stage_requires_row"); } catch (_) {}
@@ -15642,7 +15721,7 @@
       var reaskMsg = accessNotesSdm
         ? (renderTenantKey_("CONFIRM_WINDOW_FROM_NOTE", lang, Object.assign({}, baseVars, { accessNotes: accessNotesSdm })) || renderTenantKey_("ASK_WINDOW_SIMPLE", lang, baseVars))
         : renderTenantKey_("ASK_WINDOW_SIMPLE", lang, baseVars);
-      var _ogR = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "SCHEDULE_DRAFT_MULTI_REASK", templateKey: "SCHEDULE_DRAFT_MULTI_REASK", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", preRenderedBody: reaskMsg, meta: { source: "HANDLE_SMS_CORE", stage: "SCHEDULE_DRAFT_MULTI", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+      var _ogR = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "SCHEDULE_DRAFT_REASK", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars || {}, { accessNotes: accessNotesSdm }), meta: { source: "HANDLE_SMS_CORE", stage: "SCHEDULE_DRAFT_MULTI", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
       if (!(_ogR && _ogR.ok)) replyNoHeader_(reaskMsg);
       return;
     }
@@ -15669,7 +15748,7 @@
       var failMsg = accessNotesFail
         ? (renderTenantKey_("CONFIRM_WINDOW_FROM_NOTE", lang, Object.assign({}, baseVars, { accessNotes: accessNotesFail })) || renderTenantKey_("ASK_WINDOW_SIMPLE", lang, baseVars))
         : renderTenantKey_("ASK_WINDOW_SIMPLE", lang, baseVars);
-      var _ogF = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "SCHEDULE_DRAFT_MULTI_FAIL", templateKey: "SCHEDULE_DRAFT_MULTI_FAIL", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", preRenderedBody: failMsg, meta: { source: "HANDLE_SMS_CORE", stage: "SCHEDULE_DRAFT_MULTI", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+      var _ogF = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "SCHEDULE_DRAFT_FAIL", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars || {}, { accessNotes: accessNotesFail }), meta: { source: "HANDLE_SMS_CORE", stage: "SCHEDULE_DRAFT_MULTI", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
       if (!(_ogF && _ogF.ok)) replyNoHeader_(failMsg);
       return;
     }
@@ -15678,7 +15757,7 @@
     } catch (_) {}
     var countSdm = (bufSdm && bufSdm.length) ? bufSdm.length : 1;
     var confirmVars = Object.assign({}, baseVars, { count: String(countSdm), when: labelSdm });
-    var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "MULTI_CREATED_CONFIRM", templateKey: "MULTI_CREATED_CONFIRM", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: confirmVars, meta: { source: "HANDLE_SMS_CORE", stage: "SCHEDULE_DRAFT_MULTI", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+    var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "MULTI_CREATED_CONFIRM", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: confirmVars, meta: { source: "HANDLE_SMS_CORE", stage: "SCHEDULE_DRAFT_MULTI", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
     return;
   }
 
@@ -15713,7 +15792,7 @@
         // -------------------------
         const propsList = getActiveProperties_();
         if (!propsList || !propsList.length) {
-          var _ogErr = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ERR_NO_PROPERTIES_CONFIGURED", templateKey: "ERR_NO_PROPERTIES_CONFIGURED", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "PROPERTY", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+          var _ogErr = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ERROR_NO_PROPERTIES", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "PROPERTY", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
           if (!(_ogErr && _ogErr.ok)) reply_(renderTenantKey_("ERR_NO_PROPERTIES_CONFIGURED", lang, baseVars));
           return;
         }
@@ -15847,7 +15926,7 @@
         }
         if (pendingRow < 2) {
           if (!pendingIssue) {
-            var _ogErr = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ERR_LOST_OPEN_REQUEST", templateKey: "ERR_LOST_OPEN_REQUEST", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "PROPERTY", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+            var _ogErr = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ERROR_LOST_REQUEST", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "PROPERTY", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
             if (!(_ogErr && _ogErr.ok)) reply_(renderTenantKey_("ERR_LOST_OPEN_REQUEST", lang, baseVars));
 
             dalSetPendingStage_(dir, dirRow, "", phone, "DIR_CLEAR_STAGE_AFTER_LOST_PTR");
@@ -15882,7 +15961,7 @@
                 ? String(recovResult.summaryMsg).trim()
                 : renderTenantKey_("ASK_WINDOW_SIMPLE", lang, baseVars);
               try { logDevSms_(phone, combinedMi.slice(0, 120), "MULTI_COMBINED_OUT_RECOV"); } catch (_) {}
-              var _ogMi = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "MULTI_ISSUE_COMBINED", templateKey: "MULTI_ISSUE_COMBINED", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", preRenderedBody: combinedMi, meta: { source: "HANDLE_SMS_CORE", stage: "PROPERTY", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+              var _ogMi = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_ASK_SCHEDULE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars || {}, { summaryText: combinedMi }), meta: { source: "HANDLE_SMS_CORE", stage: "PROPERTY", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
               if (!(_ogMi && _ogMi.ok)) replyNoHeader_(combinedMi);
               return;
             }
@@ -15894,7 +15973,7 @@
           // Normal path: ticket row exists
           pendingRow = recovResult.loggedRow;
           if (pendingRow < 2 || !sheet || pendingRow > sheet.getLastRow()) {
-            var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ERR_DRAFT_FINALIZE_FAILED", templateKey: "ERR_DRAFT_FINALIZE_FAILED", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "PROPERTY", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+            var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ERROR_DRAFT_FINALIZE_FAILED", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "PROPERTY", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
             return;
           }
         }
@@ -15952,7 +16031,7 @@
           } catch (_) {}
           if (nextStage === "") {
             if (!(recovResult && recovResult.ackOwnedByPolicy)) {
-              var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_COMMON_AREA", templateKey: "TICKET_CREATED_COMMON_AREA", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, { ticketId: String((recovResult && recovResult.ticketId) || "") }), meta: { source: "HANDLE_SMS_CORE", stage: "PROPERTY", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+              var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_COMMON_AREA", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, { ticketId: String((recovResult && recovResult.ticketId) || "") }), meta: { source: "HANDLE_SMS_CORE", stage: "PROPERTY", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
               try { if (dirRow > 0 && typeof advanceTenantQueueOrClear_ === "function") advanceTenantQueueOrClear_(sheet, dir, dirRow, phone, lang); } catch (_) {}
             } else {
               try { logDevSms_(phone, "", "ACK_SUPPRESSED_BY_POLICY workItemId=" + (recovResult.createdWi || "") + " rule=" + (recovResult.policyRuleId || "")); } catch (_) {}
@@ -16015,7 +16094,7 @@
         if (!issueText) {
           dalSetPendingStage_(dir, dirRow, "ISSUE", phone, "UNIT_NEXT_ISSUE");
           if (hasTicketPtr) setStatus_(sheet, pendingRow, "Waiting Tenant");
-          var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ASK_ISSUE_GENERIC", templateKey: "ASK_ISSUE_GENERIC", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "ISSUE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+          var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ASK_FOR_ISSUE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "ISSUE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
           if (_og && _og.ok) replied = true;
 
           try {
@@ -16053,8 +16132,8 @@
           setStatus_(sheet, pendingRow, "In Progress");
 
           const tid = String(sheet.getRange(pendingRow, COL.TICKET_ID).getValue() || "").trim();
-          if (tid) { var _ogE = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "EMERGENCY_CONFIRMED_DISPATCHED_WITH_TID", templateKey: "EMERGENCY_CONFIRMED_DISPATCHED_WITH_TID", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, { ticketId: tid }), meta: { source: "HANDLE_SMS_CORE", stage: "EMERGENCY_DONE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false }; if (!(_ogE && _ogE.ok)) replyNoHeader_(renderTenantKey_("EMERGENCY_CONFIRMED_DISPATCHED_WITH_TID", lang, { ...baseVars, ticketId: tid })); }
-          else     { var _ogE2 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "EMERGENCY_CONFIRMED_DISPATCHED", templateKey: "EMERGENCY_CONFIRMED_DISPATCHED", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "EMERGENCY_DONE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false }; if (!(_ogE2 && _ogE2.ok)) replyNoHeader_(renderTenantKey_("EMERGENCY_CONFIRMED_DISPATCHED", lang, baseVars)); }
+          if (tid) { var _ogE = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "EMERGENCY_CONFIRMED_WITH_TICKET", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, { ticketId: tid }), meta: { source: "HANDLE_SMS_CORE", stage: "EMERGENCY_DONE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false }; if (!(_ogE && _ogE.ok)) replyNoHeader_(renderTenantKey_("EMERGENCY_CONFIRMED_DISPATCHED_WITH_TID", lang, { ...baseVars, ticketId: tid })); }
+          else     { var _ogE2 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "EMERGENCY_CONFIRMED", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "EMERGENCY_DONE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false }; if (!(_ogE2 && _ogE2.ok)) replyNoHeader_(renderTenantKey_("EMERGENCY_CONFIRMED_DISPATCHED", lang, baseVars)); }
 
           try { ctxUpsert_(phone, { pendingExpected: "", pendingExpiresAt: "" }); } catch (_) {}
           return;
@@ -16122,7 +16201,7 @@
 
       } catch (err) {
         try { logDevSms_(phone, "PROPERTY_STAGE_CRASH err=" + err + " stack=" + (err && err.stack), "ERR_PROPERTY"); } catch (_) {}
-        var _ogErr = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ERR_GENERIC_TRY_AGAIN", templateKey: "ERR_GENERIC_TRY_AGAIN", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "PROPERTY", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+        var _ogErr = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ERROR_TRY_AGAIN", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "PROPERTY", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
         if (!(_ogErr && _ogErr.ok)) reply_(renderTenantKey_("ERR_GENERIC_TRY_AGAIN", lang, baseVars));
         return;
       }
@@ -16274,7 +16353,7 @@
     const dirIssue = dalGetPendingIssue_(dir, dirRow);
     if (!dirIssue) {
       setStatus_(sheet, pendingRow, "Waiting Tenant");
-      var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ASK_ISSUE_GENERIC", templateKey: "ASK_ISSUE_GENERIC", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "ISSUE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+      var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ASK_FOR_ISSUE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "ISSUE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
       if (_og && _og.ok) replied = true;
       try {
         dalSetPendingStage_(dir, dirRow, "ISSUE", phone, "DIR_SET_STAGE_ISSUE");
@@ -16357,8 +16436,8 @@
       setStatus_(sheet, pendingRow, "In Progress");
 
       const tid = String(sheet.getRange(pendingRow, COL.TICKET_ID).getValue() || "").trim();
-      if (tid) { var _ogE = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "EMERGENCY_CONFIRMED_DISPATCHED_WITH_TID", templateKey: "EMERGENCY_CONFIRMED_DISPATCHED_WITH_TID", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, { ticketId: tid }), meta: { source: "HANDLE_SMS_CORE", stage: "UNIT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false }; if (!(_ogE && _ogE.ok)) replyNoHeader_(renderTenantKey_("EMERGENCY_CONFIRMED_DISPATCHED_WITH_TID", lang, { ...baseVars, ticketId: tid })); }
-      else     { var _ogE2 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "EMERGENCY_CONFIRMED_DISPATCHED", templateKey: "EMERGENCY_CONFIRMED_DISPATCHED", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "UNIT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false }; if (!(_ogE2 && _ogE2.ok)) replyNoHeader_(renderTenantKey_("EMERGENCY_CONFIRMED_DISPATCHED", lang, baseVars)); }
+      if (tid) { var _ogE = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "EMERGENCY_CONFIRMED_WITH_TICKET", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, { ticketId: tid }), meta: { source: "HANDLE_SMS_CORE", stage: "UNIT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false }; if (!(_ogE && _ogE.ok)) replyNoHeader_(renderTenantKey_("EMERGENCY_CONFIRMED_DISPATCHED_WITH_TID", lang, { ...baseVars, ticketId: tid })); }
+      else     { var _ogE2 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "EMERGENCY_CONFIRMED", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "UNIT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false }; if (!(_ogE2 && _ogE2.ok)) replyNoHeader_(renderTenantKey_("EMERGENCY_CONFIRMED_DISPATCHED", lang, baseVars)); }
 
       try {
         ctxUpsert_(phone, {
@@ -16730,7 +16809,7 @@
           var _combined = (_recov.summaryMsg && String(_recov.summaryMsg).trim())
             ? String(_recov.summaryMsg).trim()
             : renderTenantKey_("ASK_WINDOW_SIMPLE", lang, baseVars);
-          var _ogComb = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "MULTI_ISSUE_COMBINED", templateKey: "MULTI_ISSUE_COMBINED", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", preRenderedBody: _combined, meta: { source: "HANDLE_SMS_CORE", stage: "ISSUE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+          var _ogComb = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_ASK_SCHEDULE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars || {}, { summaryText: _combined }), meta: { source: "HANDLE_SMS_CORE", stage: "ISSUE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
           if (!(_ogComb && _ogComb.ok)) replyNoHeader_(_combined);
           return;
         }
@@ -16740,7 +16819,7 @@
         var _nextSt = String(_recov.nextStage || "").trim().toUpperCase();
         if (_nextSt === "") {
           if (!_recov.ackOwnedByPolicy) {
-            var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_COMMON_AREA", templateKey: "TICKET_CREATED_COMMON_AREA", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, { ticketId: String(_recov.ticketId || "") }), meta: { source: "HANDLE_SMS_CORE", stage: "ISSUE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+            var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_COMMON_AREA", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, { ticketId: String(_recov.ticketId || "") }), meta: { source: "HANDLE_SMS_CORE", stage: "ISSUE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
             try { if (dirRow > 0 && typeof advanceTenantQueueOrClear_ === "function") advanceTenantQueueOrClear_(sheet, dir, dirRow, phone, lang); } catch (_) {}
           } else {
             try { logDevSms_(phone, "", "ACK_SUPPRESSED_BY_POLICY workItemId=" + (_recov.createdWi || "") + " rule=" + (_recov.policyRuleId || "")); } catch (_) {}
@@ -16754,7 +16833,7 @@
         }
         return;
       }
-      var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ERR_DRAFT_FINALIZE_FAILED", templateKey: "ERR_DRAFT_FINALIZE_FAILED", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "ISSUE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+      var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ERROR_DRAFT_FINALIZE_FAILED", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "ISSUE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
       return;
     }
 
@@ -17134,7 +17213,7 @@
     try { ctxUpsert_(phone, { pendingExpected: "", pendingExpiresAt: "" }, "VISIT_RESOLVED"); } catch (_) {}
     var _visitVars = Object.assign({}, baseVars, { visitId: visitId, ticketIds: ticketIds.join(", "), label: label });
     var _ogVisit = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({
-      intentType: "VISIT_CONFIRM_MULTI", templateKey: "VISIT_CONFIRM_MULTI", recipientType: "TENANT", recipientRef: phone, lang: lang,
+      intentType: "VISIT_CONFIRM", recipientType: "TENANT", recipientRef: phone, lang: lang,
       channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER",
       vars: _visitVars, meta: { source: "HANDLE_SMS_CORE", stage: "SCHEDULE", flow: "MAINTENANCE_INTAKE" }
     }) : { ok: false };
@@ -17491,7 +17570,7 @@
       if (result.nextStage === "SCHEDULE" || result.nextStage === "SCHEDULE_DRAFT_MULTI") {
         var combined = (result.summaryMsg && String(result.summaryMsg).trim()) ? String(result.summaryMsg).trim() : renderTenantKey_("ASK_WINDOW_SIMPLE", lang, baseVars);
         try { logDevSms_(phone, combined.slice(0, 120), "MULTI_COMBINED_OUT"); } catch (_) {}
-        var _ogC2 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "MULTI_SUMMARY_ASK_SCHEDULE", templateKey: "MULTI_SUMMARY_ASK_SCHEDULE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", preRenderedBody: combined, meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+        var _ogC2 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_ASK_SCHEDULE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars || {}, { summaryText: combined }), meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
         if (!(_ogC2 && _ogC2.ok)) replyNoHeader_(combined);
         return;
       }
@@ -17501,7 +17580,7 @@
 
     if (result.nextStage === "") {
       if (!result.ackOwnedByPolicy) {
-        var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_COMMON_AREA", templateKey: "TICKET_CREATED_COMMON_AREA", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, { ticketId: String(result.ticketId || "") }), meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+        var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_COMMON_AREA", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, { ticketId: String(result.ticketId || "") }), meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
         try { if (dirRow > 0 && typeof advanceTenantQueueOrClear_ === "function") advanceTenantQueueOrClear_(sheet, dir, dirRow, phone, lang); } catch (_) {}
       } else {
         try { logDevSms_(phone, "", "ACK_SUPPRESSED_BY_POLICY workItemId=" + (result.createdWi || "") + " rule=" + (result.policyRuleId || "")); } catch (_) {}
@@ -17569,7 +17648,7 @@
     if (domainDispatchResult && domainDispatchResult.handled === true) {
       if (typeof clearMaintenanceDraftResidue_ === "function") clearMaintenanceDraftResidue_(dir, dirRow, phone);
       try {
-        var _ogC = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "CLEANING_WORKITEM_ACK", templateKey: "CLEANING_WORKITEM_ACK", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "CLEANING_DISPATCH", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+        var _ogC = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "CLEANING_WORKITEM_ACK", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "CLEANING_DISPATCH", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
         if (!(_ogC && _ogC.ok)) replyNoHeader_(renderTenantKey_("CLEANING_WORKITEM_ACK", lang, baseVars));
       } catch (_) {}
       return;
@@ -17579,7 +17658,7 @@
 
     // â”€â”€ A) Guardrail â”€â”€
     if (isPureChitchat_(rawTrim) && !looksActionableIssue_(rawTrim)) {
-      var _ogH3 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "HELP_INTRO", templateKey: "HELP_INTRO", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "NEW_TICKET_FLOW", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+      var _ogH3 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "SHOW_HELP", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "NEW_TICKET_FLOW", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
       if (!(_ogH3 && _ogH3.ok)) replyNoHeader_(renderTenantKey_("HELP_INTRO", lang, baseVars));
       return;
     }
@@ -17668,7 +17747,7 @@
         if (_og && _og.ok) replied = true;
       }
       else /* ISSUE */ {
-        var _og2 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ASK_ISSUE_GENERIC", templateKey: "ASK_ISSUE_GENERIC", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "ISSUE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+        var _og2 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ASK_FOR_ISSUE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "ISSUE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
         if (_og2 && _og2.ok) replied = true;
       }
       return;
@@ -17689,7 +17768,7 @@
     ].join("|");
     const dkey = "DUP60_" + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, dkeyRaw));
     if (cache.get(dkey)) {
-      var _ogDup = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "DUPLICATE_REQUEST_ACK", templateKey: "DUPLICATE_REQUEST_ACK", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "NEW_TICKET_FLOW", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+      var _ogDup = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "DUPLICATE_REQUEST_ACK", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "NEW_TICKET_FLOW", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
       if (!(_ogDup && _ogDup.ok)) reply_(renderTenantKey_("DUPLICATE_REQUEST_ACK", lang, baseVars));
       return;
     }
@@ -17718,7 +17797,7 @@
         // Re-route to continuation handler â€" do NOT return
         try { logDevSms_(phone, bodyTrim, "NTF_BLOCKED_REROUTE stage=[" + effectiveStage + "]"); } catch (_) {}
       } else {
-        var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ERR_DRAFT_FINALIZE_FAILED", templateKey: "ERR_DRAFT_FINALIZE_FAILED", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+        var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ERROR_DRAFT_FINALIZE_FAILED", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
         return;
       }
     }
@@ -17731,7 +17810,7 @@
       if (result.nextStage === "SCHEDULE" || result.nextStage === "SCHEDULE_DRAFT_MULTI") {
         var combined = (result.summaryMsg && String(result.summaryMsg).trim()) ? String(result.summaryMsg).trim() : renderTenantKey_("ASK_WINDOW_SIMPLE", lang, baseVars);
         try { logDevSms_(phone, combined.slice(0, 120), "MULTI_COMBINED_OUT"); } catch (_) {}
-        var _ogC3 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "MULTI_SUMMARY_ASK_SCHEDULE", templateKey: "MULTI_SUMMARY_ASK_SCHEDULE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", preRenderedBody: combined, meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+        var _ogC3 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_ASK_SCHEDULE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars || {}, { summaryText: combined }), meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
         if (!(_ogC3 && _ogC3.ok)) replyNoHeader_(combined);
         return;
       }
@@ -17795,7 +17874,7 @@
     }
     if (nextStage === "") {
       if (!result.ackOwnedByPolicy) {
-        var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_COMMON_AREA", templateKey: "TICKET_CREATED_COMMON_AREA", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, { ticketId: String(ticketId || "") }), meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+        var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_COMMON_AREA", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, { ticketId: String(ticketId || "") }), meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
         try { if (dirRow > 0 && typeof advanceTenantQueueOrClear_ === "function") advanceTenantQueueOrClear_(sheet, dir, dirRow, phone, lang); } catch (_) {}
       } else {
         try { logDevSms_(phone, "", "ACK_SUPPRESSED_BY_POLICY workItemId=" + (createdWi || "") + " rule=" + (result.policyRuleId || "")); } catch (_) {}
@@ -17811,7 +17890,7 @@
       const intro = renderTenantKey_("MGR_CREATED_TICKET_INTRO", lang, baseVars);
       const ask   = renderTenantKey_("ASK_WINDOW_SIMPLE", lang, Object.assign({}, baseVars, { dayLine }));
       var _mgrBody = String(intro || "").trim() + "\n\n" + String(ask || "").trim();
-      var _ogMgr = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "MGR_CREATED_INTRO_ASK", templateKey: "MGR_CREATED_INTRO_ASK", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", preRenderedBody: _mgrBody, meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+      var _ogMgr = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_ASK_SCHEDULE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars || {}, { managerIntro: _mgrBody }), meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
       if (!(_ogMgr && _ogMgr.ok)) replyNoHeader_(_mgrBody);
       return;
     }
@@ -17870,7 +17949,7 @@
       }
 
       if (exp2 === "ISSUE") {
-        var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ASK_ISSUE_GENERIC", templateKey: "ASK_ISSUE_GENERIC", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "ISSUE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+        var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "ASK_FOR_ISSUE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "ISSUE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
         if (_og && _og.ok) replied = true;
         try {
           ctxUpsert_(phone, {

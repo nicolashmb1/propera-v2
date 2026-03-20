@@ -1,0 +1,23 @@
+DO THIS FIRST — Create the repo on GitHub (takes 1 minute)
+==========================================================
+
+1. Open this link in your browser:
+   https://github.com/new
+
+2. Fill in:
+   Repository name:   propera-telegram-proxy
+   Description:      (leave empty or type "Telegram webhook proxy for Propera")
+   Public or Private: choose Private (recommended)
+
+3. IMPORTANT: Leave everything ELSE unchecked:
+   - Do NOT check "Add a README file"
+   - Do NOT add .gitignore
+   - Do NOT add a license
+
+4. Click the green button "Create repository".
+
+5. On the next page, you will see a URL like:
+   https://github.com/YOUR_USERNAME/propera-telegram-proxy.git
+   COPY THAT URL (you need it for step 2 in the next file).
+
+6. Then open the file:  2_PUSH.ps1   in this folder and follow it.

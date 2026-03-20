@@ -13,7 +13,31 @@ All code changes must preserve:
 - responsibility-aware routing
 - lifecycle integrity
 - auditability
-- modular evolution toward the Propera North Compass
+- architectural layering (Signal → Brain → Outgate)
+- evolution toward the Propera North Compass
+
+---
+
+## 0. System Shape (Non-Negotiable Architecture)
+
+All flows must respect this structure:
+
+```
+INBOUND
+→ Adapter (transport only)
+→ Signal Layer (normalize)
+→ Compiler / Context Layer
+→ Responsibility Resolver
+→ Domain Engine (Lifecycle / Policy)
+→ Canonical Outbound Intent
+→ Outgate (channel + expression)
+```
+
+- No code may skip layers.
+- Adapters do not decide.
+- Outgate does not decide.
+- AI does not decide.
+- The Brain (resolver + lifecycle + policy) decides.
 
 ---
 
@@ -30,295 +54,469 @@ AI must **never** be the source of truth for:
 
 AI **may** assist with:
 - interpretation of messy inputs
-- expression / communication generation
+- extraction of structured data
 - summarization
+- message expression (Outgate layer)
 
-> The engine decides what is true. AI only helps interpret or express that truth.
+The engine decides what is true. AI only helps interpret or express that truth.
 
 ---
 
 ## 2. All inbound reality must become a normalized signal
 
 Every input must enter through the Signal Layer:
-- tenant SMS
-- staff SMS
-- owner request
-- vendor reply
-- IoT event
-- timer callback
-- portal submission
-- external API webhook
+- tenant SMS / WhatsApp / Telegram
+- staff commands (`#capture`, natural language)
+- voice / Alexa / future devices
+- owner communication
+- vendor communication
+- IoT events
+- timer callbacks
+- portal submissions
+- external API webhooks
+
+All must produce a **Canonical Signal Package**.
 
 No workflow should bypass normalization.
-Every signal must be converted into structured context before business logic acts on it.
+No business logic should act on raw transport payloads.
 
 ---
 
-## 3. Responsibility must be resolved explicitly
+## 3. Adapters are transport-only
 
-No code should hardcode ad hoc person routing when the resolver can determine it.
+Adapters **may**:
+- authenticate
+- normalize transport payload shape
+- attach channel metadata
+- acknowledge receipt
+- hand off canonical signal packages to the shared front door
 
-The system routes through:
-- staff/contact identity
-- staff assignments
+Adapters **must not**:
+- parse operational intent
+- assign responsibility
+- mutate lifecycle state
+- apply business policy
+- send operational decisions
+- contain channel-specific business workflows
+
+> Adapter = package in, package out.
+
+---
+
+## 4. Context must be extracted before action
+
+Signals are not actions. Signals must first become operational context.
+
+Context extraction must produce, where applicable:
+- actor
+- channel
+- property
+- unit
+- domain
+- issue summary
+- severity hint
+- lifecycle relevance
+- scheduling data
+- referenced work item / ticket context
+
+No domain engine should act on ambiguous raw input when structured context has not been resolved enough to make the next step explicit.
+
+---
+
+## 5. Responsibility must be resolved explicitly
+
+No feature code should hardcode routing.
+
+Responsibility must always flow through:
+- identity resolution
+- assignment data
 - routing rules
-- responsibility resolver
+- resolver logic
+- lifecycle context
 
-Always ask: **Who owns the next action in this context?**
+Always ask: **Who owns the next action?**
 
-Do not embed hidden routing assumptions in feature code.
+If the answer is hidden in feature code, the implementation is wrong.
 
 ---
 
-## 4. Lifecycle changes must go through the operational model
+## 6. Lifecycle is the single source of operational truth
+
+All operational state must live in the lifecycle model.
 
 State changes must be:
-- intentional
+- explicit
 - explainable
 - logged
-- consistent with current lifecycle
+- policy-driven
+- consistent with current lifecycle state
 
-**Avoid:**
-- random direct sheet mutations
-- "quick fixes" that silently patch status
-- hidden writes that do not update the audit trail
+**Forbidden:**
+- silent state mutation
+- bypassing lifecycle transitions
+- patching truth through ad hoc sheet edits
+- hidden writes that alter operational meaning without auditability
 
 ---
 
-## 5. Reuse canonical write paths
+## 7. Lifecycle engine must remain domain-pure
+
+Lifecycle **must not** contain:
+- channel logic (SMS, Telegram, WhatsApp, Alexa, Portal, etc.)
+- transport-specific response handling
+- free-text parsing logic
+- identity guessing
+- staff command parsing
+- adapter behavior
+
+Lifecycle **may**:
+- evaluate current state
+- apply policy
+- determine next action
+- set timers
+- emit canonical lifecycle decisions
+- request outbound intents
+
+Lifecycle decides domain progression, not transport behavior.
+
+---
+
+## 8. One system, not parallel systems
+
+If a feature needs routing, timers, escalation, responsibility, messaging, logging, or lifecycle control — **extend the existing mechanism**.
+
+Do not create:
+- a second resolver
+- a second lifecycle model
+- a second timer engine
+- a second audit trail
+- a second messaging path for the same concept
+- parallel state hidden in convenience helpers
+
+Parallel systems create silent drift.
+
+---
+
+## 9. Reuse canonical write paths
 
 Before adding a new write path, check whether a canonical helper already exists.
 
-Canonical helpers:
-- `workItemCreate_()` — work item creation + ownership fields
-- `wiTransition_()` — work item state transitions
-- `workItemUpdate_()` — work item field patches
-- `policyLogEventRow_()` — all policy/assignment audit logging
-- `getOrCreateSheet_()` — sheet bootstrap
-- `withWriteLock_()` / `dalWithLock_()` — lock discipline
-- `getActiveProperties_()` / `getPropertyIdByCode_()` / `getPropertyByNameOrCode_()` — property normalization
-- `renderTenantKey_()` + `sendRouterSms_()` — all outbound tenant SMS
+Canonical helpers include:
+- `workItemCreate_()`
+- `wiTransition_()`
+- `workItemUpdate_()`
+- `policyLogEventRow_()`
+- `withWriteLock_()`
+- `dalWithLock_()`
+- property normalization helpers
+- identity resolution helpers
+- canonical outbound intent + Outgate paths
 
 > One concept. One primary write path.
 
 ---
 
-## 6. All writes that affect operational truth must be lock-safe
+## 10. All operational writes must be lock-safe
 
-Any code that mutates:
-- tickets
+Any mutation of operational truth must use the project's lock discipline.
+
+This includes:
 - work items
-- conversation state
+- lifecycle state
+- conversation context
 - timers
-- policy logs
 - assignments
-- sheet structure
+- policy logs
+- routing tables
+- sheet structure that affects runtime behavior
 
-must use the project's lock discipline.
-
-**Prefer:** `withWriteLock_()` or `dalWithLock_()`
+Prefer:
+- `withWriteLock_()`
+- `dalWithLock_()`
 
 Do not introduce unlocked writes for important state.
 
 ---
 
-## 7. All important actions must be auditable
+## 11. Everything important must be auditable
 
 The system must log enough to reconstruct:
 - what signal arrived
+- how it was normalized
 - what context was extracted
-- what rule/path was selected
+- what resolver path was used
 - who was assigned responsibility
-- what message/action was sent
-- what escalations happened
+- what lifecycle transition occurred
+- what outbound intent was emitted
+- what actual communication was sent
+- what timer or escalation was scheduled
+- why a branch was taken
 
-If a new behavior cannot be explained later, it is not production-safe.
-
-**Reuse:**
-- `PolicyEventLog`
-- existing operational logs
-- existing debug logs (`logDevSms_()`)
+If a behavior cannot be explained later, it is not production-safe.
 
 ---
 
-## 8. Do not hardcode role/person logic into domain flows
+## 12. Outbound must go through canonical intent → Outgate
 
-**Avoid:**
-```javascript
-if (staffName === "Nick") { ... }
-if (building === "PENN") { sendTo("+1..."); }
-if (owner === "John") { ... }
+No domain code should send operational messages directly.
+
+Correct flow:
+```
+decision → canonical outbound intent → Outgate → channel
 ```
 
-All human targeting must come from:
+Outgate is responsible for:
+- channel selection
+- formatting
+- compliance wrappers
+- transport-specific delivery behavior
+- expression rendering
+- future AI-assisted phrasing under policy constraints
+
+Outgate must not redefine business truth.
+
+---
+
+## 13. Do not hardcode people, properties, or roles
+
+**Forbidden:**
+```javascript
+if (staffName === "Nick") { ... }
+if (property === "PENN") { ... }
+if (owner === "John") { ... }
+if (building === "MURR") { sendTo("+1..."); }
+```
+
+All human or building targeting must come from:
 - resolver output
 - assignments
 - routing rules
 - policy
+- normalized data
 
-> People are data, not code.
+People and buildings are data, not code.
 
 ---
 
-## 9. Do not over-template human communication
+## 14. Do not over-template communication
 
 Templates are acceptable for:
 - compliance
-- legal/safety keywords
-- short standard acknowledgments
-- fallback messages
+- legal / safety language
+- short acknowledgments
+- fallback messaging
+- bounded deterministic fragments
 
-Propera's long-term communication model:
-1. Deterministic engine chooses **message intent**
-2. AI expression layer generates **role-appropriate message**
-3. Hard policy constraints limit what can be said
+Propera's long-term communication model is:
+1. Deterministic engine chooses message intent
+2. Outgate / expression layer renders role-appropriate message
+3. Policy constraints limit what may be said
+4. Channel requirements shape final output
 
-Do not try to model all operational communication with massive template trees.
+Do not build massive template trees as a substitute for proper intent architecture.
 
 ---
 
-## 10. Preserve separation of concerns
-
-Keep these layers distinct and do not collapse them into one function:
+## 15. Preserve strict separation of layers
 
 | Layer | Responsibility |
 |---|---|
-| Signal Layer | Where inputs arrive from |
-| Context Layer | What the signal means |
-| Responsibility Resolver | Who owns the next action |
-| Policy / Lifecycle Layer | What should happen next |
-| Communication Layer | Who needs to be informed |
-| Expression Layer | How the message is phrased |
+| Adapter | Receive / authenticate / normalize transport payload |
+| Signal Layer | Produce canonical signal package |
+| Compiler / Context Layer | Extract operational meaning |
+| Responsibility Resolver | Determine who owns next action |
+| Domain Engine / Lifecycle / Policy | Decide what should happen next |
+| Canonical Outbound Intent | Represent the decision in transport-neutral form |
+| Outgate | Deliver and express the decision per channel |
+
+Do not collapse multiple layers into one convenience function.
+Do not let transport, interpretation, responsibility, lifecycle, and expression blur together.
 
 ---
 
-## 11. Prefer extension over parallel systems
+## 16. Build the smallest live loop first
 
-If a feature needs routing, timers, escalation, responsibility, messaging, or logging — **extend the existing mechanism**.
+When implementing new architecture or new capability:
+1. choose one narrow live path
+2. prove it end to end
+3. verify truth, auditability, and ownership behavior
+4. then generalize
 
-Do not create:
-- a second resolver
-- a second timer engine
-- a second audit trail
-- a second lifecycle model
-
-> Parallel systems create hidden drift.
-
----
-
-## 12. Build the smallest live loop first
-
-When implementing new architecture:
-1. Choose one narrow live path
-2. Prove it end to end
-3. Then generalize
-
-**Good rollout examples:**
+Good rollout examples:
 - maintenance request → responsibility assigned
 - overdue ticket → ask responsible staff for update
 - vendor needed → vendor branch created
+- portal/staff free text → shared scheduling parser → canonical schedule object
 
-Avoid solving every domain at once.
+Avoid solving every domain and every channel at once.
 
 ---
 
-## 13. Property operations are role-aware, not person-assumption based
+## 17. Routing must be role-aware, not staffing-assumption based
 
 The system must support:
 - one person holding multiple roles
-- different buildings with different staffing models
-- owners with different involvement levels
-- PM/super overlap in small operations
+- different staffing models by building
+- owner-involved and owner-non-involved operations
+- PM / super overlap in small buildings
 - dedicated staff in larger operations
+- vendor involvement only when needed
 
-Routing must be context-based and role-aware. Do not assume one staffing shape.
-
----
-
-## 14. Vendor is a branch, not the trunk
-
-Real property operations are:
-- **in-house first**
-- PM/super/maintenance-centered
-- vendor only when needed
-
-Vendor workflows are a supported branch of the lifecycle, not the default mental model.
+Routing must always be context-based and role-aware.
+Do not assume one staffing shape.
 
 ---
 
-## 15. IoT and external APIs must plug into the same core
+## 18. Vendor is a branch, not the trunk
 
-New inputs — leak sensors, access systems, noise detectors, external APIs — must follow the same pattern:
+Property operations are generally:
+- in-house first
+- PM / super / maintenance centered
+- vendor only when required by policy, skill, availability, or escalation
+
+Vendor workflows are supported branches of lifecycle, not the default mental model.
+
+Do not design vendor-first systems unless policy explicitly requires it.
+
+---
+
+## 19. All inputs and outputs must converge on shared cores
+
+New inputs (voice, Alexa, WhatsApp, Telegram, portal, screenshots, IoT, external APIs) must follow the same core path:
 
 ```
-signal → context → responsibility → policy → lifecycle → communication
+signal → context → resolver → lifecycle → intent → outgate
 ```
 
-Do not build special-case bypass flows for machine-originated signals.
+Outputs must converge through shared Outgate delivery decisions rather than channel-specific business branches.
+
+No special-case bypass flows for machine-originated or premium-channel signals.
 
 ---
 
-## 16. Optimize for operational truth, not demo polish
+## 20. Shared parsers should become shared infrastructure
 
-A feature is successful when:
+If multiple channels or entry points need the same interpretation capability, it becomes shared infrastructure — not duplicated logic.
+
+Examples:
+- schedule parsing
+- property normalization
+- unit extraction
+- issue summarization
+- staff command resolution
+- referenced ticket/work item resolution
+
+Do not keep channel-specific clones of the same parser when the logic represents shared operational meaning.
+
+---
+
+## 21. Optimize for operational truth, not demo polish
+
+A feature is **successful** when:
 - the right person is informed
 - the right next action is known
 - the lifecycle moves correctly
 - the audit trail is intact
+- the state is inspectable and replayable
 
-> A polished message with wrong operational behavior is failure.
-> Truth first. Fluency second.
+A feature is **not** successful merely because:
+- the message sounds polished
+- the demo looks smooth
+- the flow seems clever
+- the UI hides the underlying ambiguity
+
+> A polished message with wrong operational behavior is failure. Truth first. Fluency second.
 
 ---
 
-## 17. When in doubt, make the system more explicit
+## 22. Make everything explicit
 
-**Prefer:**
+Prefer:
 - explicit states
-- explicit assignments
+- explicit ownership
 - explicit timers
-- explicit reasons
+- explicit schedule objects
+- explicit transition reasons
 - explicit event logs
+- explicit canonical intents
 
-**Avoid:**
+Avoid:
 - hidden inference
 - magical coupling
 - state implied only by message text
-- behavior that depends on memory no one can inspect
+- behavior that depends on invisible memory
+- transport-specific side effects that change truth indirectly
 
 Explicit systems scale better.
 
 ---
 
-## 18. Jarvis is interface, not authority
+## 23. System safety is mandatory
 
-Future conversational/voice AI may sound like Jarvis, but it must remain:
+All production-safe flows must include, where applicable:
+- deduplication (SID / fingerprint / replay guards)
+- lock protection around operational writes
+- failure-safe fallback response behavior
+- structured error logging
+- safe retries or idempotent handling
+- crash containment
+- deterministic handling of fragmented or repeated signals
+
+The system must fail safely, not mysteriously.
+
+---
+
+## 24. Ship-first architecture, but never at the cost of truth
+
+Propera may ship on Sheets / Apps Script / lightweight infrastructure for speed, but every meaningful feature must still respect:
+- unified routing
+- explicit state
+- canonical write paths
+- structured auditability
+- future migration readiness
+
+Fast implementation is acceptable. Architectural debt disguised as speed is not.
+
+---
+
+## 25. Jarvis is interface, not authority
+
+Future conversational or voice AI may sound like Jarvis, but it must remain:
 - interface
 - translator
 - explainer
 - guide
+- expression layer
 
-Jarvis is not the authority on building operations.
-**The orchestration engine remains the authority.**
+Jarvis must **never** become:
+- source of operational truth
+- authority on ownership
+- lifecycle controller
+- policy engine
+- hidden resolver
+
+The orchestration engine remains the authority.
 
 ---
 
 ## Review Checklist for Every Meaningful Change
 
-Before approving any change, ask:
+Before approving any meaningful change, ask:
 
-- [ ] Does this preserve deterministic operational truth?
-- [ ] Does this route through the resolver where appropriate?
-- [ ] Does it keep lifecycle changes explicit?
-- [ ] Does it reuse canonical write/log paths?
-- [ ] Is it auditable?
-- [ ] Does it fit the North Compass?
+- [ ] Does it follow Signal → Brain → Outgate?
+- [ ] Does it preserve deterministic operational truth?
+- [ ] Does it normalize inbound reality into a canonical signal?
+- [ ] Does it extract context before acting?
+- [ ] Does it route through the resolver where appropriate?
+- [ ] Does it keep lifecycle changes explicit and logged?
+- [ ] Does it keep lifecycle domain-pure?
+- [ ] Does it reuse canonical write and log paths?
+- [ ] Is every important action auditable?
+- [ ] Does outbound flow through canonical intent → Outgate?
+- [ ] Does it avoid hardcoded person/building logic?
 - [ ] Does it avoid creating a parallel system?
+- [ ] Does it keep adapters transport-only?
+- [ ] Does it keep AI in an assistive, non-authoritative role?
+- [ ] Is it safe under duplicate, replayed, or concurrent inputs?
 
 **If any answer is "no" — revise the change.**
-
----
-
-## One Sentence Reminder
-
-> Do not build clever automations. Build a trustworthy operational brain.

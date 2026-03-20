@@ -1,0 +1,27 @@
+Your proxy is committed. To push to GitHub, do these 3 things:
+
+--- STEP 1: Create an empty repo on GitHub ---
+1. Open: https://github.com/new
+2. Repository name: propera-telegram-proxy  (or any name you like)
+3. Choose Private
+4. Do NOT check "Add a README" or .gitignore
+5. Click "Create repository"
+
+--- STEP 2: Copy your repo URL ---
+GitHub will show something like:
+   https://github.com/YOUR_USERNAME/propera-telegram-proxy.git
+Copy that URL (replace YOUR_USERNAME with your actual username).
+
+--- STEP 3: Run these 2 commands in PowerShell (in this folder) ---
+
+cd "c:\Users\nicol\OneDrive\Documents\propera code\telegram-proxy"
+
+git remote add origin PASTE_YOUR_URL_HERE
+
+git push -u origin main
+
+(Replace PASTE_YOUR_URL_HERE with the URL from Step 2, in quotes.)
+
+When it asks for password, use a Personal Access Token from GitHub:
+  GitHub → your profile → Settings → Developer settings → Personal access tokens → Generate new token.
+  Use the token as the password when Git asks.

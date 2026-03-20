@@ -353,7 +353,11 @@ function safeParseWindow_(text) {
   const cleaned = normalizeDateTimeText_(text);
 
   try {
-    if (typeof parsePreferredWindow_ === "function") {
+    if (typeof parsePreferredWindowShared_ === "function") {
+      const out = parsePreferredWindowShared_(cleaned);
+      if (out && out.start) return out;
+    } else if (typeof parsePreferredWindow_ === "function") {
+      // Transitional compatibility: parsePreferredWindow_ delegates to the shared parser
       const out = parsePreferredWindow_(cleaned);
       if (out && out.start) return out;
     }
