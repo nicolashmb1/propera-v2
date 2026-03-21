@@ -173,7 +173,7 @@
         try { t = normalizeIssueText_(t); } catch (_) {}
       }
       if (!t) continue;
-      if ((typeof looksActionableIssue_ === "function") && !looksActionableIssue_(t)) continue;
+      if ((typeof isProblemClauseForAdmission_ === "function") && !isProblemClauseForAdmission_(t)) continue;
       out.push(t);
     }
     return out;
@@ -221,6 +221,34 @@
   // clauses: [{ text, title, type, score }]
   // ============================================================
 
+  // Multi-issue hygiene helper:
+  // For a single "problem" clause containing multiple fixtures joined by "and the <fixture>",
+  // split into subclauses so parseIssueDeterministic_ can produce multiple problem clauses.
+  function maybeSplitProblemClauseIntoMultiSubclauses_(text) {
+    var t = String(text || "").trim();
+    if (!t) return [];
+    if (!/\band\b/i.test(t)) return [t];
+
+    // Only split when the token after "and" starts with a known fixture/issue noun.
+    // This avoids splitting phrases like "leaves water" that are part of the same defect.
+    var nounAlt =
+      "sink|toilet|shower|tub|faucet|drain|pipe|stove|oven|range|burner|washer|dryer|fridge|refrigerator|freezer|dishwasher|microwave|light|intercom|door|lock|window|thermostat|ac|a\\/c|heater|outlet|breaker";
+    try {
+      var rxSplit = new RegExp("\\s+and\\s+(?=(?:the\\s+)?(?:" + nounAlt + ")\\b)", "i");
+      var parts = t.split(rxSplit).map(function (x) { return String(x || "").trim(); }).filter(function (x) { return x.length >= 4; });
+      if (parts.length < 2) return [t];
+
+      // Require at least two distinct fixture/issue noun mentions (cheap check).
+      var nounRe = new RegExp("\\b(?:" + nounAlt + ")\\b", "i");
+      var n0 = nounRe.test(parts[0]);
+      var n1 = nounRe.test(parts[1]);
+      if (!n0 || !n1) return [t];
+      return parts;
+    } catch (_) {}
+
+    return [t];
+  }
+
   function parseIssueDeterministic_(rawText, opts) {
     opts = opts || {};
     var raw = String(rawText || "").trim();
@@ -244,16 +272,30 @@
         continue;
       }
 
-      var type = classifyIssueClauseType_(c);
-      var score = scoreIssueClauseWithPos_(c, type, i, clausesRaw.length);
+      var baseType = classifyIssueClauseType_(c);
+      var partsToProcess = (baseType === "problem") ? maybeSplitProblemClauseIntoMultiSubclauses_(c) : [c];
+      if (!partsToProcess || !partsToProcess.length) partsToProcess = [c];
 
-      // title candidate
-      var title = "";
-      if (type === "problem" || type === "context") {
-        title = normalizeIssueTitle_(c);
+      for (var pIdx = 0; pIdx < partsToProcess.length; pIdx++) {
+        var part = String(partsToProcess[pIdx] || "").trim();
+        if (!part) continue;
+
+        if (typeof isScheduleWindowLike_ === "function" && isScheduleWindowLike_(part)) {
+          clauses.push({ text: part, title: "", type: "schedule", score: -999 });
+          continue;
+        }
+
+        var type = classifyIssueClauseType_(part);
+        var score = scoreIssueClauseWithPos_(part, type, i + (pIdx * 0.1), clausesRaw.length);
+
+        // title candidate — problem clauses only (context/schedule/request are not primary titles)
+        var title = "";
+        if (type === "problem") {
+          title = normalizeIssueTitle_(part);
+        }
+
+        clauses.push({ text: part, title: title, type: type, score: score });
       }
-
-      clauses.push({ text: c, title: title, type: type, score: score });
     }
 
     // 4) Pick best core problem clause
@@ -264,16 +306,6 @@
       if (!it) continue;
       if (it.type !== "problem") continue;
       if (it.score > bestScore) { bestScore = it.score; bestIdx = j; }
-    }
-
-    // If no explicit "problem", allow a strong "context" clause to become problem-like (rare)
-    if (bestIdx < 0) {
-      for (var k = 0; k < clauses.length; k++) {
-        var it2 = clauses[k];
-        if (!it2) continue;
-        if (it2.type !== "context") continue;
-        if (it2.score > bestScore) { bestScore = it2.score; bestIdx = k; }
-      }
     }
 
     var core = (bestIdx >= 0) ? clauses[bestIdx] : null;
@@ -1390,6 +1422,13 @@
       try { t = extractIssuePayload_(t); } catch (_) {}
     }
 
+    // Remove leading identity anchors like "Mike from apt 210 at Penn" / "I'm Sarah in unit 118 Westfield".
+    // This keeps issue extraction focused on the defect, not who said it.
+    t = t.replace(
+      /^\s*(?:i'?m\s+)?[a-z]{2,}(?:\s+[a-z]{1,}){0,4}\s+(?:from|in)\s+(?:apt|apartment|unit|rm|room|suite|ste|#)\s*[\w\-]{1,6}(?:\s+at\s+[a-z0-9\s'\-]{1,30})?\b[\s\,\.\-:;]*/i,
+      ""
+    );
+
     // collapse whitespace
     t = t.replace(/\s+/g, " ").trim();
     return t;
@@ -1415,12 +1454,24 @@
   // ------------------------------------------------------------
   // Clause type classification
   // ------------------------------------------------------------
+  // Phase A contract (taxonomy → legacy labels used in this file):
+  // - problem: symptom/defect/hazard maintenance should fix (→ type "problem")
+  // - context: scene-setting / temporal narrative without defect as primary (→ "context")
+  // - schedule: availability / time windows (→ "schedule" when strict window; else often "other")
+  // - request: dispatch / visit / meta-request without new defect (→ "request"; schedule-intent-only → "request")
+  // - filler/other: greeting / ack / chit / resolved (→ "greeting"|"ack"|"other")
+  // - question / attempt: subtypes that must not win as primary issue (→ "question"|"attempt")
+  // Admission to issue buffer / multi-issue lists: only classify === "problem" (see isProblemClauseForAdmission_,
+  // parseIssueDeterministic_ outClauses, appendIssueBufferItem_).
   function classifyIssueClauseType_(c) {
     var t = String(c || "").toLowerCase().trim();
     if (!t) return "other";
 
     if (typeof looksLikeGreetingOnly_ === "function" && looksLikeGreetingOnly_(t)) return "greeting";
     if (typeof looksLikeAckOnly_ === "function" && looksLikeAckOnly_(t)) return "ack";
+
+    // Strict time/availability window — not a defect clause (parity with parseIssueDeterministic_ pre-classify branch)
+    if (typeof isScheduleWindowLike_ === "function" && isScheduleWindowLike_(t)) return "schedule";
 
     if (/\?$/.test(t)) return "question";
     if (/^\s*(when|what|how|why|can you|could you|is there|any chance|do you|will you)\b/.test(t)) return "question";
@@ -1433,8 +1484,8 @@
     if (/^\s*(i tried|i've tried|i have tried)\b/i.test(t)) return "attempt";
     if (/\b(drain cleaner|plunged|plunging|reset|restarted|adjusted|turned the thermostat)\b/.test(t)) return "attempt";
 
-    // schedule-intent only (e.g. "please have maintenance schedule to check it") — do not treat as second problem
-    if (typeof isScheduleIntentOnly_ === "function" && isScheduleIntentOnly_(t)) return "other";
+    // schedule-intent only (e.g. "please have maintenance schedule to check it") — request framing, not a defect
+    if (typeof isScheduleIntentOnly_ === "function" && isScheduleIntentOnly_(t)) return "request";
 
     // explicit request/action phrases should never be treated as separate problems
     if (isRequestClausePattern_(t)) return "request";
@@ -1450,6 +1501,14 @@
     if (isResolvedOrDismissedClause_(t)) return "other";
 
     return "other";
+  }
+
+  /** True only when clause is classified as a maintenance problem (buffer / mixed-property split admission). */
+  function isProblemClauseForAdmission_(text) {
+    var t = String(text || "").trim();
+    if (!t) return false;
+    if (typeof classifyIssueClauseType_ !== "function") return false;
+    return classifyIssueClauseType_(t) === "problem";
   }
 
 
@@ -1481,6 +1540,7 @@
 
     // hard negatives
     if (type === "greeting" || type === "ack") return -500;
+    if (type === "schedule") return -50;
     if (type === "request") return -50;
     if (type === "question") return -50;
     if (type === "attempt") return -250;
@@ -1521,6 +1581,7 @@
     if (!t) return "";
 
     // Strip wrappers/questions at start
+    t = t.replace(/^\s*(also|and|but|so)\b[\s\,\.\-:;]*/i, "");
     t = t.replace(/^\s*(just\s+)?(wanted to|want to|need to)\s+/i, "");
     t = t.replace(/^\s*(is there|any chance|can you|could you|would you)\b[\s\,\.\-:]*/i, "");
 
@@ -1608,6 +1669,7 @@
       if (!c.text) continue;
       if (c.type === "greeting" || c.type === "ack") continue;
       if (c.type === "schedule") continue;
+      if (c.type === "context" || c.type === "request") continue;
 
       var text = String(c.text || "").trim();
       if (!text) continue;
@@ -1684,7 +1746,19 @@
     var didWriteIssue = false;
     var schemaObjPre = null;
     var schemaGateUsed = false;
-    if (bodyTrim && (typeof isSchemaExtractEnabled_ === "function") && isSchemaExtractEnabled_()) {
+    var schemaAlreadyAttempted = false;
+    try {
+      if (typeof globalThis !== "undefined" && globalThis.__sopPhase2Intake) {
+        var _sopBag = globalThis.__sopPhase2Intake;
+        if (_sopBag.schemaObj) {
+          schemaObjPre = _sopBag.schemaObj;
+          schemaGateUsed = true;
+          try { logDevSms_(phone, (bodyTrim || "").slice(0, 40), "SCHEMA_GATE use=1 reason=[SOP_PHASE2_REUSE]"); } catch (_) {}
+        }
+        if (_sopBag.schemaExtractAttempted) schemaAlreadyAttempted = true;
+      }
+    } catch (_) {}
+    if (!schemaObjPre && !schemaAlreadyAttempted && bodyTrim && (typeof isSchemaExtractEnabled_ === "function") && isSchemaExtractEnabled_()) {
       var gatePre = (typeof shouldUseSchemaExtract_ === "function") ? shouldUseSchemaExtract_(bodyTrim) : { use: false, reason: "" };
       schemaGateUsed = gatePre.use;
       if (gatePre.use) {
@@ -2000,9 +2074,43 @@
         }
 
         // 4) Schedule (ticket PREF_WINDOW) — write-if-empty when we have a ticket pointer
+        // Phase 1: never persist full inbound messages into PreferredWindow/DRAFT_SCHEDULE_RAW.
+        // Persist a normalized schedule label/phrase instead.
+        var scheduleCandidateInput = "";
+        var scheduleInputFromBody = false;
+        if (
+          turnFacts &&
+          turnFacts.schedule &&
+          turnFacts.schedule.raw &&
+          (typeof isScheduleWindowLike_ === "function") &&
+          isScheduleWindowLike_(turnFacts.schedule.raw)
+        ) {
+          scheduleCandidateInput = String(turnFacts.schedule.raw || "").trim();
+        } else if (typeof isScheduleWindowLike_ === "function" && isScheduleWindowLike_(bodyTrim)) {
+          scheduleCandidateInput = String(bodyTrim || "").trim();
+          scheduleInputFromBody = true;
+        }
+
         var scheduleCandidateRaw = "";
-        if (turnFacts && turnFacts.schedule && turnFacts.schedule.raw && (typeof isScheduleWindowLike_ === "function") && isScheduleWindowLike_(turnFacts.schedule.raw)) scheduleCandidateRaw = String(turnFacts.schedule.raw || "").trim();
-        else if (typeof isScheduleWindowLike_ === "function" && isScheduleWindowLike_(bodyTrim)) scheduleCandidateRaw = String(bodyTrim || "").trim();
+        var scheduleParseSource = "";
+        if (scheduleCandidateInput) {
+          if (typeof parsePreferredWindowShared_ === "function") {
+            try {
+              var _schedParsedPre = parsePreferredWindowShared_(scheduleCandidateInput, null);
+              if (_schedParsedPre && _schedParsedPre.label) {
+                scheduleCandidateRaw = String(_schedParsedPre.label || "").trim();
+                scheduleParseSource = "parsed_label";
+              }
+            } catch (_) {}
+          }
+
+          // If parsing failed on a full inbound message, do NOT persist the whole message.
+          if (!scheduleCandidateRaw && !scheduleInputFromBody) {
+            scheduleCandidateRaw = scheduleCandidateInput;
+            scheduleParseSource = "raw_schedule_phrase";
+          }
+        }
+
         if (scheduleCandidateRaw) {
           const pendingRowSched = parseInt(String(dir.getRange(dirRow, 7).getValue() || "0"), 10) || 0;
           if (pendingRowSched >= 2 && typeof COL !== "undefined") {
@@ -2015,7 +2123,13 @@
                     sheetSched.getRange(pendingRowSched, COL.PREF_WINDOW).setValue(scheduleCandidateRaw);
                     sheetSched.getRange(pendingRowSched, COL.LAST_UPDATE).setValue(now);
                   });
-                  try { logDevSms_(phone, bodyTrim, "DRAFT_UPSERT schedule=[" + scheduleCandidateRaw.slice(0, 60) + "]"); } catch (_) {}
+                  try {
+                    logDevSms_(
+                      phone,
+                      scheduleCandidateRaw,
+                      "PREFERRED_WINDOW_WRITE source=[" + String(scheduleParseSource || "").trim() + "] label=[" + String(scheduleCandidateRaw || "").slice(0, 80) + "]"
+                    );
+                  } catch (_) {}
                 }
               }
             } catch (_) {}
@@ -2025,7 +2139,13 @@
               const existingDraft = String(dir.getRange(dirRow, draftCol).getValue() || "").trim();
               if (!existingDraft) {
                 dir.getRange(dirRow, draftCol).setValue(scheduleCandidateRaw);
-                try { logDevSms_(phone, bodyTrim, "DRAFT_UPSERT schedule_saved_draft raw=[" + scheduleCandidateRaw.slice(0, 60) + "]"); } catch (_) {}
+                try {
+                  logDevSms_(
+                    phone,
+                    scheduleCandidateRaw,
+                    "PREFERRED_WINDOW_WRITE source=[" + String(scheduleParseSource || "").trim() + "] label=[" + String(scheduleCandidateRaw || "").slice(0, 80) + "]"
+                  );
+                } catch (_) {}
               }
             } catch (_) {}
           } else {
@@ -2609,8 +2729,12 @@
             };
           }
 
-          // Fallback to raw
-          issue = t;
+          // Parsed but no problem title: do not promote entire body as issue (avoid context/schedule bleed)
+          if (parsed) {
+            issue = String(parsed.bestClauseText || "").trim();
+          } else {
+            issue = t;
+          }
         }
       }
     } catch (_) {}
@@ -2692,6 +2816,9 @@
   // ============================================================
   function finalizeDraftAndCreateTicket_(sheet, dir, dirRow, phone, from, opts) {
     opts = opts || {};
+    var __finalizeT0 = Date.now();
+    var __finalizeAdapter = (typeof globalThis !== "undefined" && globalThis.__traceAdapter) ? String(globalThis.__traceAdapter).trim() : "";
+    var __finalizeTraceId = (typeof globalThis !== "undefined" && globalThis.__traceId) ? String(globalThis.__traceId).trim() : "";
     var locationTextHint = String(opts.locationText || "").trim();
 
     var existingPendingRow = dalGetPendingRow_(dir, dirRow);
@@ -2845,7 +2972,18 @@
     if (!issueForTicket) issueForTicket = String(issue || "").trim();
 
     var locInput = locationTextHint || issueForTicket;
-    var locationDecide = locationDecidePrefetched || inferLocationType_(opts.OPENAI_API_KEY || String(sp.getProperty("OPENAI_API_KEY") || ""), locInput, phone);
+    var locationDecide = locationDecidePrefetched;
+    if (!locationDecide) {
+      try {
+        if (!locationTextHint && typeof globalThis !== "undefined" && globalThis.__sopPhase2Intake && globalThis.__sopPhase2Intake.inferLocationResult) {
+          locationDecide = globalThis.__sopPhase2Intake.inferLocationResult;
+          try { logDevSms_(phone, "", "SOP_PHASE2_LOC_REUSE_FINALIZE"); } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    if (!locationDecide) {
+      locationDecide = inferLocationType_(opts.OPENAI_API_KEY || String(sp.getProperty("OPENAI_API_KEY") || ""), locInput, phone);
+    }
     var locType = String((locationDecide && locationDecide.locationType) || "UNIT").toUpperCase();
     if (locType !== "UNIT" && locType !== "COMMON_AREA") locType = "UNIT";
     var locConf = Number(locationDecide && locationDecide.confidence);
@@ -3156,12 +3294,14 @@
           wiForPolicy.categoryFromTicket = String(ticket.classification.category).trim().toLowerCase();
         }
 
+        var __policyT0 = Date.now();
         var policyResult = maybePolicyRun_("WORKITEM_CREATED", { phoneE164: phone, lang: "en" }, wiForPolicy, propCode);
         if (policyResult && typeof policyResult === "object") {
           pol.ackOwned = !!policyResult.ackOwned;
           pol.ackSent = !!policyResult.ackSent;
           pol.ruleId = String(policyResult.ruleId || "");
         }
+        try { logDevSms_(phone, "", "TRACE_POLICY_RUN dtMs=" + String(Date.now() - __policyT0) + " adapter=" + __finalizeAdapter + " traceId=" + __finalizeTraceId); } catch (_) {}
       }
     } catch (policyErr) {
       try { logDevSms_(phone, "", "POLICY_HOOK_ERR " + String(policyErr && policyErr.message ? policyErr.message : policyErr)); } catch (_) {}
@@ -3253,7 +3393,9 @@
             try {
               workItemUpdate_(createdWi, { state: "ACTIVE_WORK", substate: "" });
               if (typeof onWorkItemActiveWork_ === "function") {
+                var __lifeT0 = Date.now();
                 onWorkItemActiveWork_(createdWi, propCode, { scheduledEndAt: resolvedScheduledEndAt });
+                try { logDevSms_(phone, "", "TRACE_LIFECYCLE_onWorkItemActiveWork dtMs=" + String(Date.now() - __lifeT0) + " adapter=" + __finalizeAdapter + " traceId=" + __finalizeTraceId); } catch (_) {}
               }
               logDevSms_(phone, "", "POST_CREATE_LIFECYCLE_SCHEDULED_ENTER_ACTIVE wi=" + createdWi + " runAt=" + resolvedScheduledEndAt.toISOString());
             } catch (schedErr) {
@@ -3262,7 +3404,9 @@
           }
         } else if (!hasSched && typeof onWorkItemCreatedUnscheduled_ === "function" && !isTerminalNow) {
           try {
+            var __lifeT0u = Date.now();
             onWorkItemCreatedUnscheduled_(createdWi, propCode);
+            try { logDevSms_(phone, "", "TRACE_LIFECYCLE_onWorkItemCreatedUnscheduled dtMs=" + String(Date.now() - __lifeT0u) + " adapter=" + __finalizeAdapter + " traceId=" + __finalizeTraceId); } catch (_) {}
             try { logDevSms_(phone, "", "POST_CREATE_LIFECYCLE_UNSCHEDULED wi=" + createdWi); } catch (_) {}
           } catch (e) {
             try { logDevSms_(phone, "", "UNSCHEDULED_HOOK_ERR " + String(e && e.message ? e.message : e)); } catch (_) {}
@@ -4414,7 +4558,13 @@
 
     var locInput = opts.locationTextHint || mergedBodyTrim || bodyTrim;
     var aiLoc = null;
-    if (opts.OPENAI_API_KEY && typeof inferLocationType_ === "function" && locInput) {
+    try {
+      if (typeof globalThis !== "undefined" && globalThis.__sopPhase2Intake && globalThis.__sopPhase2Intake.inferLocationResult) {
+        aiLoc = globalThis.__sopPhase2Intake.inferLocationResult;
+        try { logDevSms_(phone, "", "SOP_PHASE2_LOC_REUSE"); } catch (_) {}
+      }
+    } catch (_) {}
+    if (!aiLoc && opts.OPENAI_API_KEY && typeof inferLocationType_ === "function" && locInput) {
       try {
         aiLoc = inferLocationType_(opts.OPENAI_API_KEY, locInput, phone);
       } catch (_) {}
@@ -5541,11 +5691,12 @@
       } catch (_) {}
     }
 
-    // Non-# staff operational: lifecycle handles updates; # remains canonical STAFF CAPTURE in core.
-    // When LIFECYCLE_ENABLED is false, skip lifecycle routing so message continues to existing Propera Main flow.
+    // Non-# staff operational: shared-front deterministic intercept.
+    // Phase 2 hardening: do not leak staff operational updates into tenant draft flow.
+    // This remains the same architecture backbone: router -> staff lifecycle command resolver -> lifecycle engine.
     if (bodyTrim && bodyTrim.charAt(0) !== "#" && typeof isStaffSender_ === "function" && typeof staffHandleLifecycleCommand_ === "function" &&
-        (typeof lifecycleEnabled_ !== "function" || lifecycleEnabled_("GLOBAL")) &&
         isStaffSender_(phone)) {
+      try { logDevSms_(phone, bodyTrim, "STAFF_FRONT_DOOR_INTERCEPT"); } catch (_) {}
       var handled = staffHandleLifecycleCommand_(phone, bodyTrim);
       if (handled) return;
     }
@@ -5876,7 +6027,11 @@
                 );
               }
 
-              if (isMaintExpected) return routeToCoreSafe_(e);
+              if (isMaintExpected) {
+                var fastHandled = tryHandleContinuationFastPath_(phone, bodyTrim, ctx, expUp);
+                if (fastHandled) return;
+                return routeToCoreSafe_(e);
+              }
               if (isAmenityExpected) return handleAmenitySms_(e);
             }
           }
@@ -5968,6 +6123,300 @@
         }
       }
     } catch (_) {}
+  }
+
+  // =====================================================
+  // Phase 3 — Continuation fast-path (shared front only)
+  // Conservative scope:
+  // - PROPERTY / UNIT / ISSUE / DETAIL: directory + prompt via resolveEffectiveTicketState_
+  // - UNIT → FINALIZE_DRAFT: same finalizeDraftAndCreateTicket_ + post-finalize intents as core (no compileTurn replay)
+  // - SCHEDULE (ticket row present): shared handleScheduleSingleTicket_ (same as core SCHEDULE stage)
+  // All ambiguous/other paths fall through to canonical core.
+  // =====================================================
+  function continuationFastPathEnabled_() {
+    try {
+      var v = String(PropertiesService.getScriptProperties().getProperty("CONTINUATION_FASTPATH_ENABLED") || "").trim().toLowerCase();
+      if (v === "0" || v === "false" || v === "off" || v === "no") return false;
+      return true; // default ON for Phase 3 rollout
+    } catch (_) { return true; }
+  }
+
+  function tryHandleContinuationFastPath_(phone, bodyTrim, ctx, expUp) {
+    try {
+      if (!continuationFastPathEnabled_()) return false;
+      if (!phone || !bodyTrim) return false;
+      if (expUp !== "PROPERTY" && expUp !== "UNIT" && expUp !== "ISSUE" && expUp !== "DETAIL" && expUp !== "SCHEDULE") return false;
+
+      // Universal emergency interrupt: never bypass canonical emergency handling.
+      var em = (typeof evaluateEmergencySignal_ === "function") ? evaluateEmergencySignal_(bodyTrim, { phone: phone }) : { isEmergency: false };
+      if (em && em.isEmergency) {
+        try {
+          if (expUp === "SCHEDULE") logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_SCHEDULE_EMERGENCY_FALLBACK");
+          else if (expUp === "UNIT") logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_UNIT_TO_FINALIZE_EMERGENCY_FALLBACK");
+        } catch (_) {}
+        return false;
+      }
+
+      var dir = getSheet_(DIRECTORY_SHEET_NAME);
+      var dirRow = ensureDirectoryRowForPhone_(dir, phone);
+      if (!dir || !dirRow || dirRow < 2) return false;
+
+      var lang = String((ctx && ctx.lang) || "en").toLowerCase();
+      function resolveNextContinuationStage_() {
+        try { recomputeDraftExpected_(dir, dirRow, phone, (typeof sessionGet_ === "function") ? sessionGet_(phone) : null); } catch (_) {}
+        var ctxNow = null, sessionNow = null, resolved = null;
+        try { ctxNow = (typeof ctxGet_ === "function") ? ctxGet_(phone) : null; } catch (_) {}
+        try { sessionNow = (typeof sessionGet_ === "function") ? sessionGet_(phone) : null; } catch (_) {}
+        try { resolved = (typeof resolveEffectiveTicketState_ === "function") ? resolveEffectiveTicketState_(dir, dirRow, ctxNow, sessionNow) : null; } catch (_) {}
+        var st = String((resolved && resolved.stage) || (ctxNow && ctxNow.pendingExpected) || "").trim().toUpperCase();
+        return st;
+      }
+      function emitPromptForStage_(stage, logTag) {
+        if (stage === "UNIT") {
+          var _ogU2 = (typeof dispatchOutboundIntent_ === "function")
+            ? dispatchOutboundIntent_({ intentType: "ASK_FOR_MISSING_UNIT", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: {}, meta: { source: "handleSmsRouter_", stage: "UNIT", flow: "FAST_CONTINUATION" } })
+            : { ok: false };
+          if (!(_ogU2 && _ogU2.ok)) sendRouterSms_(phone, renderTenantKey_("ASK_UNIT", lang, {}), logTag || "FAST_CONT_ASK_UNIT");
+          return true;
+        }
+        if (stage === "ISSUE") {
+          var _ogI2 = (typeof dispatchOutboundIntent_ === "function")
+            ? dispatchOutboundIntent_({ intentType: "ASK_FOR_ISSUE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "DIRECT_SEND", vars: {}, meta: { source: "handleSmsRouter_", stage: "ISSUE", flow: "FAST_CONTINUATION" } })
+            : { ok: false };
+          if (!(_ogI2 && _ogI2.ok)) sendRouterSms_(phone, renderTenantKey_("ASK_ISSUE_GENERIC", lang, {}), logTag || "FAST_CONT_ASK_ISSUE");
+          return true;
+        }
+        if (stage === "DETAIL") {
+          sendRouterSms_(phone, renderTenantKey_("ASK_DETAIL", lang, {}), logTag || "FAST_CONT_ASK_DETAIL");
+          return true;
+        }
+        if (stage === "SCHEDULE") {
+          sendRouterSms_(phone, renderTenantKey_("ASK_WINDOW_SIMPLE", lang, {}), logTag || "FAST_CONT_ASK_SCHEDULE");
+          return true;
+        }
+        return false;
+      }
+
+      if (expUp === "PROPERTY") {
+        var p = (typeof resolvePropertyExplicitOnly_ === "function") ? resolvePropertyExplicitOnly_(bodyTrim) : null;
+        if (!(p && p.code)) return false;
+
+        dalWithLock_("FAST_CONT_PROPERTY", function () {
+          dalSetPendingPropertyNoLock_(dir, dirRow, { code: String(p.code || "").trim(), name: String(p.name || "").trim() });
+          dalSetLastUpdatedNoLock_(dir, dirRow);
+        });
+        var nextAfterProperty = resolveNextContinuationStage_();
+        if (emitPromptForStage_(nextAfterProperty, "FAST_CONT_PROPERTY_PROMPT")) {
+          try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_HANDLED exp=PROPERTY next=" + nextAfterProperty); } catch (_) {}
+          return true;
+        }
+        try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_FALLBACK exp=PROPERTY next=" + nextAfterProperty); } catch (_) {}
+        return false;
+      }
+
+      if (expUp === "UNIT") {
+        var rawUnit = (typeof extractUnit_ === "function") ? extractUnit_(bodyTrim) : "";
+        var unitVal = rawUnit ? ((typeof normalizeUnit_ === "function") ? normalizeUnit_(rawUnit) : rawUnit) : "";
+        if (!unitVal) return false;
+
+        dalWithLock_("FAST_CONT_UNIT", function () {
+          dalSetPendingUnitNoLock_(dir, dirRow, unitVal);
+          dalSetLastUpdatedNoLock_(dir, dirRow);
+        });
+        var nextAfterUnit = resolveNextContinuationStage_();
+
+        if (nextAfterUnit === "FINALIZE_DRAFT") {
+          try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_UNIT_TO_FINALIZE_TRY next=" + nextAfterUnit); } catch (_) {}
+          var btFinalize = String(bodyTrim || "").trim().replace(/\s+/g, " ");
+          if ((typeof looksActionableIssue_ === "function") && looksActionableIssue_(btFinalize)) {
+            if (!/^(#|(apt\.?|unit)\s+)?[\w\-]+\s*$/i.test(btFinalize)) {
+              try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_UNIT_TO_FINALIZE_FALLBACK reason=actionable_multi_token_body"); } catch (_) {}
+              return false;
+            }
+          }
+          var prU = (typeof dalGetPendingRow_ === "function") ? dalGetPendingRow_(dir, dirRow) : 0;
+          if (prU >= 2) {
+            try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_UNIT_TO_FINALIZE_FALLBACK reason=pending_row_exists pr=" + prU); } catch (_) {}
+            return false;
+          }
+          var _fdPropU = (typeof dalGetPendingProperty_ === "function") ? dalGetPendingProperty_(dir, dirRow) : {};
+          var propCodeU = String(_fdPropU.code || "").trim();
+          var propNameU = String(_fdPropU.name || "").trim();
+          var issueU = (typeof dalGetPendingIssue_ === "function") ? String(dalGetPendingIssue_(dir, dirRow) || "").trim() : "";
+          var unitSnapU = String((typeof dalGetPendingUnit_ === "function" ? dalGetPendingUnit_(dir, dirRow) : "") || "").trim();
+          if (!unitSnapU) unitSnapU = unitVal;
+          var hasIssueU = Boolean(issueU) || (typeof getIssueBuffer_ === "function" && getIssueBuffer_(dir, dirRow) && getIssueBuffer_(dir, dirRow).length >= 1);
+          if (prU <= 0 && typeof sessionGet_ === "function") {
+            var sU = sessionGet_(phone) || {};
+            if (sU.draftIssue) issueU = String(sU.draftIssue || "").trim();
+            if (sU.issueBuf && sU.issueBuf.length >= 1) hasIssueU = true;
+            if (sU.draftProperty && !propCodeU) propCodeU = String(sU.draftProperty || "").trim();
+            if (sU.draftUnit && !unitSnapU) unitSnapU = String(sU.draftUnit || "").trim();
+            if (!propNameU && propCodeU && typeof getPropertyByCode_ === "function") {
+              var pU = getPropertyByCode_(propCodeU);
+              if (pU && pU.name) propNameU = String(pU.name || "").trim();
+            }
+          }
+          if (!propCodeU || !hasIssueU) {
+            try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_UNIT_TO_FINALIZE_FALLBACK reason=missing_draft_fields propCode=[" + propCodeU + "] hasIssue=[" + (hasIssueU ? "1" : "0") + "]"); } catch (_) {}
+            return false;
+          }
+          try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_UNIT_TO_FINALIZE_ENTER"); } catch (_) {}
+          var sheetU = getSheet_(SHEET_NAME);
+          var baseVarsU = { brandName: BRAND.name, teamName: BRAND.team };
+          var spU = PropertiesService.getScriptProperties();
+          var pEv = (e && e.parameter) ? e.parameter : {};
+          var sidU = String(pEv.MessageSid || pEv.SmsMessageSid || (typeof safeParam_ === "function" ? safeParam_(e, "MessageSid") : "") || (typeof safeParam_ === "function" ? safeParam_(e, "SmsMessageSid") : "") || "").trim();
+          var fromDedU = String(pEv.From || (typeof safeParam_ === "function" ? safeParam_(e, "From") : "") || "").trim().toLowerCase();
+          var sidSafeU = sidU ? String(sidU) : ("NOSID:" + (typeof _nosidDigest_ === "function" ? _nosidDigest_(fromDedU, bodyTrim) : String((bodyTrim || "").length)));
+          var chU = (fromDedU.indexOf("whatsapp:") === 0) ? "WA" : "SMS";
+          var inboundKeyU = "SID:" + chU + ":" + sidSafeU;
+          var finResult = finalizeDraftAndCreateTicket_(sheetU, dir, dirRow, phone, phone, {
+            inboundKey: inboundKeyU,
+            lang: lang,
+            baseVars: baseVarsU,
+            locationText: bodyTrim,
+            firstMediaUrl: "",
+            mediaType: "",
+            mediaCategoryHint: "",
+            mediaSubcategoryHint: "",
+            mediaUnitHint: "",
+            OPENAI_API_KEY: String(spU.getProperty("OPENAI_API_KEY") || "")
+          });
+          try {
+            logDevSms_(phone, bodyTrim, "FINALIZE_RESULT ok=[" + (finResult && finResult.ok ? "1" : "0") + "] reason=[" + String((finResult && finResult.reason) || "") + "] multi=[" + (finResult && finResult.multiIssuePending ? "1" : "0") + "] ticketId=[" + String((finResult && finResult.ticketId) || "") + "] source=ROUTER_UNIT_FAST");
+          } catch (_) {}
+          if (finResult && finResult.ok && finResult.loggedRow >= 2) {
+            try { logDevSms_(phone, bodyTrim, "FINALIZE_DRAFT_CREATED pendingRow=[" + finResult.loggedRow + "] source=ROUTER_UNIT_FAST"); } catch (_) {}
+          }
+          applyFinalizeDraftResultOutcomesForRouter_(phone, bodyTrim, sheetU, dir, dirRow, lang, baseVarsU, finResult, issueU, unitSnapU, propNameU);
+          if (finResult && finResult.ok) {
+            try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_UNIT_TO_FINALIZE_OK ticketId=[" + String((finResult && finResult.ticketId) || "") + "]"); } catch (_) {}
+          }
+          return true;
+        }
+
+        if (emitPromptForStage_(nextAfterUnit, "FAST_CONT_UNIT_PROMPT")) {
+          try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_HANDLED exp=UNIT next=" + nextAfterUnit); } catch (_) {}
+          return true;
+        }
+        try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_FALLBACK exp=UNIT next=" + nextAfterUnit); } catch (_) {}
+        return false;
+      }
+
+      if (expUp === "ISSUE") {
+        var issueText = String(bodyTrim || "").trim();
+        if (issueText.length < 4) return false;
+        var issueActionable = (typeof looksActionableIssue_ === "function") && looksActionableIssue_(issueText);
+        if ((typeof isScheduleWindowLike_ === "function") && isScheduleWindowLike_(issueText) && !issueActionable) return false;
+
+        var nextFromIssue = ((typeof issueIsClear_ === "function") && issueIsClear_("", 0, issueText)) || issueActionable
+          ? "SCHEDULE"
+          : "DETAIL";
+
+        dalWithLock_("FAST_CONT_ISSUE", function () {
+          dalSetPendingIssueNoLock_(dir, dirRow, issueText);
+          dalSetLastUpdatedNoLock_(dir, dirRow);
+        });
+        var nextAfterIssue = resolveNextContinuationStage_();
+        if (emitPromptForStage_(nextAfterIssue, "FAST_CONT_ISSUE_PROMPT")) {
+          try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_HANDLED exp=ISSUE next=" + nextAfterIssue); } catch (_) {}
+          return true;
+        }
+        try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_FALLBACK exp=ISSUE next=" + nextAfterIssue); } catch (_) {}
+        return false;
+      }
+
+      if (expUp === "DETAIL") {
+        var detailText = String(bodyTrim || "").trim();
+        if (detailText.length < 2) return false;
+        if ((typeof isScheduleWindowLike_ === "function") && isScheduleWindowLike_(detailText)) return false;
+
+        dalWithLock_("FAST_CONT_DETAIL", function () {
+          var priorIssue = (typeof dalGetPendingIssue_ === "function") ? String(dalGetPendingIssue_(dir, dirRow) || "").trim() : "";
+          var mergedIssue = priorIssue;
+          if (!mergedIssue) {
+            mergedIssue = detailText;
+          } else if (mergedIssue.toLowerCase().indexOf(detailText.toLowerCase()) === -1) {
+            mergedIssue = mergedIssue + "; " + detailText;
+          }
+          dalSetPendingIssueNoLock_(dir, dirRow, mergedIssue);
+          dalSetLastUpdatedNoLock_(dir, dirRow);
+        });
+        var nextAfterDetail = resolveNextContinuationStage_();
+        if (emitPromptForStage_(nextAfterDetail, "FAST_CONT_DETAIL_PROMPT")) {
+          try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_HANDLED exp=DETAIL next=" + nextAfterDetail); } catch (_) {}
+          return true;
+        }
+        try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_FALLBACK exp=DETAIL next=" + nextAfterDetail); } catch (_) {}
+        return false;
+      }
+
+      if (expUp === "SCHEDULE") {
+        try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_SCHEDULE_TRY"); } catch (_) {}
+        var prSched = (typeof dalGetPendingRow_ === "function") ? dalGetPendingRow_(dir, dirRow) : 0;
+        if (prSched < 2) {
+          try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_SCHEDULE_FALLBACK reason=pending_row_lt_2 pr=" + prSched); } catch (_) {}
+          return false;
+        }
+        var dirStSched = String((typeof dalGetPendingStage_ === "function") ? dalGetPendingStage_(dir, dirRow) : "").trim().toUpperCase();
+        if (dirStSched === "SCHEDULE_DRAFT_MULTI" || dirStSched === "SCHEDULE_DRAFT_SINGLE") {
+          try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_SCHEDULE_FALLBACK reason=draft_schedule_stage st=" + dirStSched); } catch (_) {}
+          return false;
+        }
+        if (typeof looksLikeManagerCommand_ === "function" && looksLikeManagerCommand_(bodyTrim)) {
+          try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_SCHEDULE_FALLBACK reason=manager_command"); } catch (_) {}
+          return false;
+        }
+        if (typeof isScheduleLike_ === "function" && !isScheduleLike_(bodyTrim)) {
+          try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_SCHEDULE_FALLBACK reason=not_schedule_like"); } catch (_) {}
+          return false;
+        }
+        try {
+          if (dirRow > 0 && !dirStSched && String((ctx && ctx.pendingExpected) || "").trim().toUpperCase() === "SCHEDULE") {
+            dalSetPendingStage_(dir, dirRow, "SCHEDULE", phone, "FAST_CONT_DIR_RECOVER_STAGE");
+          }
+        } catch (_) {}
+        var sheetFs = getSheet_(SHEET_NAME);
+        var baseVarsFs = { brandName: BRAND.name, teamName: BRAND.team };
+        var dayW = "";
+        try { dayW = String(scheduleDayWord_(new Date()) || "").trim(); } catch (_) {}
+        var sigs = (typeof classifyTenantSignals_ === "function") ? classifyTenantSignals_(bodyTrim, ctx) : {};
+        var nowFs = new Date();
+        var hs = handleScheduleSingleTicket_(sheetFs, dir, dirRow, phone, prSched, bodyTrim, lang, baseVarsFs, dayW, nowFs, sigs);
+        if (hs && hs.handled) {
+          try {
+            // Do NOT log resolveNextContinuationStage_() here: handleScheduleSingleTicket_ clears ctx
+            // schedule expectation, may advance queue, and draft recompute then reflects a *new* draft
+            // gap (often ISSUE) — not "next step after confirm". Log durable ctx + session expected only.
+            var peAfter = "";
+            var seAfter = "";
+            try {
+              var cxA = (typeof ctxGet_ === "function") ? ctxGet_(phone) : null;
+              peAfter = String(cxA && cxA.pendingExpected ? cxA.pendingExpected : "").trim();
+            } catch (_) {}
+            try {
+              var snA = (typeof sessionGet_ === "function") ? sessionGet_(phone) : null;
+              seAfter = String(snA && snA.expected ? snA.expected : "").trim();
+            } catch (_) {}
+            logDevSms_(
+              phone,
+              bodyTrim,
+              "FAST_CONTINUATION_SCHEDULE_OK ctxPendingExpectedAfter=" + (peAfter || "(empty)") +
+                " sessionExpectedAfter=" + (seAfter || "(empty)") +
+                " fallbackSms=" + (hs.fallbackSms ? "1" : "0") +
+                " note=post_confirm_recompute_not_next_stage"
+            );
+          } catch (_) {}
+          return true;
+        }
+        try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_SCHEDULE_FALLBACK reason=window_parse_or_core_path"); } catch (_) {}
+        return false;
+      }
+    } catch (err) {
+      try { logDevSms_(phone, bodyTrim, "FAST_CONTINUATION_ERR " + String(err && err.message ? err.message : err)); } catch (_) {}
+    }
+    return false;
   }
 
   if (leasingIntent || isLeasingStage) {
@@ -6284,6 +6733,11 @@
       var fromRaw0 = String(e && e.parameter && e.parameter.From ? e.parameter.From : "");
       globalThis.__inboundChannel = (/^whatsapp:/i.test(fromRaw0)) ? "WA" : "SMS";
       globalThis.__fromRaw = fromRaw0;
+      try {
+        globalThis.__traceAdapter = String(globalThis.__inboundChannel || "").trim(); // "WA" | "SMS"
+        globalThis.__traceId = sid0 ? String(sid0).trim() : "";
+        globalThis.__traceEventEid = sid0 ? ("TWILIO_SID:" + String(sid0).trim()) : "";
+      } catch (_) {}
     } catch (_) {
       globalThis.__inboundChannel = "SMS";
     }
@@ -6422,6 +6876,16 @@
       } catch (err) {
         try {
           const fromKey = phoneKey_(String(p.From || "").trim());
+          try {
+            if (typeof debugLogToSheet_ === "function") {
+              debugLogToSheet_(
+                "ROUTER_CRASH_TRACE",
+                String((typeof globalThis !== "undefined" && globalThis.__traceId) ? globalThis.__traceId : fromKey || ""),
+                "adapter=" + String((typeof globalThis !== "undefined" && globalThis.__traceAdapter) ? globalThis.__traceAdapter : "") +
+                  " err=" + String(err && err.stack ? err.stack : err).slice(0, 200)
+              );
+            }
+          } catch (_) {}
           logDevSms_(
             from0 || "(no-from)",
             body0 || "(no-body)",
@@ -6452,6 +6916,9 @@
       try { TWIML_OUTBOX_ = null; DEV_EMIT_TWIML_ = null; } catch (_) {}
       try { globalThis.__bodyOverride = ""; } catch (_) {}
       try { SIM_PHONE_SCOPE_ = ""; } catch (_) {}
+      try { globalThis.__traceAdapter = ""; } catch (_) {}
+      try { globalThis.__traceId = ""; } catch (_) {}
+      try { globalThis.__traceEventEid = ""; } catch (_) {}
       try { devReqOff_(); } catch (_) {}
 
       // ✅ Always flush dev logs, even on early returns
@@ -8053,21 +8520,48 @@
     }
   }
 
+  /** JS getDay(): 0=Sun, 6=Sat. Honors SCHED_SAT_ALLOWED / SCHED_SUN_ALLOWED + GLOBAL; legacy SCHED_ALLOW_WEEKENDS = both days. */
+  function validateSchedWeekendAllowed_(propCode, jsDay) {
+    var legacy = !!ppGet_(propCode, "SCHED_ALLOW_WEEKENDS", false);
+    if (legacy) return true;
+    if (jsDay === 6) return !!ppGet_(propCode, "SCHED_SAT_ALLOWED", false);
+    if (jsDay === 0) return !!ppGet_(propCode, "SCHED_SUN_ALLOWED", false);
+    return true;
+  }
+
   /** Validate schedule against PropertyPolicy. sched: { date?, startHour?, endHour? }. Returns {ok:true} or {ok:false, key, vars}. */
   function validateSchedPolicy_(propCode, sched, now) {
     var earliest = ppGet_(propCode, "SCHED_EARLIEST_HOUR", 9);
     var latest   = ppGet_(propCode, "SCHED_LATEST_HOUR", 18);
-    var wkndOk   = !!ppGet_(propCode, "SCHED_ALLOW_WEEKENDS", false);
+    var allowWkndLegacy = !!ppGet_(propCode, "SCHED_ALLOW_WEEKENDS", false);
+    var satAllowedPol = !!ppGet_(propCode, "SCHED_SAT_ALLOWED", false);
+    var sunAllowedPol = !!ppGet_(propCode, "SCHED_SUN_ALLOWED", false);
     var leadHrs  = ppGet_(propCode, "SCHED_MIN_LEAD_HOURS", 12);
     var maxDays  = ppGet_(propCode, "SCHED_MAX_DAYS_OUT", 14);
 
-    var vars = { earliestHour: earliest, latestHour: latest, allowWeekends: wkndOk, minLeadHours: leadHrs, maxDaysOut: maxDays };
+    var vars = {
+      earliestHour: earliest,
+      latestHour: latest,
+      allowWeekends: allowWkndLegacy,
+      schedSatAllowed: satAllowedPol,
+      schedSunAllowed: sunAllowedPol,
+      minLeadHours: leadHrs,
+      maxDaysOut: maxDays
+    };
 
     var targetDate = (sched && sched.date) ? new Date(sched.date) : null;
+    var latestEff = latest;
     if (targetDate && !isNaN(targetDate.getTime())) {
       var day = targetDate.getDay();
       var isWknd = (day === 0 || day === 6);
-      if (isWknd && !wkndOk) return { ok: false, key: "SCHED_REJECT_WEEKEND", vars: vars };
+      if (isWknd && !validateSchedWeekendAllowed_(propCode, day)) {
+        return { ok: false, key: "SCHED_REJECT_WEEKEND", vars: vars };
+      }
+
+      if (day === 6) {
+        var satCap = Number(ppGet_(propCode, "SCHED_SAT_LATEST_HOUR", NaN));
+        if (isFinite(satCap)) latestEff = Math.min(Number(latest), satCap);
+      }
 
       var deltaMs = targetDate.getTime() - now.getTime();
       if (deltaMs < leadHrs * 3600 * 1000) return { ok: false, key: "SCHED_REJECT_TOO_SOON", vars: vars };
@@ -8078,9 +8572,310 @@
     var hEnd   = (sched && isFinite(Number(sched.endHour))) ? Number(sched.endHour) : null;
 
     if (hStart != null && hStart < earliest) return { ok: false, key: "SCHED_REJECT_HOURS", vars: vars };
-    if (hEnd != null && hEnd > latest) return { ok: false, key: "SCHED_REJECT_HOURS", vars: vars };
+    if (hEnd != null && hEnd > latestEff) return { ok: false, key: "SCHED_REJECT_HOURS", vars: vars };
 
     return { ok: true };
+  }
+
+  /**
+   * Tenant SMS/WA send when Outgate returns !ok — mirrors replyNoHeader_ / sendRouterSms_ opt-out bypass.
+   * Used by shared schedule continuation (core + router fast path).
+   */
+  function scheduleFastPathSendToTenant_(phone, text, tag) {
+    try {
+      if (typeof allowOptOutBypass_ === "function") allowOptOutBypass_(phone, 10);
+    } catch (_) {}
+    var msg = String(text || "").trim();
+    if (!msg || !phone) return;
+    var ch = String((typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS").toUpperCase();
+    var sid = (typeof TWILIO_SID !== "undefined" && TWILIO_SID) ? TWILIO_SID : "";
+    var token = (typeof TWILIO_TOKEN !== "undefined" && TWILIO_TOKEN) ? TWILIO_TOKEN : "";
+    var fromNum = (typeof TWILIO_NUMBER !== "undefined" && TWILIO_NUMBER) ? TWILIO_NUMBER : "";
+    if (!sid || !token || !fromNum) {
+      try {
+        var sp = PropertiesService.getScriptProperties();
+        sid = String(sp.getProperty("TWILIO_SID") || "").trim();
+        token = String(sp.getProperty("TWILIO_TOKEN") || "").trim();
+        fromNum = String(sp.getProperty("TWILIO_NUMBER") || "").trim();
+      } catch (_) {}
+    }
+    if (!sid || !token || !fromNum) return;
+    try {
+      if (ch === "WA") {
+        var waFrom = (typeof TWILIO_WA_FROM !== "undefined" && TWILIO_WA_FROM) ? TWILIO_WA_FROM : "whatsapp:+14155238886";
+        sendWhatsApp_(sid, token, waFrom, phone, msg, tag || "");
+      } else {
+        sendSms_(sid, token, fromNum, phone, msg, tag || "");
+      }
+    } catch (_) {}
+  }
+
+  /**
+   * After finalizeDraftAndCreateTicket_ succeeds with nextStage SCHEDULE: if PreferredWindow / ScheduledEndAt
+   * already capture a usable window, send CONFIRM_RECORDED_SCHEDULE; otherwise ASK_SCHEDULE.
+   * Shared by handleSmsCore_ FINALIZE_DRAFT and applyFinalizeDraftResultOutcomesForRouter_ (router fast path).
+   */
+  function finalizeDraftScheduleConfirmOrAskTenant_(phone, sheet, dir, dirRow, lang, baseVars, result, issue, unit, propName) {
+    var ch = (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS";
+    var unitLine = "";
+    if (unit && String(unit).trim()) {
+      unitLine = ", Apt " + String(unit).trim();
+    }
+    var issueShort = String(issue || "").trim().slice(0, 80);
+    var vars = Object.assign({}, baseVars, {
+      propertyName: propName || "",
+      issueShort: issueShort,
+      unitLine: unitLine,
+      afterCreate: true
+    });
+
+    try {
+      if (result && result.nextStage === "SCHEDULE" && result.loggedRow != null) {
+        var loggedRow = Number(result.loggedRow) || 0;
+        if (loggedRow >= 2 && sheet && typeof COL !== "undefined" && COL.PREF_WINDOW) {
+          var preferredWindowRaw = String(sheet.getRange(loggedRow, COL.PREF_WINDOW).getValue() || "").trim();
+          var _schedCol = (typeof COL.SCHEDULED_END_AT !== "undefined" && COL.SCHEDULED_END_AT) ? Number(COL.SCHEDULED_END_AT) : 0;
+          var scheduledEndVal = (_schedCol > 0) ? sheet.getRange(loggedRow, _schedCol).getValue() : null;
+          var hasValidSchedule = (scheduledEndVal instanceof Date && isFinite(scheduledEndVal.getTime()));
+          var scheduleLabel = "";
+
+          if (!hasValidSchedule && preferredWindowRaw && typeof parsePreferredWindowShared_ === "function") {
+            try {
+              var _pp = parsePreferredWindowShared_(preferredWindowRaw, null);
+              if (_pp) {
+                var _lbl = _pp.label ? String(_pp.label || "").trim() : "";
+                var _endOk = _pp.end instanceof Date && isFinite(_pp.end.getTime());
+                var _startOk = _pp.start instanceof Date && isFinite(_pp.start.getTime());
+                if (_endOk || _startOk || (_lbl && _lbl.length >= 2)) {
+                  hasValidSchedule = true;
+                  scheduleLabel = _lbl || preferredWindowRaw;
+                }
+              }
+            } catch (_) {}
+          }
+
+          scheduleLabel = scheduleLabel || preferredWindowRaw;
+          if (hasValidSchedule && scheduleLabel) {
+            var ticketId = String(result.ticketId || "").trim();
+            var _confirmVars = Object.assign({}, baseVars, {
+              label: scheduleLabel,
+              ticketId: ticketId,
+              issueSummary: issueShort
+            });
+            (typeof dispatchOutboundIntent_ === "function")
+              ? dispatchOutboundIntent_({ intentType: "CONFIRM_RECORDED_SCHEDULE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: ch, deliveryPolicy: "NO_HEADER", vars: _confirmVars, meta: { source: "HANDLE_SMS_CORE", stage: "SCHEDULE", flow: "MAINTENANCE_INTAKE" } })
+              : { ok: false };
+
+            try { if (typeof ctxUpsert_ === "function") ctxUpsert_(phone, { pendingExpected: "", pendingExpiresAt: "" }, "SCHEDULE_RESOLVED"); } catch (_) {}
+            try { if (dirRow > 0 && typeof advanceTenantQueueOrClear_ === "function") advanceTenantQueueOrClear_(sheet, dir, dirRow, phone, lang); } catch (_) {}
+            try { logDevSms_(phone, "", "FINALIZE_SCHED_OUT confirm=1 label=[" + String(scheduleLabel).slice(0, 80) + "]"); } catch (_) {}
+            return;
+          }
+        }
+      }
+    } catch (_) {}
+
+    try { wiSetWaitTenant_(phone, "SCHEDULE"); } catch (_) {}
+    (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_ASK_SCHEDULE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: ch, deliveryPolicy: "NO_HEADER", vars: vars, meta: { source: "HANDLE_SMS_CORE", stage: "SCHEDULE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+  }
+
+  /**
+   * Post-finalize tenant outcomes for Phase 3 router UNIT→FINALIZE_DRAFT fast path.
+   * Mirrors handleSmsCore_ FINALIZE_DRAFT handling after finalizeDraftAndCreateTicket_ returns (same intents / meta).
+   * Uses scheduleFastPathSendToTenant_ only where core uses replyNoHeader_ (multi combined + emergency ack).
+   */
+  function applyFinalizeDraftResultOutcomesForRouter_(phone, bodyTrim, sheet, dir, dirRow, lang, baseVars, result, preIssue, preUnit, prePropName) {
+    var s = null;
+    try { s = (typeof sessionGet_ === "function") ? sessionGet_(phone) : null; } catch (_) {}
+    var unit = preUnit;
+    var issue = preIssue;
+    var propName = prePropName;
+    var ch = (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS";
+
+    if (!result || !result.ok) {
+      try { logDevSms_(phone, bodyTrim, "FINALIZE_DRAFT_SKIP reason=[" + String((result && result.reason) || "") + "]"); } catch (_) {}
+      var _ogBad = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_ASK_SCHEDULE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: ch, deliveryPolicy: "NO_HEADER", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+      try { recomputeDraftExpected_(dir, dirRow, phone, s); } catch (_) {}
+      return;
+    }
+
+    if (result.multiIssuePending) {
+      if (result.nextStage === "SCHEDULE" || result.nextStage === "SCHEDULE_DRAFT_MULTI") {
+        var combined = (result.summaryMsg && String(result.summaryMsg).trim()) ? String(result.summaryMsg).trim() : renderTenantKey_("ASK_WINDOW_SIMPLE", lang, baseVars);
+        try { logDevSms_(phone, combined.slice(0, 120), "MULTI_COMBINED_OUT"); } catch (_) {}
+        var _ogC2 = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_ASK_SCHEDULE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: ch, deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars || {}, { summaryText: combined }), meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+        if (!(_ogC2 && _ogC2.ok)) scheduleFastPathSendToTenant_(phone, combined, "MULTI_COMBINED_OUT_FB");
+        return;
+      }
+      (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_ASK_SCHEDULE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: ch, deliveryPolicy: "NO_HEADER", vars: baseVars || {}, meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+      return;
+    }
+
+    if (result.nextStage === "") {
+      if (!result.ackOwnedByPolicy) {
+        (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_COMMON_AREA", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: ch, deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, { ticketId: String(result.ticketId || "") }), meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+        try { if (dirRow > 0 && typeof advanceTenantQueueOrClear_ === "function") advanceTenantQueueOrClear_(sheet, dir, dirRow, phone, lang); } catch (_) {}
+      } else {
+        try { logDevSms_(phone, "", "ACK_SUPPRESSED_BY_POLICY workItemId=" + (result.createdWi || "") + " rule=" + (result.policyRuleId || "")); } catch (_) {}
+      }
+      return;
+    }
+
+    if (result.nextStage === "EMERGENCY_DONE") {
+      var eTid = String(result.ticketId || "").trim();
+      try { logDevSms_(phone, "", "FINALIZE_DRAFT_EMERGENCY_DONE tid=" + eTid); } catch (_) {}
+      var _ogEt = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "EMERGENCY_TENANT_ACK", templateKey: "EMERGENCY_TENANT_ACK", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: ch, deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, { ticketId: eTid }), meta: { source: "HANDLE_SMS_CORE", stage: "FINALIZE_DRAFT", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+      if (!(_ogEt && _ogEt.ok)) scheduleFastPathSendToTenant_(phone, renderTenantKey_("EMERGENCY_TENANT_ACK", lang, Object.assign({}, baseVars, { ticketId: eTid })), "FAST_CONT_EMERGENCY_ACK_FB");
+      return;
+    }
+
+    finalizeDraftScheduleConfirmOrAskTenant_(phone, sheet, dir, dirRow, lang, baseVars, result, issue, unit, propName);
+  }
+
+  /**
+   * Single-ticket SCHEDULE confirm/deny/re-ask — shared by handleSmsCore_ SCHEDULE stage and router Phase 3 fast path.
+   * @returns {null|{handled:boolean,fallbackSms:boolean}} null = not handled (caller continues); handled=true = stop.
+   */
+  function handleScheduleSingleTicket_(sheet, dir, dirRow, phone, activeRow, rawTrim, lang, baseVars, dayWord, now, signals) {
+    var stageDay = "Today";
+    try {
+      if (typeof inferStageDayFromText_ === "function") {
+        var inferred0 = inferStageDayFromText_(rawTrim, dayWord);
+        if (inferred0) stageDay = inferred0;
+      }
+    } catch (_) {}
+    if (!looksLikeWindowReply_(rawTrim, stageDay)) return null;
+    const label = windowLabel_(rawTrim, stageDay);
+    if (!label) {
+      var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_ASK_SCHEDULE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, dayWord ? { dayWord: dayWord } : {}), meta: { source: "HANDLE_SMS_CORE", stage: "SCHEDULE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+      var fbAsk = !(_og && _og.ok);
+      if (fbAsk) {
+        var askBody = (typeof renderTenantKey_ === "function") ? renderTenantKey_("ASK_WINDOW_SIMPLE", lang, baseVars) : "";
+        if (askBody) scheduleFastPathSendToTenant_(phone, askBody, "TICKET_CREATED_ASK_SCHEDULE_FB");
+      }
+      return { handled: true, fallbackSms: fbAsk };
+    }
+
+    var propObj = (typeof dalGetPendingProperty_ === "function") ? dalGetPendingProperty_(dir, dirRow) : {};
+    var propCode = String(propObj && propObj.code ? propObj.code : "").trim().toUpperCase() || "GLOBAL";
+    var sched = { label: label };
+    var d = null;
+    if (typeof inferStageDayFromText_ === "function" && typeof parsePreferredWindowShared_ === "function") {
+      try {
+        var inferred = inferStageDayFromText_(rawTrim, dayWord);
+        if (inferred) {
+          d = parsePreferredWindowShared_(rawTrim, inferred);
+          if (d) {
+            if (d.start && d.start instanceof Date) { sched.date = d.start; sched.startHour = d.start.getHours(); }
+            if (d.end && d.end instanceof Date) { sched.date = sched.date || d.end; sched.endHour = d.end.getHours(); }
+          }
+        }
+      } catch (_) {}
+    }
+    var verdict = (typeof validateSchedPolicy_ === "function") ? validateSchedPolicy_(propCode, sched, now) : { ok: true };
+    if (!verdict.ok) {
+      var _vk = String(verdict.key || "").trim();
+      var _ogV = (typeof dispatchOutboundIntent_ === "function" && _vk) ? dispatchOutboundIntent_({ intentType: _vk, templateKey: _vk, recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, verdict.vars || {}), meta: { source: "HANDLE_SMS_CORE", stage: "SCHEDULE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+      var fbPol = !(_ogV && _ogV.ok);
+      if (fbPol) {
+        scheduleFastPathSendToTenant_(phone, (typeof renderTenantKey_ === "function") ? renderTenantKey_(verdict.key, lang, Object.assign({}, baseVars, verdict.vars || {})) : "", "SCHED_POLICY_DENY");
+      }
+      try { logDevSms_(phone, rawTrim, "SCHED_POLICY_DENY key=[" + verdict.key + "] prop=[" + propCode + "]"); } catch (_) {}
+      try { wiSetWaitTenant_(phone, "SCHEDULE"); } catch (_) {}
+      try {
+        var ctxNow = (typeof ctxGet_ === "function") ? ctxGet_(phone) : null;
+        var wiPick = ctxNow ? (String(ctxNow.pendingWorkItemId || "").trim() || String(ctxNow.activeWorkItemId || "").trim()) : "";
+        if (typeof ctxUpsert_ === "function") ctxUpsert_(phone, { pendingWorkItemId: wiPick, pendingExpected: "SCHEDULE", pendingExpiresAt: new Date(Date.now() + 10 * 60 * 1000) }, "SCHED_POLICY_REJECT");
+      } catch (_) {}
+      return { handled: true, fallbackSms: fbPol };
+    }
+
+    const ticketId = String(sheet.getRange(activeRow, COL.TICKET_ID).getValue() || "").trim();
+    var issueSummary = "";
+    try {
+      issueSummary = String(sheet.getRange(activeRow, COL.MSG).getValue() || "").trim();
+      if (issueSummary && typeof normalizeIssueText_ === "function") {
+        var norm = normalizeIssueText_(issueSummary);
+        if (norm) issueSummary = String(norm).trim();
+      }
+    } catch (_) {}
+    var moreCount = 0;
+    try {
+      if (typeof getIssueBuffer_ === "function" && dirRow > 0) {
+        var buf = getIssueBuffer_(dir, dirRow) || [];
+        if (Array.isArray(buf) && buf.length) moreCount = buf.length;
+      }
+    } catch (_) {}
+    var issueLine = issueSummary;
+    if (issueLine && moreCount > 0) issueLine = issueLine + " (+" + moreCount + " more)";
+    let doneWi = "";
+    try {
+      const ctxNow2 = (typeof ctxGet_ === "function") ? (ctxGet_(phone) || {}) : {};
+      doneWi = String(ctxNow2.pendingWorkItemId || ctxNow2.activeWorkItemId || "").trim();
+    } catch (_) {}
+    withWriteLock_("SCHED_SET_LABEL", () => {
+      sheet.getRange(activeRow, COL.PREF_WINDOW).setValue(label);
+      sheet.getRange(activeRow, COL.LAST_UPDATE).setValue(now);
+      try {
+        if (d && d.end instanceof Date) {
+          sheet.getRange(activeRow, COL.SCHEDULED_END_AT).setValue(d.end);
+        } else {
+          sheet.getRange(activeRow, COL.SCHEDULED_END_AT).clearContent();
+        }
+      } catch (_) {}
+    });
+    setStatus_(sheet, activeRow, "Scheduled");
+    if (doneWi) {
+      try {
+        workItemUpdate_(doneWi, { state: "ACTIVE_WORK", substate: "" });
+        try { logDevSms_(phone, rawTrim, "WI_UPDATE done wi=[" + doneWi + "] state=ACTIVE_WORK"); } catch (_) {}
+        if (typeof onWorkItemActiveWork_ === "function") {
+          var propCodeRow = String(sheet.getRange(activeRow, COL.PROPERTY).getValue() || "").trim().toUpperCase();
+          onWorkItemActiveWork_(doneWi, propCodeRow, d && d.end instanceof Date ? { scheduledEndAt: d.end } : {});
+        }
+      } catch (_) {}
+    }
+    try {
+      logDevSms_(
+        phone,
+        rawTrim,
+        "SCHED_CONFIRM row=" + activeRow +
+          " tid=[" + ticketId + "]" +
+          " label=[" + label + "]" +
+          " stage=[SCHEDULE]"
+      );
+    } catch (_) {}
+    const _confirmKey = { urgent: "TICKET_CONFIRM_URGENT", postService: "TICKET_CONFIRM_POST_SERVICE", recurring: "TICKET_CONFIRM_RECURRING", frustrated: "TICKET_CONFIRM_FRUSTRATED" }[(signals && signals.tone) || ""] || "CONF_WINDOW_SET";
+    var _confirmVars = Object.assign({}, baseVars, { label: label, ticketId: ticketId, issueSummary: issueLine });
+    if (_confirmKey !== "CONF_WINDOW_SET") _confirmVars.confirmKey = _confirmKey;
+    var _ogConfirm = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({
+      intentType: "CONFIRM_RECORDED_SCHEDULE",
+      recipientType: "TENANT",
+      recipientRef: phone,
+      lang: lang,
+      channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS",
+      deliveryPolicy: "NO_HEADER",
+      vars: _confirmVars,
+      meta: { source: "HANDLE_SMS_CORE", stage: "SCHEDULE", flow: "MAINTENANCE_INTAKE" }
+    }) : { ok: false };
+    var fbConf = !(_ogConfirm && _ogConfirm.ok);
+    if (fbConf) {
+      var _outMsg = (typeof renderTenantKey_ === "function") ? renderTenantKey_(_confirmKey, lang, _confirmVars) : "";
+      try { logDevSms_(phone, _outMsg, "DEBUG_CONF_WINDOW_SET_RENDER"); } catch (_) {}
+      scheduleFastPathSendToTenant_(phone, _outMsg, "CONFIRM_RECORDED_SCHEDULE");
+    }
+    try { ctxUpsert_(phone, { pendingExpected: "", pendingExpiresAt: "" }, "SCHEDULE_RESOLVED"); } catch (_) {}
+    try {
+      if (dirRow > 0 && typeof advanceTenantQueueOrClear_ === "function") {
+        const advanced = advanceTenantQueueOrClear_(sheet, dir, dirRow, phone, lang);
+        if (advanced) {
+          try { logDevSms_(phone, "", "QUEUE_DRAIN_ADVANCED tid=[" + (advanced.ticketId || "") + "]"); } catch (_) {}
+        }
+      }
+    } catch (qdErr) {
+      try { logDevSms_(phone, "", "QUEUE_DRAIN_ERR " + (qdErr && qdErr.message ? qdErr.message : qdErr)); } catch (_) {}
+    }
+    return { handled: true, fallbackSms: fbConf };
   }
 
   function handleOwnershipActionFromAppSheet_(data) {
@@ -8588,7 +9383,18 @@
         };
       }
     } else {
-      classification = classify_(OPENAI_API_KEY, messageRaw, unitFromText, afterHours);
+      var fromIntake = null;
+      try {
+        if (typeof sopPhase2TryClassificationFromIntake_ === "function") {
+          fromIntake = sopPhase2TryClassificationFromIntake_(messageRaw, unitFromText, afterHours);
+        }
+      } catch (_) {}
+      if (fromIntake) {
+        classification = fromIntake;
+        try { logDevSms_(from, "", "SOP_PHASE2_CLASSIFY_REUSE"); } catch (_) {}
+      } else {
+        classification = classify_(OPENAI_API_KEY, messageRaw, unitFromText, afterHours);
+      }
     }
 
     try { logDevSms_(from, String(messageRaw || ""), "PT_21 AFTER_CLASSIFY cat=" + String(classification && classification.category)); } catch (_) {}
@@ -9676,14 +10482,14 @@
       return "Plumbing";
     }
 
-    // HVAC: make vent safe
-    if (/(heat|heating|no heat|\bac\b|a\/c|air conditioner|air conditioning|cooling|no ac|thermostat|boiler|radiator|furnace|\bvent\b|hvac)/.test(t)) {
-      return "HVAC";
+    // APPLIANCE (check before HVAC to avoid "cooling" false-positives in refrigerator/freezer complaints)
+    if (/(washing machine|wash machine|washer|dryer|laundry|dishwasher|fridge|refrigerator|freezer|oven|stove|range|microwave|garbage disposal|disposal)/.test(t)) {
+      return "Appliance";
     }
 
-    // APPLIANCE
-    if (/(washer|dryer|laundry|dishwasher|fridge|refrigerator|freezer|oven|stove|range|microwave|garbage disposal|disposal)/.test(t)) {
-      return "Appliance";
+    // HVAC: vent/temperature signals (avoid generic "cooling" which is ambiguous)
+    if (/(heat|heating|no heat|\bac\b|a\/c|air conditioner|air conditioning|no ac|thermostat|boiler|radiator|furnace|\bvent\b|hvac)/.test(t)) {
+      return "HVAC";
     }
 
     // LOCK / KEY
@@ -10304,7 +11110,7 @@
   }
 
   var CHAOS_PHASES_IO_ = ["TEST_START", "IN", "OUT", "SNAP", "TEST_END", "ERROR"];
-  var CHAOS_PHASES_CORE_ = CHAOS_PHASES_IO_.concat(["LANE", "TURN", "DRAFT", "STATE", "HANDLER"]);
+  var CHAOS_PHASES_CORE_ = CHAOS_PHASES_IO_.concat(["LANE", "TURN", "DRAFT", "STATE", "HANDLER", "SOP_SHADOW"]);
   var CHAOS_PHASES_FULL_ = CHAOS_PHASES_CORE_.concat(["SNAP_DIR", "SNAP_CTX", "SNAP_DRAFT", "SNAP_WI"]);
 
   function writeTimeline_(phase, kvObj, jsonObj) {
@@ -12882,10 +13688,7 @@
     // If it has a problem verb, treat as actionable (include "stop working" / "stops working")
     if (/(not working|doesn'?t work|broken|won'?t|wont|stopped|stop\s+working|stops?\s+working|leak|clog|smell|noise|sparks|tripping|overflow|backup|no heat|no hot|not heating|not cooling|doesn'?t drain|not draining)/.test(t)) return true;
 
-    // Otherwise require meaningful length/detail
-    const wordCount = t.split(/\s+/).filter(Boolean).length;
-    if (wordCount >= 6 && t.length >= 25) return true;
-
+    // Do not admit as actionable from length/word count alone (classification must supply defect signals)
     return false;
   }
 
@@ -13444,7 +14247,10 @@
     else if (map.byName && map.byName[k]) body = map.byName[k];
 
     if (!body) {
-      try { logDevSms_("", "TEMPLATE_MISSING key=[" + k + "] lang=[" + L + "] Add this key to Templates sheet.", "ERR_TEMPLATE"); } catch (_) {}
+      // Avoid noisy template-missing logs for common-area creation; runtime has a minimal safe fallback for this key.
+      if (k !== "TICKET_CREATED_COMMON_AREA") {
+        try { logDevSms_("", "TEMPLATE_MISSING key=[" + k + "] lang=[" + L + "] Add this key to Templates sheet.", "ERR_TEMPLATE"); } catch (_) {}
+      }
       // No long hardcoded tenant-facing copy in MAIN. All tenant text must live in Templates sheet.
       // Minimal safe fallback only when key is missing (GSM-7 safe, no 911/safety wording).
       if (k === "TICKET_CREATED_COMMON_AREA") {
@@ -13553,6 +14359,16 @@
     } catch (err) {
       // Always log crash
       try { logDevSms_(from, String(err && err.stack ? err.stack : err), "CRASH"); } catch (_) {}
+      try {
+        if (typeof debugLogToSheet_ === "function") {
+          debugLogToSheet_(
+            "HANDLE_SMS_SAFE_CRASH_TRACE",
+            String((typeof globalThis !== "undefined" && globalThis.__traceId) ? globalThis.__traceId : from || ""),
+            "adapter=" + String((typeof globalThis !== "undefined" && (globalThis.__traceAdapter || globalThis.__inboundChannel)) ? (globalThis.__traceAdapter || globalThis.__inboundChannel) : "") +
+              " err=" + String(err && err.stack ? err.stack : err).slice(0, 200)
+          );
+        }
+      } catch (_) {}
 
       // Soft fallback reply (template-driven) — via Outgate when available
       try {
@@ -13637,6 +14453,10 @@
     let sidKey = "";
 
     try {
+      try {
+        if (typeof sopPhase2Reset_ === "function") sopPhase2Reset_();
+      } catch (_) {}
+
       const props = PropertiesService.getScriptProperties();
 
       const OPENAI_API_KEY = props.getProperty("OPENAI_API_KEY");
@@ -13701,7 +14521,7 @@
       if (!bodyRaw && !(parseInt(String(safeParam_(e, "NumMedia") || "0"), 10) > 0)) return;
 
       // ============================================================
-      // STAFF CAPTURE INGEST (early, before any stage handler logic)YYYYYYY
+      // STAFF CAPTURE INGEST (early, before any stage handler logic)
       // ============================================================
       if (isStaffCapture) {
 
@@ -13741,13 +14561,44 @@
           var payloadTrim = String(payloadText || "").trim();
           var payloadIsEmpty = (typeof isStaffDraftStatusOnlyPayload_ === "function") ? isStaffDraftStatusOnlyPayload_(payloadTrim) : (payloadTrim.length === 0);
 
-          // Propera Compass — Image Signal Adapter: run media synthesis before status reply so "#" + screenshot gets analyzed
           var hasMediaStaff = parseInt(String(safeParam_(e, "NumMedia") || "0"), 10) > 0;
+          var deferStaffVision = hasMediaStaff && (typeof staffMediaVisionDeferEnabled_ === "function") && staffMediaVisionDeferEnabled_();
+          var visionDeferralActive = deferStaffVision;
+
+          if (deferStaffVision && payloadIsEmpty) {
+            var qOkFull = false;
+            try {
+              if (typeof enqueueStaffMediaVisionJob_ === "function") {
+                qOkFull = enqueueStaffMediaVisionJob_(e, {
+                  draftId: draftId,
+                  draftPhone: draftPhone,
+                  staffPhone: originPhoneStaff,
+                  payloadText: payloadText,
+                  kind: "FULL"
+                });
+              }
+            } catch (_q) {
+              try { logDevSms_(originPhoneStaff, "", "STAFF_MEDIA_VISION_ENQUEUE_ERR " + String(_q && _q.message ? _q.message : _q)); } catch (_) {}
+            }
+            if (qOkFull) {
+              try { logDevSms_(originPhoneStaff, "", "STAFF_MEDIA_VISION_QUEUED kind=FULL draftId=" + draftId); } catch (_) {}
+              replyTo_(originPhoneStaff,
+                "Draft " + draftId + ": Photo received — analyzing in the background (usually under a minute). You will get another SMS when done.");
+              return;
+            }
+            visionDeferralActive = false;
+          }
+
+          // Propera Compass — Image Signal Adapter (sync unless STAFF_MEDIA_VISION_DEFER=1 defers to queue)
           var staffMediaFacts = { hasMedia: false, syntheticBody: "" };
           var mergedPayloadText = payloadText;
           if (hasMediaStaff && typeof imageSignalAdapter_ === "function" && typeof mergeMediaIntoBody_ === "function") {
-            staffMediaFacts = imageSignalAdapter_(e, payloadText, originPhoneStaff);
-            mergedPayloadText = mergeMediaIntoBody_(payloadText, staffMediaFacts);
+            if (!visionDeferralActive) {
+              staffMediaFacts = imageSignalAdapter_(e, payloadText, originPhoneStaff);
+              mergedPayloadText = mergeMediaIntoBody_(payloadText, staffMediaFacts);
+            } else {
+              try { logDevSms_(originPhoneStaff, "", "STAFF_MEDIA_VISION_DEFERRED syncVision=0 textPayload=1"); } catch (_) {}
+            }
           }
           if (!payloadTrim && mergedPayloadText && staffMediaFacts.syntheticBody) {
             try { logDevSms_(originPhoneStaff, (mergedPayloadText || "").slice(0, 60), "STAFF_CAPTURE_MEDIA_ONLY_SCREENSHOT"); } catch (_) {}
@@ -13905,6 +14756,24 @@
             "Draft " + draftId + ": " +
             (createdTicket ? "Ticket created. " : "Draft created. ") +
             (missing.length ? ("Missing: " + missing.join(", ") + ".") : "Missing: none.");
+
+          if (visionDeferralActive && hasMediaStaff && !payloadIsEmpty) {
+            try {
+              if (typeof enqueueStaffMediaVisionJob_ === "function" &&
+                  enqueueStaffMediaVisionJob_(e, {
+                    draftId: draftId,
+                    draftPhone: draftPhone,
+                    staffPhone: originPhoneStaff,
+                    payloadText: payloadText,
+                    kind: "ENRICH"
+                  })) {
+                line += " Photo is being analyzed in the background.";
+                try { logDevSms_(originPhoneStaff, "", "STAFF_MEDIA_VISION_QUEUED kind=ENRICH draftId=" + draftId); } catch (_) {}
+              }
+            } catch (_en) {
+              try { logDevSms_(originPhoneStaff, "", "STAFF_MEDIA_VISION_ENQUEUE_ERR enr " + String(_en && _en.message ? _en.message : _en)); } catch (_) {}
+            }
+          }
 
           replyTo_(originPhoneStaff, line);
 
@@ -14627,6 +15496,42 @@
   } catch (_) {}
   turnFacts.lang = lang;
   try { writeTimeline_("TURN", { issue: (turnFacts.issue || "").slice(0, 80), property: turnFacts.property ? turnFacts.property.code : "", unit: (turnFacts.unit || "").slice(0, 40), schedule: (turnFacts.schedule && turnFacts.schedule.raw) ? "1" : "" }, null); } catch (_) {}
+
+  // Phase 2 (gate consolidation): one bundled location + schema pass; downstream reuses __sopPhase2Intake
+  try {
+    if (typeof sopPhase2RunIntakeOpener_ === "function") {
+      sopPhase2RunIntakeOpener_({
+        phone: phone,
+        bodyTrim: bodyTrim,
+        mergedBodyTrim: mergedBodyTrim,
+        lang: lang,
+        OPENAI_API_KEY: OPENAI_API_KEY,
+        turnFacts: turnFacts
+      });
+    }
+  } catch (_) {}
+
+  // -----------------------------------------------------------------
+  // Phase 1 (shadow-only): semantic opener package snapshot candidate
+  // Non-authoritative; no routing/lifecycle/ticket decisions depend on this.
+  // -----------------------------------------------------------------
+  try {
+    if (typeof sopShadowSnapshotFromTurn_ === "function") {
+      var sopPkgShadow = sopShadowSnapshotFromTurn_({
+        traceId: (typeof globalThis !== "undefined" && globalThis.__traceId) ? String(globalThis.__traceId || "") : "",
+        sourceAdapter: (typeof globalThis !== "undefined" && globalThis.__traceAdapter) ? String(globalThis.__traceAdapter || "") : "SMS",
+        inboundEventId: sidSafe || "",
+        bodyRaw: bodyRaw,
+        mergedBodyTrim: mergedBodyTrim,
+        lang: lang,
+        turnFacts: turnFacts,
+        mediaFacts: mediaFacts
+      });
+      if (typeof sopLogShadowPackageV1_ === "function") {
+        sopLogShadowPackageV1_(phone, sopPkgShadow, { mode: mode, turnFacts: turnFacts });
+      }
+    }
+  } catch (_) {}
 
   // -----------------------------
   // Inner operational domain router (Phase 1)
@@ -16115,8 +17020,15 @@
             const props = PropertiesService.getScriptProperties();
             const apiKey = String(props.getProperty("OPENAI_API_KEY") || "").trim();
             if (apiKey) {
-              const ex = smartExtract_(apiKey, issueText);
-              isClear = issueIsClear_(ex.issueSummary, ex.issueConfidence, issueText) || looksActionableIssue_(issueText);
+              var ex = null;
+              var _rse = (typeof sopPhase2ResolveSmartExtract_ === "function") ? sopPhase2ResolveSmartExtract_(apiKey, phone, issueText) : { callDirect: true };
+              if (_rse && _rse.callDirect === false) {
+                ex = _rse.ex;
+                try { if (_rse.reused) logDevSms_(phone, "", "SOP_PHASE2_SMARTX_REUSE stage=PROPERTY"); } catch (_) {}
+              } else {
+                ex = smartExtract_(apiKey, issueText);
+              }
+              if (ex) isClear = issueIsClear_(ex.issueSummary, ex.issueConfidence, issueText) || looksActionableIssue_(issueText);
             }
           } catch (_) {}
         }
@@ -16426,8 +17338,15 @@
         const props = PropertiesService.getScriptProperties();
         const apiKey = String(props.getProperty("OPENAI_API_KEY") || "").trim();
         if (apiKey) {
-          const ex = smartExtract_(apiKey, dirIssue);
-          isClear = issueIsClear_(ex.issueSummary, ex.issueConfidence, dirIssue) || looksActionableIssue_(dirIssue);
+          var exU = null;
+          var _rseU = (typeof sopPhase2ResolveSmartExtract_ === "function") ? sopPhase2ResolveSmartExtract_(apiKey, phone, dirIssue) : { callDirect: true };
+          if (_rseU && _rseU.callDirect === false) {
+            exU = _rseU.ex;
+            try { if (_rseU.reused) logDevSms_(phone, "", "SOP_PHASE2_SMARTX_REUSE stage=UNIT"); } catch (_) {}
+          } else {
+            exU = smartExtract_(apiKey, dirIssue);
+          }
+          if (exU) isClear = issueIsClear_(exU.issueSummary, exU.issueConfidence, dirIssue) || looksActionableIssue_(dirIssue);
         }
       } catch (_) {}
     }
@@ -16856,10 +17775,19 @@
         const props = PropertiesService.getScriptProperties();
         const apiKey = String(props.getProperty("OPENAI_API_KEY") || "").trim();
         if (apiKey) {
-          const ex = smartExtract_(apiKey, fullText);
-          isClear =
-            issueIsClear_(ex.issueSummary, ex.issueConfidence, fullText) ||
-            looksActionableIssue_(fullText);
+          var exI = null;
+          var _rseI = (typeof sopPhase2ResolveSmartExtract_ === "function") ? sopPhase2ResolveSmartExtract_(apiKey, phone, fullText) : { callDirect: true };
+          if (_rseI && _rseI.callDirect === false) {
+            exI = _rseI.ex;
+            try { if (_rseI.reused) logDevSms_(phone, "", "SOP_PHASE2_SMARTX_REUSE stage=ISSUE"); } catch (_) {}
+          } else {
+            exI = smartExtract_(apiKey, fullText);
+          }
+          if (exI) {
+            isClear =
+              issueIsClear_(exI.issueSummary, exI.issueConfidence, fullText) ||
+              looksActionableIssue_(fullText);
+          }
         }
       } catch (_) {}
     }
@@ -17196,155 +18124,6 @@
     return true;
   }
 
-  function handleScheduleSingleTicket_(sheet, dir, dirRow, phone, activeRow, rawTrim, lang, baseVars, dayWord, turnFacts, sidSafe, now, signals) {
-    var stageDay = "Today";
-    try {
-      if (typeof inferStageDayFromText_ === "function") {
-        var inferred = inferStageDayFromText_(rawTrim, dayWord);
-        if (inferred) stageDay = inferred;
-      }
-    } catch (_) {}
-    if (!looksLikeWindowReply_(rawTrim, stageDay)) return false;
-    const label = windowLabel_(rawTrim, stageDay);
-    if (!label) {
-      var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_ASK_SCHEDULE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, dayWord ? { dayWord: dayWord } : {}), meta: { source: "HANDLE_SMS_CORE", stage: "SCHEDULE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
-      return true;
-    }
-
-    // Policy validation (conservative: only enforces date/hours when parser provides them)
-    var propObj = (typeof dalGetPendingProperty_ === "function") ? dalGetPendingProperty_(dir, dirRow) : {};
-    var propCode = String(propObj && propObj.code ? propObj.code : "").trim().toUpperCase() || "GLOBAL";
-    var sched = { label: label };
-    var d = null;
-    if (typeof inferStageDayFromText_ === "function" && typeof parsePreferredWindowShared_ === "function") {
-      try {
-        var inferred = inferStageDayFromText_(rawTrim, dayWord);
-        if (inferred) {
-          d = parsePreferredWindowShared_(rawTrim, inferred);
-          if (d) {
-            if (d.start && d.start instanceof Date) { sched.date = d.start; sched.startHour = d.start.getHours(); }
-            if (d.end && d.end instanceof Date) { sched.date = sched.date || d.end; sched.endHour = d.end.getHours(); }
-          }
-        }
-      } catch (_) {}
-    }
-    var verdict = (typeof validateSchedPolicy_ === "function") ? validateSchedPolicy_(propCode, sched, now) : { ok: true };
-    if (!verdict.ok) {
-      var _vk = String(verdict.key || "").trim();
-      var _ogV = (typeof dispatchOutboundIntent_ === "function" && _vk) ? dispatchOutboundIntent_({ intentType: _vk, templateKey: _vk, recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: Object.assign({}, baseVars, verdict.vars || {}), meta: { source: "HANDLE_SMS_CORE", stage: "SCHEDULE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
-      if (!(_ogV && _ogV.ok)) { replyNoHeader_(renderTenantKey_(verdict.key, lang, Object.assign({}, baseVars, verdict.vars || {}))); }
-      try { logDevSms_(phone, rawTrim, "SCHED_POLICY_DENY key=[" + verdict.key + "] prop=[" + propCode + "]"); } catch (_) {}
-      try { wiSetWaitTenant_(phone, "SCHEDULE"); } catch (_) {}
-      try {
-        var ctxNow = (typeof ctxGet_ === "function") ? ctxGet_(phone) : null;
-        var wiPick = ctxNow ? (String(ctxNow.pendingWorkItemId || "").trim() || String(ctxNow.activeWorkItemId || "").trim()) : "";
-        if (typeof ctxUpsert_ === "function") ctxUpsert_(phone, { pendingWorkItemId: wiPick, pendingExpected: "SCHEDULE", pendingExpiresAt: new Date(Date.now() + 10 * 60 * 1000) }, "SCHED_POLICY_REJECT");
-      } catch (_) {}
-      return true;
-    }
-
-    // ✅ TicketId lookup MUST be BEFORE we clear/advance anything
-    const ticketId = String(sheet.getRange(activeRow, COL.TICKET_ID).getValue() || "").trim();
-    // ✅ Issue summary for confirmation (ticket row message = issue/summary)
-    var issueSummary = "";
-    try {
-      issueSummary = String(sheet.getRange(activeRow, COL.MSG).getValue() || "").trim();
-      if (issueSummary && typeof normalizeIssueText_ === "function") {
-        var norm = normalizeIssueText_(issueSummary);
-        if (norm) issueSummary = String(norm).trim();
-      }
-    } catch (_) {}
-    // ✅ Extra issues captured in buffer (if present) → "(+N more)"
-    var moreCount = 0;
-    try {
-      if (typeof getIssueBuffer_ === "function" && dirRow > 0) {
-        var buf = getIssueBuffer_(dir, dirRow) || [];
-        if (Array.isArray(buf) && buf.length) moreCount = buf.length;
-      }
-    } catch (_) {}
-    var issueLine = issueSummary;
-    if (issueLine && moreCount > 0) issueLine = issueLine + " (+" + moreCount + " more)";
-    // Capture WI BEFORE any ctx changes
-    let doneWi = "";
-    try {
-      const ctxNow = (typeof ctxGet_ === "function") ? (ctxGet_(phone) || {}) : {};
-      doneWi = String(ctxNow.pendingWorkItemId || ctxNow.activeWorkItemId || "").trim();
-    } catch (_) {}
-    withWriteLock_("SCHED_SET_LABEL", () => {
-      sheet.getRange(activeRow, COL.PREF_WINDOW).setValue(label);
-      sheet.getRange(activeRow, COL.LAST_UPDATE).setValue(now);
-      // Write structured end datetime for lifecycle engine.
-      // d is already the parsed result in scope — use d.end directly, do not re-parse.
-      // clearContent() when end is null to prevent stale datetime from a previous schedule.
-      try {
-        if (d && d.end instanceof Date) {
-          sheet.getRange(activeRow, COL.SCHEDULED_END_AT).setValue(d.end);
-        } else {
-          sheet.getRange(activeRow, COL.SCHEDULED_END_AT).clearContent();
-        }
-      } catch (_) {}
-    });
-    setStatus_(sheet, activeRow, "Scheduled");
-    // ✅ WorkItem: no longer waiting on tenant
-    if (doneWi) {
-      try {
-        workItemUpdate_(doneWi, { state: "ACTIVE_WORK", substate: "" });
-        try { logDevSms_(phone, rawTrim, "WI_UPDATE done wi=[" + doneWi + "] state=ACTIVE_WORK"); } catch (_) {}
-        // Lifecycle Phase 2: emit ACTIVE_WORK_ENTERED so engine can set follow-up timer
-        if (typeof onWorkItemActiveWork_ === "function") {
-          var propCode = String(sheet.getRange(activeRow, COL.PROPERTY).getValue() || "").trim().toUpperCase();
-          onWorkItemActiveWork_(doneWi, propCode, d && d.end instanceof Date ? { scheduledEndAt: d.end } : {});
-        }
-      } catch (_) {}
-    }
-    try {
-      logDevSms_(
-        phone,
-        rawTrim,
-        "SCHED_CONFIRM row=" + activeRow +
-          " tid=[" + ticketId + "]" +
-          " label=[" + label + "]" +
-          " stage=[SCHEDULE]"
-      );
-    } catch (_) {}
-    // ✅ Phase 1: semantic intent CONFIRM_RECORDED_SCHEDULE; Outgate resolves template (default CONF_WINDOW_SET or vars.confirmKey from upstream tone)
-    const _confirmKey = { urgent: "TICKET_CONFIRM_URGENT", postService: "TICKET_CONFIRM_POST_SERVICE", recurring: "TICKET_CONFIRM_RECURRING", frustrated: "TICKET_CONFIRM_FRUSTRATED" }[(signals && signals.tone) || ""] || "CONF_WINDOW_SET";
-    var _confirmVars = Object.assign({}, baseVars, { label: label, ticketId: ticketId, issueSummary: issueLine });
-    if (_confirmKey !== "CONF_WINDOW_SET") _confirmVars.confirmKey = _confirmKey;
-    var _ogConfirm = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({
-      intentType: "CONFIRM_RECORDED_SCHEDULE",
-      recipientType: "TENANT",
-      recipientRef: phone,
-      lang: lang,
-      channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS",
-      deliveryPolicy: "NO_HEADER",
-      vars: _confirmVars,
-      meta: { source: "HANDLE_SMS_CORE", stage: "SCHEDULE", flow: "MAINTENANCE_INTAKE" }
-    }) : { ok: false };
-    if (!(_ogConfirm && _ogConfirm.ok)) {
-      var _outMsg = (typeof renderTenantKey_ === "function") ? renderTenantKey_(_confirmKey, lang, _confirmVars) : "";
-      try { logDevSms_(phone, _outMsg, "DEBUG_CONF_WINDOW_SET_RENDER"); } catch (_) {}
-      replied = true;
-      if (typeof sendRouterSms_ === "function") sendRouterSms_(phone, _outMsg, "CONFIRM_RECORDED_SCHEDULE"); else replyNoHeader_(_outMsg);
-    } else {
-      replied = true;
-    }
-    // ✅ Clear schedule expectation on success
-    try { ctxUpsert_(phone, { pendingExpected: "", pendingExpiresAt: "" }, "SCHEDULE_RESOLVED"); } catch (_) {}
-    // ✅ Atomic advance/clear (your queue-drain)
-    try {
-      if (dirRow > 0) {
-        const advanced = advanceTenantQueueOrClear_(sheet, dir, dirRow, phone, lang);
-        if (advanced) {
-          try { logDevSms_(phone, "", "QUEUE_DRAIN_ADVANCED tid=[" + (advanced.ticketId || "") + "]"); } catch (_) {}
-        }
-      }
-    } catch (qdErr) {
-      try { logDevSms_(phone, "", "QUEUE_DRAIN_ERR " + (qdErr && qdErr.message ? qdErr.message : qdErr)); } catch (_) {}
-    }
-    return true;
-  }
-
   // -------------------------
   // SCHEDULE (Propera Compass SAFE) — ctx-driven
   // - Single stage only: "SCHEDULE"
@@ -17450,7 +18229,11 @@
     // 3) Single ticket schedule confirm
     var dayWordSchedule = "";
     try { dayWordSchedule = String(scheduleDayWord_(new Date()) || "").trim(); } catch (_) {}
-    if (handleScheduleSingleTicket_(sheet, dir, dirRow, phone, activeRow, rawTrim, lang, baseVars, dayWordSchedule, turnFacts, sidSafe, now, signals)) return;
+    var _hsSt = handleScheduleSingleTicket_(sheet, dir, dirRow, phone, activeRow, rawTrim, lang, baseVars, dayWordSchedule, now, signals);
+    if (_hsSt && _hsSt.handled) {
+      replied = true;
+      return;
+    }
 
     // Re-ask schedule and keep expected=SCHEDULE (do not drop to menu)
     reAskSchedule_("PARSE_FAIL");
@@ -17562,19 +18345,7 @@
       return;
     }
 
-    try { wiSetWaitTenant_(phone, "SCHEDULE"); } catch (_) {}
-    var unitLine = "";
-    if (unit && String(unit).trim()) {
-      unitLine = ", Apt " + String(unit).trim();
-    }
-    var issueShort = String(issue || "").trim().slice(0, 80);
-    var vars = Object.assign({}, baseVars, {
-      propertyName: propName || "",
-      issueShort: issueShort,
-      unitLine: unitLine,
-      afterCreate: true
-    });
-    var _og = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({ intentType: "TICKET_CREATED_ASK_SCHEDULE", recipientType: "TENANT", recipientRef: phone, lang: lang, channel: (typeof globalThis !== "undefined" && globalThis.__inboundChannel) ? globalThis.__inboundChannel : "SMS", deliveryPolicy: "NO_HEADER", vars: vars, meta: { source: "HANDLE_SMS_CORE", stage: "SCHEDULE", flow: "MAINTENANCE_INTAKE" } }) : { ok: false };
+    finalizeDraftScheduleConfirmOrAskTenant_(phone, sheet, dir, dirRow, lang, baseVars, result, issue, unit, propName);
     return;
   }
 
@@ -17756,6 +18527,16 @@
       mediaSubcategoryHint: (mediaFacts && mediaFacts.issueHints && mediaFacts.issueHints.subcategory) ? String(mediaFacts.issueHints.subcategory || "").trim() : "",
       mediaUnitHint: (mediaFacts && mediaFacts.unitHint) ? String(mediaFacts.unitHint || "").trim() : ""
     });
+    try {
+      logDevSms_(
+        phone,
+        "",
+        "TRACE_AFTER_FINALIZE dtMs=" + String(Date.now() - t0) +
+          " ok=" + String(result && result.ok ? 1 : 0) +
+          " adapter=" + String((typeof globalThis !== "undefined" && globalThis.__traceAdapter) ? globalThis.__traceAdapter : (typeof globalThis !== "undefined" && globalThis.__inboundChannel ? globalThis.__inboundChannel : "")) +
+          " traceId=" + String((typeof globalThis !== "undefined" && globalThis.__traceId) ? globalThis.__traceId : "")
+      );
+    } catch (_) {}
 
     if (!result.ok) {
       if (result.reason === "ACTIVE_TICKET_EXISTS") {
@@ -18036,6 +18817,328 @@
   // END OF HANDLE SMS CORE
   //  
 
+  // =========================================================
+  // STAFF MEDIA VISION QUEUE (Phase 4 — defer Twilio fetch + OpenAI vision off STAFF_CAPTURE)
+  // Enable: ScriptProperties STAFF_MEDIA_VISION_DEFER = "1"
+  // Sheet: StaffMediaVisionQueue (created on first enqueue)
+  // Processed by aiEnrichmentWorker (same 1-min trigger as AiQueue)
+  // =========================================================
+
+  const STAFF_MEDIA_VISION_QUEUE_SHEET = "StaffMediaVisionQueue";
+
+  function staffMediaVisionDeferEnabled_() {
+    try {
+      return String(PropertiesService.getScriptProperties().getProperty("STAFF_MEDIA_VISION_DEFER") || "").trim() === "1";
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function extractMediaUrlsFromTwilioEvent_(e) {
+    var out = [];
+    var n = parseInt(String(safeParam_(e, "NumMedia") || "0"), 10) || 0;
+    for (var i = 0; i < n; i++) {
+      var u = String(safeParam_(e, "MediaUrl" + i) || "").trim();
+      if (u) out.push(u);
+    }
+    return out;
+  }
+
+  function buildSyntheticTwilioEventForMediaUrls_(urls) {
+    var e = { parameter: {} };
+    var arr = Array.isArray(urls) ? urls : [];
+    e.parameter.NumMedia = String(arr.length);
+    for (var i = 0; i < arr.length; i++) {
+      e.parameter["MediaUrl" + i] = String(arr[i] || "").trim();
+    }
+    return e;
+  }
+
+  function staffMediaVisionWorkerReply_(toPhone, text) {
+    try {
+      var msg = String(text || "").trim();
+      if (!msg || !toPhone) return;
+      var p = PropertiesService.getScriptProperties();
+      var sid = String(p.getProperty("TWILIO_SID") || "").trim();
+      var token = String(p.getProperty("TWILIO_TOKEN") || "").trim();
+      var fromNum = String(p.getProperty("TWILIO_NUMBER") || "").trim();
+      if (sid && token && fromNum && typeof sendSms_ === "function") {
+        sendSms_(sid, token, fromNum, String(toPhone).trim(), msg);
+      }
+    } catch (_) {}
+  }
+
+  function ensureStaffMediaVisionQueueSheet_() {
+    var ss = SpreadsheetApp.getActive();
+    var sh = ss.getSheetByName(STAFF_MEDIA_VISION_QUEUE_SHEET);
+    if (sh) return sh;
+    return withWriteLock_("SMVQ_CREATE", function() {
+      var s2 = ss.getSheetByName(STAFF_MEDIA_VISION_QUEUE_SHEET);
+      if (!s2) s2 = ss.insertSheet(STAFF_MEDIA_VISION_QUEUE_SHEET);
+      if (s2.getLastRow() < 1) {
+        s2.appendRow([
+          "CreatedAt", "DraftId", "DraftPhone", "StaffPhoneE164", "PayloadText", "MediaUrlsJson",
+          "Kind", "MessageSid", "Status", "Attempts", "LastError", "UpdatedAt"
+        ]);
+      }
+      return s2;
+    });
+  }
+
+  function staffMediaVisionJobPendingForSid_(sid) {
+    var s = String(sid || "").trim();
+    if (!s) return false;
+    var sh = SpreadsheetApp.getActive().getSheetByName(STAFF_MEDIA_VISION_QUEUE_SHEET);
+    if (!sh || sh.getLastRow() < 2) return false;
+    var last = sh.getLastRow();
+    var start = Math.max(2, last - 80);
+    var n = last - start + 1;
+    var vals = sh.getRange(start, 1, n, 12).getValues();
+    for (var i = vals.length - 1; i >= 0; i--) {
+      var st = String(vals[i][8] || "").trim();
+      var wsid = String(vals[i][7] || "").trim();
+      if (st === "PENDING" && wsid === s) return true;
+    }
+    return false;
+  }
+
+  function enqueueStaffMediaVisionJob_(e, job) {
+    if (!staffMediaVisionDeferEnabled_()) return false;
+    var urls = extractMediaUrlsFromTwilioEvent_(e);
+    if (!urls.length) return false;
+    var sid = String(safeParam_(e, "MessageSid") || safeParam_(e, "SmsMessageSid") || "").trim();
+    if (sid && staffMediaVisionJobPendingForSid_(sid)) return false;
+    var sh = ensureStaffMediaVisionQueueSheet_();
+    var now = new Date();
+    sh.appendRow([
+      now,
+      String(job.draftId || "").trim(),
+      String(job.draftPhone || "").trim(),
+      String(job.staffPhone || "").trim(),
+      String(job.payloadText || "").trim(),
+      JSON.stringify(urls),
+      String(job.kind || "FULL").trim(),
+      sid,
+      "PENDING",
+      0,
+      "",
+      now
+    ]);
+    return true;
+  }
+
+  /**
+   * Staff # capture: after deferred vision, same pipeline as sync STAFF_CAPTURE (draft upsert + optional finalize).
+   * inboundKey uses STAFFCAP_VISION so duplicate finalize is distinct from live SMS SIDs.
+   */
+  function staffMediaVisionWorkerRunPipeline_(sheet, dir, originPhoneStaff, draftPhone, draftId, mergedPayloadText, staffMediaFacts, mediaUrlList, jobRow) {
+    var baseVars = { brandName: BRAND.name, teamName: BRAND.team };
+    var props = PropertiesService.getScriptProperties();
+    var OPENAI_API_KEY = props.getProperty("OPENAI_API_KEY");
+    var TWILIO_SID = props.getProperty("TWILIO_SID");
+    var TWILIO_TOKEN = props.getProperty("TWILIO_TOKEN");
+    var TWILIO_NUMBER = props.getProperty("TWILIO_NUMBER");
+    var ONCALL_NUMBER = props.getProperty("ONCALL_NUMBER");
+
+    var dirRow = (typeof findDirectoryRowByPhone_ === "function") ? findDirectoryRowByPhone_(dir, draftPhone) : 0;
+    if (!dirRow || dirRow < 2) {
+      dirRow = ensureDirectoryRowForPhone_(dir, draftPhone);
+    }
+    if (!dirRow || dirRow < 2) {
+      return { ok: false, line: "Draft " + draftId + ": Directory row missing after vision.", skipSms: false };
+    }
+
+    var dirPendingRow0 = parseInt(String(dir.getRange(dirRow, 7).getValue() || "0"), 10) || 0;
+    if (dirPendingRow0 >= 2) {
+      return { ok: true, line: "Draft " + draftId + ": Ticket already created (row " + dirPendingRow0 + "). Vision skipped.", skipSms: true };
+    }
+
+    var turnFacts = compileTurn_(mergedPayloadText, draftPhone, "en", baseVars);
+    turnFacts.meta = turnFacts.meta || {};
+    var _numMediaStaff = Array.isArray(mediaUrlList) ? mediaUrlList.length : 0;
+    turnFacts.meta.mediaUrls = Array.isArray(mediaUrlList) ? mediaUrlList.slice() : [];
+
+    if (typeof maybeAttachMediaFactsToTurn_ === "function") maybeAttachMediaFactsToTurn_(turnFacts, staffMediaFacts);
+
+    var issueBlankOrWeak = !turnFacts.issue || (typeof isWeakIssue_ === "function" && isWeakIssue_(turnFacts.issue));
+    var mergedTrim = String(mergedPayloadText || "").trim();
+    var mergedUsable = mergedTrim.length > 0 && (typeof isWeakIssue_ !== "function" ? mergedTrim.length >= 8 : !isWeakIssue_(mergedTrim));
+    if (issueBlankOrWeak && mergedUsable) {
+      turnFacts.issue = mergedTrim;
+    }
+
+    var mediaConfident = (typeof staffMediaFacts.confidence === "number" && staffMediaFacts.confidence >= 0.6);
+    if (mediaConfident && !turnFacts.property && turnFacts.meta && turnFacts.meta.mediaPropertyHint) {
+      var hintProp = (typeof resolvePropertyHintToObj_ === "function") ? resolvePropertyHintToObj_(turnFacts.meta.mediaPropertyHint) : null;
+      if (hintProp && hintProp.code) {
+        turnFacts.property = { code: hintProp.code, name: hintProp.name || "" };
+      }
+    }
+    if (mediaConfident && !turnFacts.unit && turnFacts.meta && turnFacts.meta.mediaUnitHint) {
+      var mediaUnitVal = String(turnFacts.meta.mediaUnitHint || "").trim();
+      if (mediaUnitVal) {
+        turnFacts.unit = (typeof normalizeUnit_ === "function") ? normalizeUnit_(mediaUnitVal) : mediaUnitVal;
+      }
+    }
+
+    var weakStaff = !mergedTrim || (typeof isWeakIssue_ === "function" && isWeakIssue_(mergedTrim));
+    turnFacts.meta.hasMediaOnly = (_numMediaStaff > 0) && weakStaff;
+    if (staffMediaFacts.syntheticBody && (typeof isWeakIssue_ === "function" && !isWeakIssue_(staffMediaFacts.syntheticBody))) turnFacts.meta.hasMediaOnly = false;
+
+    draftUpsertFromTurn_(dir, dirRow, turnFacts, mergedPayloadText, draftPhone, { staffCapture: true });
+
+    try {
+      recomputeDraftExpected_(dir, dirRow, draftPhone);
+    } catch (_) {}
+
+    var propCode = String(dir.getRange(dirRow, 2).getValue() || "").trim();
+    var issueVal = String(dir.getRange(dirRow, 5).getValue() || "").trim();
+    var unitVal = String(dir.getRange(dirRow, 6).getValue() || "").trim();
+    var dirPendingRow = parseInt(String(dir.getRange(dirRow, 7).getValue() || "0"), 10) || 0;
+
+    var missing = [];
+    if (!propCode) missing.push("property");
+    if (!unitVal) missing.push("unit");
+    if (!issueVal) missing.push("issue");
+
+    var createdTicket = false;
+    var ticketId = "";
+
+    if (dirRow >= 2 && !missing.length && dirPendingRow < 2) {
+      var staffCapInboundKey = "STAFFCAP_VISION:" + draftId + ":J" + jobRow;
+      var staffMediaUrl = turnFacts.meta.mediaUrls && turnFacts.meta.mediaUrls[0] ? String(turnFacts.meta.mediaUrls[0]).trim() : "";
+      var result = finalizeDraftAndCreateTicket_(sheet, dir, dirRow, draftPhone, originPhoneStaff, {
+        inboundKey: staffCapInboundKey,
+        OPENAI_API_KEY: OPENAI_API_KEY,
+        TWILIO_SID: TWILIO_SID,
+        TWILIO_TOKEN: TWILIO_TOKEN,
+        TWILIO_NUMBER: TWILIO_NUMBER,
+        ONCALL_NUMBER: ONCALL_NUMBER,
+        createdByManager: true,
+        lang: "en",
+        baseVars: baseVars,
+        firstMediaUrl: staffMediaUrl,
+        mediaType: (staffMediaFacts && staffMediaFacts.mediaType) ? String(staffMediaFacts.mediaType || "").trim() : "",
+        mediaCategoryHint: (staffMediaFacts && staffMediaFacts.issueHints && staffMediaFacts.issueHints.category) ? String(staffMediaFacts.issueHints.category || "").trim() : "",
+        mediaSubcategoryHint: (staffMediaFacts && staffMediaFacts.issueHints && staffMediaFacts.issueHints.subcategory) ? String(staffMediaFacts.issueHints.subcategory || "").trim() : "",
+        mediaUnitHint: (staffMediaFacts && staffMediaFacts.unitHint) ? String(staffMediaFacts.unitHint || "").trim() : "",
+        tenantNameHint: (turnFacts.meta && turnFacts.meta.mediaTenantNameHint) ? String(turnFacts.meta.mediaTenantNameHint).trim() : "",
+        tenantNameTrusted: !!(turnFacts.meta && turnFacts.meta.mediaTenantNameTrusted)
+      });
+      if (result && result.ok && Number(result.loggedRow || 0) >= 2 && String(result.ticketId || "").trim()) {
+        createdTicket = true;
+        ticketId = String(result.ticketId || "").trim();
+      }
+    }
+
+    var line =
+      "Draft " + draftId + ": " +
+      (createdTicket ? "Ticket created. " : "Draft updated (photo). ") +
+      (missing.length ? ("Missing: " + missing.join(", ") + ".") : "Missing: none.");
+    return { ok: true, line: line, skipSms: false };
+  }
+
+  function processStaffMediaVisionQueueTick_() {
+    var sh = ensureStaffMediaVisionQueueSheet_();
+    var lastRow = sh.getLastRow();
+    if (lastRow < 2) return false;
+
+    var start = Math.max(2, lastRow - 60);
+    var n = lastRow - start + 1;
+    var vals = sh.getRange(start, 1, n, 12).getValues();
+    var row = 0;
+    var idx = -1;
+    for (var i = 0; i < vals.length; i++) {
+      if (String(vals[i][8] || "").trim() === "PENDING") {
+        row = start + i;
+        idx = i;
+        break;
+      }
+    }
+    if (!row || idx < 0) return false;
+
+    var attempts = Number(vals[idx][9] || 0) || 0;
+    var staffPhoneForErr = String(vals[idx][3] || "").trim();
+
+    withWriteLock_("SMVQ_MARK_RUNNING", function() {
+      sh.getRange(row, 9).setValue("RUNNING");
+      sh.getRange(row, 10).setValue(attempts + 1);
+      sh.getRange(row, 12).setValue(new Date());
+    });
+
+    try {
+      var draftId = String(vals[idx][1] || "").trim();
+      var draftPhone = String(vals[idx][2] || "").trim();
+      var staffPhone = String(vals[idx][3] || "").trim();
+      var payloadText = String(vals[idx][4] || "").trim();
+      var urlsJson = String(vals[idx][5] || "").trim();
+      var kind = String(vals[idx][6] || "FULL").trim().toUpperCase();
+
+      var urlList = [];
+      try {
+        urlList = JSON.parse(urlsJson);
+      } catch (_) {}
+      if (!Array.isArray(urlList) || !urlList.length) throw new Error("bad_media_urls");
+
+      var syntheticE = buildSyntheticTwilioEventForMediaUrls_(urlList);
+      var staffMediaFacts = (typeof imageSignalAdapter_ === "function") ? imageSignalAdapter_(syntheticE, payloadText, staffPhone) : { hasMedia: false, syntheticBody: "" };
+      var mergedPayloadText = payloadText;
+
+      if (kind === "ENRICH") {
+        var dir0 = getSheet_(DIRECTORY_SHEET_NAME);
+        var dr = (typeof findDirectoryRowByPhone_ === "function") ? findDirectoryRowByPhone_(dir0, draftPhone) : 0;
+        var issueFromDir = "";
+        if (dr >= 2) issueFromDir = String(dir0.getRange(dr, 5).getValue() || "").trim();
+        var seed = issueFromDir || payloadText;
+        mergedPayloadText = (typeof mergeMediaIntoBody_ === "function") ? mergeMediaIntoBody_(seed, staffMediaFacts) : seed;
+      } else {
+        mergedPayloadText = (typeof mergeMediaIntoBody_ === "function") ? mergeMediaIntoBody_(payloadText, staffMediaFacts) : payloadText;
+      }
+
+      var sheet = getSheet_(SHEET_NAME);
+      var dir = getSheet_(DIRECTORY_SHEET_NAME);
+
+      var out = { ok: false, line: "", skipSms: true };
+      withWriteLock_("STAFF_CAPTURE_INGEST_" + draftId, function() {
+        out = staffMediaVisionWorkerRunPipeline_(sheet, dir, staffPhone, draftPhone, draftId, mergedPayloadText, staffMediaFacts, urlList, row);
+      });
+
+      if (out && out.ok && !out.skipSms && out.line) {
+        staffMediaVisionWorkerReply_(staffPhone, out.line);
+      }
+
+      try {
+        logDevSms_(staffPhone, "", "STAFF_MEDIA_VISION_DONE row=" + row + " draftId=" + draftId + " kind=" + kind);
+      } catch (_) {}
+
+      withWriteLock_("SMVQ_MARK_DONE", function() {
+        sh.getRange(row, 9).setValue("DONE");
+        sh.getRange(row, 11).setValue("");
+        sh.getRange(row, 12).setValue(new Date());
+      });
+    } catch (err) {
+      var em = String(err && err.message ? err.message : err);
+
+      if (attempts + 1 >= 3) {
+        withWriteLock_("SMVQ_MARK_FAILED", function() {
+          sh.getRange(row, 9).setValue("FAILED");
+          sh.getRange(row, 11).setValue(em.slice(0, 500));
+          sh.getRange(row, 12).setValue(new Date());
+        });
+      } else {
+        withWriteLock_("SMVQ_MARK_PENDING", function() {
+          sh.getRange(row, 9).setValue("PENDING");
+          sh.getRange(row, 11).setValue(em.slice(0, 500));
+          sh.getRange(row, 12).setValue(new Date());
+        });
+      }
+      try {
+        logDevSms_(staffPhoneForErr, "", "STAFF_MEDIA_VISION_ERR " + em);
+      } catch (_) {}
+    }
+
+    return true;
+  }
 
   // =========================================================
   // AI ENRICHMENT QUEUE (Compass: async, best-effort)
@@ -18102,6 +19205,14 @@
       // if (didFrag) return;
     } catch (e) {
       try { logDevSms_("(system)", "", "FRAG_WORKER_ERR " + String(e && e.message ? e.message : e)); } catch (_) {}
+    }
+
+    try {
+      if (typeof processStaffMediaVisionQueueTick_ === "function") {
+        processStaffMediaVisionQueueTick_();
+      }
+    } catch (e2) {
+      try { logDevSms_("(system)", "", "STAFF_MEDIA_VISION_WORKER_ERR " + String(e2 && e2.message ? e2.message : e2)); } catch (_) {}
     }
 
     // ... existing AI queue logic continues below ...

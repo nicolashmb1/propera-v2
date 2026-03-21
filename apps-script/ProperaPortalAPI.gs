@@ -18,10 +18,13 @@ var ACTIVITY_SHEET_NAME = 'Activity';
  */
 function portalDoGet_(e) {
   var path = (e && e.parameter && e.parameter.path) || '';
+
   var output;
 
   if (path === 'tickets') {
     output = getTicketsFromSheet();
+  } else if (path === 'ticketsOpenDeck') {
+    output = getTicketsOpenDeckGrouped_();
   } else if (path === 'properties') {
     output = getPropertiesFromSheet();
   } else if (path === 'tenants') {
@@ -36,6 +39,88 @@ function portalDoGet_(e) {
   }
 
   return json_(output);
+}
+
+/**
+ * True when ticket should appear in "open / not completed" operational views.
+ * Aligns with portal edit semantics (completed / cancelled / resolved closed).
+ */
+function portalTicketIsOpenForDeck_(status) {
+  var s = String(status || '').trim().toLowerCase();
+  if (!s) return true;
+  if (/^(completed|closed|resolved|cancelled|canceled|done)$/.test(s)) return false; 
+}
+
+/**
+ * Open tickets only, grouped by property (display name), sorted for mobile deck.
+ * Reuses cached Sheet1 read via getTicketsFromSheet().
+ */
+function getTicketsOpenDeckGrouped_() {
+  var all = getTicketsFromSheet();
+  if (!Array.isArray(all)) {
+    return { ok: false, error: 'tickets_unavailable', groups: [] };
+  }
+
+  var open = [];
+  for (var i = 0; i < all.length; i++) {
+    var t = all[i];
+    if (!t) continue;
+    if (!portalTicketIsOpenForDeck_(t.status)) continue;
+    var tid = String(t.ticketId || '').trim();
+    if (!tid) continue;
+    open.push(t);
+  }
+
+  open.sort(function (a, b) {
+    var pa = String(a.property || '').toLowerCase();
+    var pb = String(b.property || '').toLowerCase();
+    if (pa !== pb) return pa < pb ? -1 : 1;
+    var ua = String(a.unit || '').toLowerCase();
+    var ub = String(b.unit || '').toLowerCase();
+    if (ua !== ub) return ua < ub ? -1 : 1;
+    return String(a.ticketId || '').localeCompare(String(b.ticketId || ''));
+  });
+
+  var byProp = {};
+  for (var j = 0; j < open.length; j++) {
+    var row = open[j];
+    var propLabel = String(row.property || '').trim() || '(No property)';
+    if (!byProp[propLabel]) byProp[propLabel] = [];
+    var summaryRaw = String(row.summary || row.message || row.issue || '').trim();
+    var subtitle = summaryRaw.length > 140 ? summaryRaw.slice(0, 137) + '…' : summaryRaw;
+    var title = propLabel;
+    if (String(row.unit || '').trim()) {
+      title = propLabel + ' — ' + String(row.unit || '').trim();
+    }
+    byProp[propLabel].push({
+      ticketId: String(row.ticketId || '').trim(),
+      title: title,
+      subtitle: subtitle,
+      status: String(row.status || 'Open').trim() || 'Open',
+      property: propLabel,
+      unit: String(row.unit || '').trim()
+    });
+  }
+
+  var keys = Object.keys(byProp).sort(function (a, b) {
+    return a.toLowerCase().localeCompare(b.toLowerCase());
+  });
+  var groups = [];
+  for (var k = 0; k < keys.length; k++) {
+    var key = keys[k];
+    groups.push({
+      property: key,
+      count: byProp[key].length,
+      tickets: byProp[key]
+    });
+  }
+
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    totalOpen: open.length,
+    groups: groups
+  };
 }
 
 /**
@@ -68,6 +153,14 @@ function portalDoPost_(e) {
     try { Logger.log('PORTAL unauthorized: token mismatch (expected set=' + (expectedToken ? 'yes' : 'no') + ')'); } catch (_) {}
     return json_({ ok: false, error: 'unauthorized' });
   }
+
+  // Phase 1 instrumentation: unify trace adapter/id for policy/lifecycle timing comparison
+  try {
+    if (typeof globalThis !== "undefined") {
+      globalThis.__traceAdapter = "PORTAL";
+      globalThis.__traceId = "PORTAL_PM_" + String(Date.now());
+    }
+  } catch (_) {}
 
   if (path === 'pm.uploadAttachment') {
     return handlePmUploadAttachment_(body || {});

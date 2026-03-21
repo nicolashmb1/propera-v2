@@ -178,7 +178,7 @@ function telegramEnqueuePackage_(updateId, payloadJson) {
  * One-time installer for the standing Telegram queue worker trigger.
  * Creates exactly one recurring trigger for processTelegramQueue_ (every minute).
  */
-function installTelegramQueueWorkerTrigger_() {
+function installTelegramQueueWorkerTrigger() {
   try {
     var triggers = [];
     try { triggers = ScriptApp.getProjectTriggers() || []; } catch (_) { triggers = []; }
@@ -203,7 +203,7 @@ function installTelegramQueueWorkerTrigger_() {
  * Cleanup helper to remove all processTelegramQueue_ worker triggers.
  * Not called automatically from runtime.
  */
-function removeTelegramQueueWorkerTriggers_() {
+function removeTelegramQueueWorkerTriggers() {
   var removed = 0;
   try {
     var triggers = [];
@@ -339,6 +339,8 @@ function processTelegramQueue_() {
         globalThis.__inboundChannel = "TELEGRAM";
         globalThis.__telegramChatId = chatId;
         globalThis.__inboundEventEid = updateId ? ("TG_UPDATE:" + updateId) : "";
+        globalThis.__traceAdapter = "TELEGRAM";
+        globalThis.__traceId = updateId ? String(updateId).trim() : (globalThis.__traceId || "");
       }
 
       var syntheticE = {

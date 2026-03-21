@@ -263,14 +263,28 @@ function buildPolicyFacts_(eventType, ctx, workItem, propCode, now) {
 
   var earliest = Number(ppGet_(p, "SCHED_EARLIEST_HOUR", 9));
   var latest = Number(ppGet_(p, "SCHED_LATEST_HOUR", 18));
-  var allowWeekends = !!ppGet_(p, "SCHED_ALLOW_WEEKENDS", false);
+  var allowWeekendsLegacy = !!ppGet_(p, "SCHED_ALLOW_WEEKENDS", false);
   if (!isFinite(earliest)) earliest = 9;
   if (!isFinite(latest)) latest = 18;
 
   var t = policyLocalHourDow_(when);
   var hour = Number(t.hour);
-  var isWeekend = (Number(t.dowIso) === 6 || Number(t.dowIso) === 7);
-  var afterHours = (hour < earliest || hour > latest || (isWeekend && !allowWeekends));
+  var dowIso = Number(t.dowIso);
+  var isSat = (dowIso === 6);
+  var isSun = (dowIso === 7);
+  var isWeekend = isSat || isSun;
+  var weekendOk = true;
+  if (isWeekend) {
+    if (allowWeekendsLegacy) weekendOk = true;
+    else if (isSat) weekendOk = !!ppGet_(p, "SCHED_SAT_ALLOWED", false);
+    else if (isSun) weekendOk = !!ppGet_(p, "SCHED_SUN_ALLOWED", false);
+  }
+  var latestEff = latest;
+  if (isSat) {
+    var satCap = Number(ppGet_(p, "SCHED_SAT_LATEST_HOUR", NaN));
+    if (isFinite(satCap)) latestEff = Math.min(latest, satCap);
+  }
+  var afterHours = (hour < earliest || hour > latestEff || (isWeekend && !weekendOk));
 
   // Effective row for Sheet1 reads: prefer TicketKey lookup (runtime only); else legacy TicketRow + log
   var ticketSheet = (typeof getLogSheet_ === "function") ? getLogSheet_() : null;
