@@ -2,10 +2,10 @@
  * AMENITY_ENGINE.gs
  * Amenity reservation flow: config, holds, conflicts, access codes.
  * Extracted from PROPERA MAIN.gs to reduce file size.
- * Depends on: getSheet_, withWriteLock_, ctxGet_, ctxUpsert_, normalizePhoneKey_,
- *   renderTenantKey_, sendRouterSms_, logDevSms_, getHeaderMap_, findRowByValue_,
- *   parsePreferredWindow_, parseMonthNameWindow_, to24_ (from MAIN).
- * Uses from MAIN: AMENITIES_SHEET_NAME, AMENITY_RES_SHEET_NAME, AMENITY_DIR_SHEET_NAME.
+ * Depends on: getSheet_, withWriteLock_, ctxGet_, ctxUpsert_,
+ *   renderTenantKey_, sendRouterSms_, logDevSms_, parsePreferredWindowShared_/parsePreferredWindow_.
+ * Owns: getAmenityHeaderMap_, amenityFindRowByValue_, normalizePhoneKey_, parseMonthNameWindow_, to24_.
+ * Uses: AMENITIES_SHEET_NAME, AMENITY_RES_SHEET_NAME, AMENITY_DIR_SHEET_NAME (script-level constants).
  */
 
 // ---------------------------------------------
@@ -761,8 +761,8 @@ function releaseAmenityHold_(phone) {
 
   const bookingId = getHoldBookingId_(hold);
   const sheet = getSheet_(AMENITY_RES_SHEET_NAME);
-  const row = findRowByValue_(sheet, "BookingID", bookingId);
-  const map = getHeaderMap_(sheet);
+  const row = amenityFindRowByValue_(sheet, "BookingID", bookingId);
+  const map = getAmenityHeaderMap_(sheet);
 
   // best-effort mark CANCELLED if still HOLD
   if (row && map["Status"]) {
@@ -805,13 +805,13 @@ function confirmAmenityHold_(phone, lang) {
   }
 
   const sheet = getSheet_(AMENITY_RES_SHEET_NAME);
-  const rowNum = findRowByValue_(sheet, "BookingID", getHoldBookingId_(hold));
+  const rowNum = amenityFindRowByValue_(sheet, "BookingID", getHoldBookingId_(hold));
   if (!rowNum) {
     try { clearAmenityHoldCache_(ph); } catch (_) {}
     return { ok: false, replyKey: "AMENITY_BOOKING_NOT_FOUND", vars: {} };
   }
 
-  const map = getHeaderMap_(sheet);
+  const map = getAmenityHeaderMap_(sheet);
   if (!map["Status"] || !map["AmenityKey"]) {
     try { clearAmenityHoldCache_(ph); } catch (_) {}
     return { ok: false, replyKey: "AMENITY_SCHEMA_MISSING", vars: {} };
@@ -1040,7 +1040,7 @@ function cancelUpcomingAmenityReservation_(phone) {
 
   if (!bestRow) return null;
 
-  const map = getHeaderMap_(sheet);
+  const map = getAmenityHeaderMap_(sheet);
 
   withWriteLock_("AMENITY_CANCEL", () => {
     sheet.getRange(bestRow, map["Status"]).setValue(AMENITY_STATUS.CANCELLED);
@@ -1142,7 +1142,7 @@ function rescheduleBestAmenityReservation_(phone, newStart, newEnd) {
     return { ok: false, msg: "conflict" };
   }
 
-  const map = getHeaderMap_(sheet);
+  const map = getAmenityHeaderMap_(sheet);
   withWriteLock_("AMENITY_RESCHEDULE", () => {
     if (map["StartDateTime"]) sheet.getRange(bestRow, map["StartDateTime"]).setValue(newStart);
     if (map["EndDateTime"]) sheet.getRange(bestRow, map["EndDateTime"]).setValue(end);
@@ -1269,10 +1269,10 @@ function getReservationAccessState_(bookingId) {
   if (!bid) return null;
 
   const sheet = getSheet_(AMENITY_RES_SHEET_NAME);
-  const row = findRowByValue_(sheet, "BookingID", bid);
+  const row = amenityFindRowByValue_(sheet, "BookingID", bid);
   if (!row) return null;
 
-  const map = getHeaderMap_(sheet);
+  const map = getAmenityHeaderMap_(sheet);
   const data = sheet.getRange(row, 1, 1, sheet.getLastColumn()).getValues()[0];
 
   const seamCodeId = map["SeamCodeID"] ? String(data[map["SeamCodeID"] - 1] || "") : "";
@@ -1288,10 +1288,10 @@ function getReservationAccessState_(bookingId) {
 
 function markReservationCodePending_(bookingId) {
   const sheet = getSheet_(AMENITY_RES_SHEET_NAME);
-  const row = findRowByValue_(sheet, "BookingID", bookingId);
+  const row = amenityFindRowByValue_(sheet, "BookingID", bookingId);
   if (!row) return false;
 
-  const map = getHeaderMap_(sheet);
+  const map = getAmenityHeaderMap_(sheet);
   if (!map["CodeSource"]) return true; // if missing, treat as ok
 
   sheet.getRange(row, map["CodeSource"]).setValue("pending");
@@ -1301,10 +1301,10 @@ function markReservationCodePending_(bookingId) {
 
 function writeReservationAccessCode_(bookingId, codeData) {
   const sheet = getSheet_(AMENITY_RES_SHEET_NAME);
-  const row = findRowByValue_(sheet, "BookingID", bookingId);
+  const row = amenityFindRowByValue_(sheet, "BookingID", bookingId);
   if (!row) return false;
 
-  const map = getHeaderMap_(sheet);
+  const map = getAmenityHeaderMap_(sheet);
 
   if (map["SeamCodeID"]) sheet.getRange(row, map["SeamCodeID"]).setValue(String(codeData.seamCodeId || ""));
   if (map["AccessCode"]) sheet.getRange(row, map["AccessCode"]).setValue(String(codeData.code || ""));
@@ -1317,10 +1317,10 @@ function writeReservationAccessCode_(bookingId, codeData) {
 
 function markReservationCodeRevoked_(bookingId) {
   const sheet = getSheet_(AMENITY_RES_SHEET_NAME);
-  const row = findRowByValue_(sheet, "BookingID", bookingId);
+  const row = amenityFindRowByValue_(sheet, "BookingID", bookingId);
   if (!row) return false;
 
-  const map = getHeaderMap_(sheet);
+  const map = getAmenityHeaderMap_(sheet);
 
   if (map["CodeRevokedAt"]) {
     const existing = sheet.getRange(row, map["CodeRevokedAt"]).getValue();
@@ -1436,6 +1436,417 @@ function getSeamApiKey_() {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────
+// PHASE 7 — From PROPERA MAIN: router detector, AmenityDirectory, sheet
+// header/row helpers (getAmenityHeaderMap_/amenityFindRowByValue_), hold
+// cache + clear, bounded lifecycle processor, template-key notifications.
+// ─────────────────────────────────────────────────────────────────
+
+/************************************
+* AMENITY RESERVATION ENGINE (PRODUCTION-LINE, COMPASS-BRIDGE)
+* - Command-first routing (no keyword-noise)
+* - TemplateKey-only messaging via amenityReplyKey_ -> renderTenantKey_ -> sendRouterSms_
+* - HOLD -> RESERVED -> ACTIVE -> EXPIRED lifecycle
+* - Access provider adapter (Seam + fallback) with idempotency
+* - Uses StartDateTime/EndDateTime when available (fallback Start/End)
+* - Uses BookingID as canonical id (fallback ResId)
+* - Uses withWriteLock_ for ALL writes
+*
+* REQUIRED EXISTING FUNCTIONS (from your core):
+* - withWriteLock_(tag, fn)
+* - getSheet_(name)
+* - renderTenantKey_(key, lang, vars)
+* - sendRouterSms_(to, msg, tag)
+* - ctxGet_(phone)
+* - ctxUpsert_(phone, patch)
+* - logDevSms_(from, body, note)  (optional but recommended)
+*
+* REQUIRED SHEETS:
+* - AMENITY_RES_SHEET_NAME (AmenityReservations)
+* - AMENITIES_SHEET_NAME   (Amenities)
+* - AMENITY_DIR_SHEET_NAME (AmenityDirectory)  (optional legacy support)
+************************************/
+
+// ---------------------------------------------
+// ROUTER DETECTOR (command-first + sticky + explicit confirm)
+// Use this from your router if you want, but you already have router detectors.
+// ---------------------------------------------
+function looksLikeAmenityReservation_(e) {
+  const p = (e && e.parameter) ? e.parameter : {};
+  const bodyRaw = String(p.Body || "").trim();
+  const s = bodyRaw.toLowerCase().trim();
+  const from = String(p.From || "").trim();
+
+  if (!from && !s) return false;
+
+  // If confirming an existing hold, always route here
+  if ((s === "yes" || s === "confirm" || s === "no") && from && getAmenityHoldCache_(from)) return true;
+
+  // Explicit commands (no ambiguity)
+  if (
+    s === "help reservation" || s === "reservation help" || s === "help gameroom" ||
+    s === "my reservations" || s.startsWith("my reservations") ||
+    s.startsWith("cancel reservation") ||
+    s.startsWith("change reservation") || s.startsWith("reschedule reservation")
+  ) return true;
+
+  // Sticky routing via cache OR AmenityDirectory stage OR ctx.pendingExpected
+  if (from && getAmenityStageCache_(from)) return true;
+
+  try {
+    const ctx = ctxGet_(from);
+    if (isAmenityExpected_(ctx)) return true;
+  } catch (_) {}
+
+  try {
+    if (from) {
+      const dir = getAmenityDir_(from);
+      if (dir && String(dir.Stage || "").trim()) return true;
+    }
+  } catch (_) {}
+
+  if (!s) return false;
+
+  // Start intent (kept narrow; do NOT hijack random time strings)
+  const mentionsAmenity =
+    s.indexOf("gameroom") >= 0 || s.indexOf("game room") >= 0 || s.indexOf("game-room") >= 0 ||
+    s.indexOf("terrace") >= 0 || s.indexOf("party") >= 0;
+
+  const mentionsReserve =
+    s.indexOf("reserve") >= 0 || s.indexOf("reservation") >= 0 || s.indexOf("book") >= 0 || s.indexOf("booking") >= 0;
+
+  return (mentionsAmenity || mentionsReserve);
+}
+
+function isAmenityExpected_(ctx) {
+  try {
+    const exp = String((ctx && ctx.pendingExpected) || "").trim().toUpperCase();
+    if (exp.indexOf("AMENITY_") !== 0) return false;
+
+    const ex = (ctx && ctx.pendingExpiresAt) ? new Date(ctx.pendingExpiresAt) : null;
+    if (ex && isFinite(ex.getTime()) && Date.now() > ex.getTime()) return false;
+
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// ---------------------------------------------
+// STICKY CACHE HELPERS (legacy) - get/safeGet stay for router
+// ---------------------------------------------
+function getAmenityStageCache_(phone) {
+  const cache = CacheService.getScriptCache();
+  return cache.get("amenity_stage_" + normalizePhoneKey_(phone));
+}
+function safeGetAmenityStage_(phone) {
+  try {
+    const d = getAmenityDir_(phone);
+    return String((d && d.Stage) ? d.Stage : "").trim();
+  } catch (_) {
+    return "";
+  }
+}
+
+// ---------------------------------------------
+// PHONE NORMALIZER (shared)
+// ---------------------------------------------
+function normalizePhoneKey_(p) {
+  const digits = String(p || "").replace(/\D/g, "");
+  return digits.length >= 10 ? digits.slice(-10) : digits;
+}
+
+function parseMonthNameWindow_(s) {
+  const now = new Date();
+  const months = {
+    jan:0,january:0, feb:1,february:1, mar:2,march:2, apr:3,april:3,
+    may:4, jun:5,june:5, jul:6,july:6, aug:7,august:7,
+    sep:8,september:8, oct:9,october:9, nov:10,november:10, dec:11,december:11
+  };
+
+  const re = /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b[\s,]+(\d{1,2})(?:[\s,]+(\d{4}))?[\s,]+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:-|to)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i;
+  const m = String(s || "").match(re);
+  if (!m) return null;
+
+  const mon = months[m[1].toLowerCase()];
+  const day = Number(m[2]);
+  let year = m[3] ? Number(m[3]) : now.getFullYear();
+
+  let h1 = Number(m[4]), min1 = m[5] ? Number(m[5]) : 0, ap1 = m[6] ? m[6].toLowerCase() : "";
+  let h2 = Number(m[7]), min2 = m[8] ? Number(m[8]) : 0, ap2 = m[9] ? m[9].toLowerCase() : "";
+
+  if (!ap1 && ap2) ap1 = ap2;
+  if (ap1 && !ap2) ap2 = ap1;
+
+  if (!ap1 && !ap2) {
+    if (h1 >= 1 && h1 <= 9) ap1 = "pm";
+    if (h2 >= 1 && h2 <= 9) ap2 = "pm";
+  }
+
+  const start = new Date(year, mon, day, to24_(h1, ap1), min1, 0, 0);
+  const end   = new Date(year, mon, day, to24_(h2, ap2), min2, 0, 0);
+
+  if (!m[3] && start.getTime() < now.getTime() - 6 * 60 * 60 * 1000) {
+    start.setFullYear(year + 1);
+    end.setFullYear(year + 1);
+  }
+
+  return { start: start, end: end, kind: "monthname" };
+}
+
+function to24_(h, ap) {
+  let hh = Number(h);
+  const a = String(ap || "").toLowerCase();
+  if (a === "am") { if (hh === 12) hh = 0; }
+  if (a === "pm") { if (hh !== 12) hh += 12; }
+  return hh;
+}
+
+// ---------------------------------------------
+// DIRECTORY (legacy; optional) - getAmenityDir_ stays for router
+// ---------------------------------------------
+function getAmenityDir_(phone) {
+  const sheet = getSheet_(AMENITY_DIR_SHEET_NAME);
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { Phone: phone, Stage: "", AmenityKey: "", TempStart: "", TempEnd: "" };
+
+  const values = sheet.getRange(1, 1, lastRow, sheet.getLastColumn()).getValues();
+  const idx = indexMap_(values[0].map(String));
+
+  const kPhone = idx["Phone"];
+  for (let r = 1; r < values.length; r++) {
+    if (normalizePhoneKey_(values[r][kPhone]) === normalizePhoneKey_(phone)) {
+      return {
+        Phone: phone,
+        Stage: String(values[r][idx["Stage"]] || "").trim(),
+        AmenityKey: String(values[r][idx["AmenityKey"]] || "").trim(),
+        TempStart: values[r][idx["TempStart"]],
+        TempEnd: values[r][idx["TempEnd"]]
+      };
+    }
+  }
+  return { Phone: phone, Stage: "", AmenityKey: "", TempStart: "", TempEnd: "" };
+}
+
+// 1-based map (for range writes)
+function getAmenityHeaderMap_(sheet) {
+  const header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const map = {};
+  for (let i = 0; i < header.length; i++) {
+    const k = String(header[i] || "").trim();
+    if (k) map[k] = i + 1;
+  }
+  return map;
+}
+
+function amenityFindRowByValue_(sheet, colName, value) {
+  const v = String(value || "").trim();
+  if (!v) return 0;
+
+  const map = getAmenityHeaderMap_(sheet);
+  const col = map[String(colName || "").trim()];
+  if (!col) return 0;
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return 0;
+
+  const vals = sheet.getRange(2, col, lastRow - 1, 1).getValues();
+  for (let i = 0; i < vals.length; i++) {
+    if (String(vals[i][0] || "").trim() === v) return i + 2;
+  }
+  return 0;
+}
+
+// ---------------------------------------------
+// HOLD CACHE (trio stays for router)
+// ---------------------------------------------
+function setAmenityHoldCache_(phone, obj) {
+  const cache = CacheService.getScriptCache();
+  cache.put("amenity_hold_" + normalizePhoneKey_(phone), JSON.stringify(obj || {}), AMENITY_HOLD_SECONDS);
+}
+function getAmenityHoldCache_(phone) {
+  const cache = CacheService.getScriptCache();
+  const raw = cache.get("amenity_hold_" + normalizePhoneKey_(phone));
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (_) { return null; }
+}
+
+function clearAmenityHoldCache_(phone) {
+  const cache = CacheService.getScriptCache();
+  cache.remove("amenity_hold_" + normalizePhoneKey_(phone));
+}
+
+// ---------------------------------------------
+// LIFECYCLE PROCESSOR (bounded + safe)
+// - HOLD timeout -> CANCELLED
+// - RESERVED -> ACTIVE at start
+// - ACTIVE -> EXPIRED at end (revokes code)
+// - Notifications are template-key only
+// ---------------------------------------------
+const AMENITY_LIFECYCLE_CONFIG = {
+  MAX_ROWS_PER_RUN: 25
+};
+
+function processAmenityLifecycle() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return;
+
+  try {
+    const sheet = getSheet_(AMENITY_RES_SHEET_NAME);
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return;
+
+    const map = getAmenityHeaderMap_(sheet);
+    if (!map["Status"] || !map["BookingID"] || !map["Phone"]) return;
+
+    const data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+    const now = Date.now();
+
+    let processed = 0;
+
+    for (let i = 0; i < data.length && processed < AMENITY_LIFECYCLE_CONFIG.MAX_ROWS_PER_RUN; i++) {
+      const rowNum = i + 2;
+      const row = data[i];
+
+      const bookingId = String(row[map["BookingID"] - 1] || "").trim();
+      const status = String(row[map["Status"] - 1] || "").trim().toUpperCase();
+      const phone = String(row[map["Phone"] - 1] || "").trim();
+
+      const startD = map["StartDateTime"] ? toDate_(row[map["StartDateTime"] - 1]) : (map["Start"] ? toDate_(row[map["Start"] - 1]) : null);
+      const endD = map["EndDateTime"] ? toDate_(row[map["EndDateTime"] - 1]) : (map["End"] ? toDate_(row[map["End"] - 1]) : null);
+      if (!bookingId || !startD || !endD) continue;
+
+      const startMs = startD.getTime();
+      const endMs = endD.getTime();
+
+      // HOLD -> CANCELLED on expiry
+      if (status === AMENITY_STATUS.HOLD && map["ExpiresAt"]) {
+        const expD = toDate_(row[map["ExpiresAt"] - 1]);
+        const expMs = expD ? expD.getTime() : NaN;
+        if (isFinite(expMs) && now >= expMs) {
+          withWriteLock_("AMEN_LIFE_HOLD_EXPIRE", () => {
+            sheet.getRange(rowNum, map["Status"]).setValue(AMENITY_STATUS.CANCELLED);
+            if (map["CancelledAt"]) sheet.getRange(rowNum, map["CancelledAt"]).setValue(new Date());
+            if (map["UpdatedAt"]) sheet.getRange(rowNum, map["UpdatedAt"]).setValue(new Date());
+            if (map["CodeSource"]) sheet.getRange(rowNum, map["CodeSource"]).setValue("none");
+          });
+          processed++;
+          continue;
+        }
+      }
+
+      // RESERVED -> ACTIVE at start time (only if within window)
+      if (status === AMENITY_STATUS.RESERVED) {
+        if (now >= startMs && now < endMs) {
+          withWriteLock_("AMEN_LIFE_ACTIVATE", () => {
+            sheet.getRange(rowNum, map["Status"]).setValue(AMENITY_STATUS.ACTIVE);
+            if (map["ActivatedAt"]) sheet.getRange(rowNum, map["ActivatedAt"]).setValue(new Date());
+            if (map["UpdatedAt"]) sheet.getRange(rowNum, map["UpdatedAt"]).setValue(new Date());
+          });
+
+          // Notify activation once
+          if (map["NotifyActivatedAt"] && !row[map["NotifyActivatedAt"] - 1] && phone) {
+            queueAmenityNotification_(bookingId, phone, "ACTIVATED");
+            withWriteLock_("AMEN_LIFE_MARK_NOTIF_ACT", () => {
+              sheet.getRange(rowNum, map["NotifyActivatedAt"]).setValue(new Date());
+              if (map["UpdatedAt"]) sheet.getRange(rowNum, map["UpdatedAt"]).setValue(new Date());
+            });
+          }
+
+          processed++;
+          continue;
+        }
+      }
+
+      // ACTIVE -> EXPIRED at end time
+      if (status === AMENITY_STATUS.ACTIVE) {
+        if (now >= endMs) {
+          // Revoke code (best effort)
+          const seamCodeId = map["SeamCodeID"] ? String(row[map["SeamCodeID"] - 1] || "") : "";
+          const codeSource = map["CodeSource"] ? String(row[map["CodeSource"] - 1] || "") : "";
+          const revokedAt = map["CodeRevokedAt"] ? row[map["CodeRevokedAt"] - 1] : null;
+
+          try {
+            accessProviderRevokeAmenityCode_({
+              bookingId: bookingId,
+              seamCodeId: seamCodeId,
+              source: codeSource,
+              codeRevokedAt: revokedAt
+            });
+          } catch (_) {}
+
+          withWriteLock_("AMEN_LIFE_EXPIRE", () => {
+            sheet.getRange(rowNum, map["Status"]).setValue(AMENITY_STATUS.EXPIRED);
+            if (map["ExpiredAt"]) sheet.getRange(rowNum, map["ExpiredAt"]).setValue(new Date());
+            if (map["UpdatedAt"]) sheet.getRange(rowNum, map["UpdatedAt"]).setValue(new Date());
+          });
+
+          // Notify end once
+          if (map["NotifyEndedAt"] && !row[map["NotifyEndedAt"] - 1] && phone) {
+            queueAmenityNotification_(bookingId, phone, "ENDED");
+            withWriteLock_("AMEN_LIFE_MARK_NOTIF_END", () => {
+              sheet.getRange(rowNum, map["NotifyEndedAt"]).setValue(new Date());
+              if (map["UpdatedAt"]) sheet.getRange(rowNum, map["UpdatedAt"]).setValue(new Date());
+            });
+          }
+
+          processed++;
+          continue;
+        }
+      }
+    }
+  } finally {
+    try { lock.releaseLock(); } catch (_) {}
+  }
+}
+
+// ---------------------------------------------
+// NOTIFICATIONS (template-key only)
+// ---------------------------------------------
+function queueAmenityNotification_(bookingId, phone, eventType) {
+  const bid = String(bookingId || "").trim();
+  const ph = String(phone || "").trim();
+  if (!bid || !ph) return;
+
+  // Determine lang from ctx
+  let lang = "en";
+  try { lang = amenityGetLang_(ctxGet_(ph)); } catch (_) {}
+
+  const sheet = getSheet_(AMENITY_RES_SHEET_NAME);
+  const rowNum = amenityFindRowByValue_(sheet, "BookingID", bid);
+  if (!rowNum) return;
+
+  const map = getAmenityHeaderMap_(sheet);
+  const data = sheet.getRange(rowNum, 1, 1, sheet.getLastColumn()).getValues()[0];
+
+  const amenityKey = map["AmenityKey"] ? String(data[map["AmenityKey"] - 1] || "").trim() : "";
+  const start = (map["StartDateTime"] ? toDate_(data[map["StartDateTime"] - 1]) : null) || (map["Start"] ? toDate_(data[map["Start"] - 1]) : null);
+  const end = (map["EndDateTime"] ? toDate_(data[map["EndDateTime"] - 1]) : null) || (map["End"] ? toDate_(data[map["End"] - 1]) : null);
+
+  const amenity = getAmenityConfig_(amenityKey);
+  const label = amenity ? (String(amenity.AmenityName || "") + " (" + String(amenity.PropertyCode || "") + ")") : (amenityKey || "Amenity");
+
+  const code =
+    (map["AccessCode"] ? String(data[map["AccessCode"] - 1] || "").trim() : "") ||
+    (map["AccessCodeSnapshot"] ? String(data[map["AccessCodeSnapshot"] - 1] || "").trim() : "") ||
+    getAmenityAccessCode_(amenityKey);
+
+  if (eventType === "ACTIVATED") {
+    return amenityReplyKey_(ph, lang, "AMENITY_ACTIVE_NOW", {
+      amenityLabel: label,
+      window: (start && end) ? formatWindowLabel_(start, end) : "",
+      code: code
+    }, "AMENITY_ACTIVATED");
+  }
+
+  if (eventType === "ENDED") {
+    return amenityReplyKey_(ph, lang, "AMENITY_ENDED", {
+      amenityLabel: label
+    }, "AMENITY_ENDED");
+  }
+}
+
+
 // ---------------------------------------------
 // GLOBAL CLEANUP
 // ---------------------------------------------
@@ -1446,3 +1857,64 @@ function endAmenityFlow_(phone) {
   try { clearAmenityStageCache_(ph); } catch (_) {}
   try { clearAmenityDir_(ph); } catch (_) {}
 }
+
+
+// ─────────────────────────────────────────────────────────────────
+// RECOVERED FROM PROPERA_MAIN_BACKUP.gs (post-split restore)
+// Amenity command detectors
+// ─────────────────────────────────────────────────────────────────
+
+
+
+  function hasActiveAmenityFlow_(phone) {
+    // Sticky routing via cache OR AmenityDirectory
+    if (getAmenityStageCache_(phone)) return true;
+    try {
+      const dir = getAmenityDir_(phone);
+      return !!String(dir && dir.Stage ? dir.Stage : "").trim();
+    } catch (_) {
+      return false;
+    }
+  }
+
+
+
+
+  function isAmenityCommand_(s) {
+    // Commands we WILL support (explicit)
+    // - RESERVE GAMEROOM <time>
+    // - CANCEL RESERVATION
+    // - CHANGE RESERVATION <new time>
+    // - HELP RESERVATION
+    return (
+      s.startsWith("reserve ") ||
+      s === "reserve" ||
+      s.startsWith("book ") ||
+      s.startsWith("cancel reservation") ||
+      s.startsWith("cancel booking") ||
+      s.startsWith("change reservation") ||
+      s.startsWith("change booking") ||
+      s.startsWith("reschedule reservation") ||
+      s.startsWith("help reservation") ||
+      s.startsWith("reservation help") ||
+      s.startsWith("my reservations")
+    );
+  }
+
+
+
+
+
+  function looksLikeAmenityByKeywords_(s) {
+    // Only used when there is no active flow and no explicit commands
+    return (
+      s.includes("gameroom") ||
+      s.includes("game room") ||
+      s.includes("game-room") ||
+      s.includes("terrace") ||
+      s.includes("party") ||
+      s.includes("reservation") ||
+      s.includes("book") ||
+      s.includes("reserve")
+    );
+  }

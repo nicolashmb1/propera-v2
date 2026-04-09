@@ -866,3 +866,233 @@ function adminPrintEffectivePolicy_(propCode) {
   try { Logger.log(txt); } catch (_) {}
   return txt;
 }
+
+
+// ─────────────────────────────────────────────────────────────────
+// RECOVERED FROM PROPERA_MAIN_BACKUP.gs (post-split restore)
+// applyOwnershipAction_
+// ─────────────────────────────────────────────────────────────────
+
+
+
+  function applyOwnershipAction_(wi, evt) {
+    const wiId = String(wi.workItemId || "").trim();
+    const cur  = String(wi.state || "").trim().toUpperCase() || "STAFF_TRIAGE";
+    const act  = String(evt.action || "").trim().toUpperCase();
+    var phone = normalizePhone_(String(evt.tenantPhone || wi.phoneE164 || "").trim());
+    var pol = getActionPolicy_(act);
+
+    let didSend = false;
+
+    // Metadata JSON safe parse
+    let meta = {};
+    try { meta = wi.metadataJson ? JSON.parse(String(wi.metadataJson)) : {}; } catch (_) { meta = {}; }
+
+    // Append note if present
+    if (evt.note) {
+      const notes = Array.isArray(meta.notes) ? meta.notes : [];
+      notes.push({ at: new Date().toISOString(), by: evt.actorId || evt.actor || "STAFF", text: String(evt.note).slice(0, 500) });
+      meta.notes = notes;
+    }
+
+    let nextState = cur;
+    let nextSub = "";
+
+    if (act === "ADD_NOTE") {
+      nextState = cur;
+    } else if (act === "TRIAGE_INHOUSE") {
+      nextState = "INHOUSE_WORK";
+      meta.triageDecision = "INHOUSE";
+      meta.ownerRole = "STAFF";
+    } else if (act === "TRIAGE_VENDOR") {
+      nextState = "VENDOR_DISPATCH";
+      meta.triageDecision = "VENDOR";
+      meta.ownerRole = "VENDOR";
+    } else if (act === "REQUEST_TENANT_INFO") {
+      nextState = "WAIT_TENANT";
+      nextSub = "DETAIL";
+      meta.ownerRole = "TENANT";
+      meta.waitReason = "DETAIL";
+    } else if (act === "REQUEST_SCHEDULE") {
+      nextState = "WAIT_TENANT";
+      nextSub = "SCHEDULE";
+      meta.ownerRole = "TENANT";
+      meta.waitReason = "SCHEDULE";
+    } else if (act === "MARK_DONE") {
+      nextState = "DONE";
+      meta.ownerRole = "STAFF";
+    } else {
+      try { logDevSms_(phone || "(system)", "", "OWN_ACT_UNKNOWN act=[" + act + "] wi=[" + wiId + "]"); } catch (_) {}
+      return;
+    }
+
+    const patch = {
+      state: nextState,
+      substate: nextSub,
+      metadataJson: JSON.stringify(meta)
+    };
+    // Invariant: DONE must not remain OPEN
+    if (nextState === "DONE") {
+      patch.status = "COMPLETED";
+    }
+
+    const ok = workItemUpdate_(wiId, patch);
+
+    if (!ok) {
+      try { logDevSms_(phone || "(system)", "", "OWN_ACT_WRITE_FAIL wi=[" + wiId + "]"); } catch (_) {}
+      return;
+    }
+
+    try { logDevSms_(phone || "(system)", "", "OWN_ACT_OK wi=[" + wiId + "] act=[" + act + "] cur=[" + cur + "] next=[" + nextState + "]"); } catch (_) {}
+
+    // If waiting on tenant, force tenant routing + message
+    if (nextState === "WAIT_TENANT" && phone) {
+      try { wiSetWaitTenant_(phone, nextSub || "DETAIL"); } catch (_) {}
+      try { ownerForceTenantStage_(phone, nextSub || "DETAIL", "OWN_WAIT_TENANT"); } catch (_) {}
+      // Policy-gated tenant outbound for WAIT_TENANT
+      const allowTenant = !!(pol && pol.tenantNotify);
+      let k = String(evt.templateKey || "").trim();
+
+      // If no explicit templateKey provided, use policy default
+      if (!k && pol && pol.tenantTemplateKey) k = String(pol.tenantTemplateKey || "").trim();
+
+      // Safe fallback ONLY if policy allows and sheet is missing key
+      if (!k && allowTenant) {
+        if (nextSub === "DETAIL" || act === "REQUEST_TENANT_INFO") k = "ASK_DETAIL_SIMPLE";
+        else if (nextSub === "SCHEDULE" || act === "REQUEST_SCHEDULE") k = "ASK_WINDOW_SIMPLE";
+      }
+
+      if (!allowTenant) {
+        try { logDevSms_(phone, "", "POLICY_DENY act=[" + act + "] tenantNotify=FALSE"); } catch (_) {}
+      } else if (!k) {
+        try { logDevSms_(phone, "", "POLICY_MISSING_KEY act=[" + act + "]"); } catch (_) {}
+      } else {
+        if (ownerSendTenantKey_(phone, k, evt.templateVars || {}, "OWN_WAIT_TENANT")) didSend = true;
+        try { logDevSms_(phone, "", "POLICY_ALLOW act=[" + act + "] tenantKey=[" + k + "]"); } catch (_) {}
+      }
+    }
+
+    if (nextState === "DONE" && phone) {
+      const allowTenantDone = !!(pol && pol.tenantNotify);
+      var doneKey = String(evt.templateKey || "").trim();
+      if (!doneKey && pol && pol.tenantTemplateKey) doneKey = String(pol.tenantTemplateKey || "").trim();
+
+      if (!allowTenantDone) {
+        try { logDevSms_(phone, "", "POLICY_DENY act=[" + act + "] tenantNotify=FALSE"); } catch (_) {}
+      } else if (doneKey) {
+        if (ownerSendTenantKey_(phone, doneKey, evt.templateVars || {}, "OWN_DONE")) didSend = true;
+      }
+    }
+
+    if (!didSend) {
+      var reason = "NO_SEND_PATH";
+      if (act === "TRIAGE_VENDOR" || act === "TRIAGE_INHOUSE") reason = "STATE_ONLY";
+      else if (nextState === "WAIT_TENANT" && !phone) reason = "MISSING_PHONE";
+      else if (nextState === "DONE" && (!phone || !evt.templateKey)) reason = "MISSING_PHONE_OR_TEMPLATEKEY";
+      try {
+        logDevSms_(phone || "(appsheet)", "", "OWN_NO_OUTBOUND wi=[" + wiId + "] act=[" + act + "] next=[" + nextState + "] sub=[" + nextSub + "] reason=[" + reason + "]");
+      } catch (_) {}
+    }
+  }
+
+
+// ─────────────────────────────────────────────────────────────────
+// RECOVERED FROM PROPERA_MAIN_BACKUP.gs (dependency wave 2)
+// ownership policy + owner→tenant
+// ─────────────────────────────────────────────────────────────────
+
+
+  function getActionPolicy_(act) {
+    var def = { tenantNotify: false, tenantTemplateKey: "", vendorNotify: false, vendorTemplateKey: "", setPendingStage: "" };
+    try {
+      var sh = getActiveSheetByNameCached_("ActionPolicy");
+      if (!sh) return def;
+      var r = findRowByValue_(sh, "Action", String(act || "").trim().toUpperCase());
+      if (!r) return def;
+      var map = getHeaderMap_(sh);
+      var tenantNotify = false;
+      var tenantTemplateKey = "";
+      var vendorNotify = false;
+      var vendorTemplateKey = "";
+      var setPendingStage = "";
+      var v = "";
+      if (map["TenantNotify"]) { v = sh.getRange(r, map["TenantNotify"]).getValue(); tenantNotify = (v === true || String(v).toLowerCase() === "true" || String(v) === "1"); }
+      if (map["TenantTemplateKey"]) tenantTemplateKey = String(sh.getRange(r, map["TenantTemplateKey"]).getValue() || "").trim();
+      if (map["VendorNotify"]) { v = sh.getRange(r, map["VendorNotify"]).getValue(); vendorNotify = (v === true || String(v).toLowerCase() === "true" || String(v) === "1"); }
+      if (map["VendorTemplateKey"]) vendorTemplateKey = String(sh.getRange(r, map["VendorTemplateKey"]).getValue() || "").trim();
+      if (map["SetPendingStage"]) setPendingStage = String(sh.getRange(r, map["SetPendingStage"]).getValue() || "").trim();
+      return { tenantNotify: tenantNotify, tenantTemplateKey: tenantTemplateKey, vendorNotify: vendorNotify, vendorTemplateKey: vendorTemplateKey, setPendingStage: setPendingStage };
+    } catch (_) { return def; }
+  }
+
+
+
+
+  function ownerSendTenantKey_(phone, key, vars, tag) {
+    const to = normalizePhone_(phone);
+    const templateKey = String(key || "").trim();
+    if (!to || !templateKey) {
+      try {
+        logDevSms_(String(to || "(none)"), "", "OWN_SEND_SKIPPED reason=[MISSING_TO_OR_TEMPLATEKEY] to=[" + String(to || "") + "] key=[" + String(templateKey || "") + "] tag=[" + String(tag || "") + "]");
+      } catch (_) {}
+      return false;
+    }
+
+    let lang = "en";
+    try { const ctx = (typeof ctxGet_ === "function") ? ctxGet_(to) : null; if (ctx && ctx.lang) lang = String(ctx.lang); } catch (_) {}
+
+    const msg = String(renderTenantKey_(templateKey, lang, vars || {}) || "").trim();
+    if (!msg) {
+      try {
+        logDevSms_(String(to || "(none)"), "", "OWN_SEND_SKIPPED reason=[EMPTY_RENDER] key=[" + String(templateKey) + "] tag=[" + String(tag || "") + "]");
+      } catch (_) {}
+      return false;
+    }
+
+    try {
+      var _ogOwn = (typeof dispatchOutboundIntent_ === "function") ? dispatchOutboundIntent_({
+        intentType: "CORE_TEXT_FASTPATH",
+        recipientType: "TENANT",
+        recipientRef: to,
+        lang: lang,
+        deliveryPolicy: "NO_HEADER",
+        preRenderedBody: msg,
+        vars: {},
+        meta: { source: "ownerSendTenantKey_", stage: String(tag || "OWNERSHIP"), flow: "OWNERSHIP" }
+      }) : { ok: false };
+      if (_ogOwn && _ogOwn.ok) {
+        try { logDevSms_(to, msg, "OUT_INTENT tag=[" + String(tag || "OWNERSHIP") + "] len=" + msg.length); } catch (_) {}
+        return true;
+      }
+      var _chOwn = (typeof tenantPreferredChannelFallback_ === "function") ? tenantPreferredChannelFallback_(to) : "SMS";
+      if (_chOwn !== "TELEGRAM" && typeof sendRouterSms_ === "function") {
+        sendRouterSms_(to, msg, String(tag || "OWNERSHIP"), _chOwn);
+        try { logDevSms_(to, msg, "OUT_SMS tag=[" + String(tag || "OWNERSHIP") + "] len=" + msg.length); } catch (_) {}
+        return true;
+      }
+      try { logDevSms_(to, "", "OWN_SEND_FAIL key=[" + templateKey + "] reason=outgate_fail_telegram"); } catch (_) {}
+      return false;
+    } catch (e) {
+      try { logDevSms_(to, "", "OWN_SEND_FAIL key=[" + templateKey + "] err=[" + String(e) + "]"); } catch (_) {}
+      return false;
+    }
+  }
+
+
+
+
+  function ownerForceTenantStage_(phone, stage, reason) {
+    const p = normalizePhone_(phone);
+    if (!p) return false;
+    try {
+      const dir = getSheet_(DIRECTORY_SHEET_NAME);
+      const dirRow = ensureDirectoryRowForPhone_(dir, p);
+      if (!dirRow || dirRow < 2) return false;
+
+      dalSetPendingStage_(dir, dirRow, String(stage || ""), p, String(reason || "OWNER_FORCE_STAGE"));
+      return true;
+    } catch (e) {
+      try { logDevSms_(p, "", "OWNER_FORCE_STAGE_FAIL stage=[" + stage + "] err=[" + String(e) + "]"); } catch (_) {}
+      return false;
+    }
+  }

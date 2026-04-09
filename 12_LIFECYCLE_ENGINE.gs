@@ -400,8 +400,12 @@ function evaluateLifecyclePolicy_(facts, signal, eventType) {
 
   if (eventType === "SCHEDULE_SET") {
     var stateNow = facts.currentState ? String(facts.currentState).trim().toUpperCase() : "";
-    if (stateNow !== "UNSCHEDULED") {
-      lifecycleLog_("SCHEDULE_SET_BAD_STATE", prop, facts.wiId, { currentState: stateNow });
+    var scheduleAllowedState =
+      stateNow === "UNSCHEDULED" ||
+      stateNow === "WAIT_STAFF_UPDATE" ||
+      stateNow === "ACTIVE_WORK";
+    if (!scheduleAllowedState) {
+      lifecycleLog_("SCHEDULE_SET_BAD_STATE", prop, facts.wiId, { currentState: stateNow, allowed: "UNSCHEDULED|WAIT_STAFF_UPDATE|ACTIVE_WORK" });
       return { decision: "HOLD" };
     }
     if (!(facts.scheduledEndAt instanceof Date) || !isFinite(facts.scheduledEndAt.getTime())) {
@@ -1230,11 +1234,13 @@ function lifecycleLog_(eventType, propCode, workItemId, facts) {
  * @param {Object} vars - Template vars
  * @param {string} deliveryPolicy - REPLY_SAME_CHANNEL | DIRECT_SEND
  * @param {string} reasonCode - meta.reasonCode
+ * @param {string} [replyChannel] - Inbound adapter channel to mirror for staff replies ("SMS"|"WA"|"TELEGRAM"). Outgate uses intent.channel for STAFF delivery.
+ * @param {string} [telegramReplyChatId] - When staff inbound is Telegram, Bot API chat id to reply to (private chat usually equals user id).
  * @returns {Object} Intent for dispatchOutboundIntent_
  */
-function lifecycleOutboundIntent_(staffId, phone, intentType, templateKey, vars, deliveryPolicy, reasonCode) {
+function lifecycleOutboundIntent_(staffId, phone, intentType, templateKey, vars, deliveryPolicy, reasonCode, replyChannel, telegramReplyChatId) {
   var isStaff = staffId && String(staffId).trim();
-  return {
+  var intent = {
     intentType: intentType,
     templateKey: templateKey,
     recipientType: isStaff ? "STAFF" : "TENANT",
@@ -1243,4 +1249,13 @@ function lifecycleOutboundIntent_(staffId, phone, intentType, templateKey, vars,
     deliveryPolicy: deliveryPolicy || "REPLY_SAME_CHANNEL",
     meta: { reasonCode: reasonCode || "", actorType: "SYSTEM", actorId: "", sourceModule: "LIFECYCLE_ENGINE" }
   };
+  if (replyChannel != null && String(replyChannel).trim()) {
+    var ch = String(replyChannel).trim().toUpperCase();
+    if (ch === "WA" || ch === "TELEGRAM" || ch === "SMS") intent.channel = ch;
+  }
+  if (isStaff && telegramReplyChatId != null && String(telegramReplyChatId).trim()) {
+    var ch2 = String(replyChannel || intent.channel || "").trim().toUpperCase();
+    if (ch2 === "TELEGRAM") intent.telegramChatId = String(telegramReplyChatId).trim();
+  }
+  return intent;
 }

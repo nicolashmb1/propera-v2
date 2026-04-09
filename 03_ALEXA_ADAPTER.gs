@@ -14,7 +14,7 @@
 //     4) returns a fast Alexa acknowledgment
 //
 // Downstream:
-//   Alexa package -> AlexaQueue -> processAlexaQueue_() -> handleSmsCore_(e)
+//   Alexa package -> AlexaQueue -> processAlexaQueue_() -> handleInboundCore_(e)
 //   -> shared brain -> shared outgate
 //
 // ===================================================================
@@ -187,8 +187,8 @@ function processAlexaQueue_() {
     var sh = ss.getSheetByName(ALEXA_QUEUE_SHEET_);
     if (!sh || sh.getLastRow() < 2) return;
 
-    if (typeof handleSmsCore_ !== "function") {
-      throw new Error("handleSmsCore__missing");
+    if (typeof handleInboundCore_ !== "function") {
+      throw new Error("handleInboundCore__missing");
     }
 
     while (sh.getLastRow() >= 2) {
@@ -252,7 +252,7 @@ function processAlexaQueue_() {
           body: bodyForBrain
         });
 
-        handleSmsCore_(e);
+        handleInboundCore_(e);
 
         logAlexaEvent_("ALEXA_DOWNSTREAM_DONE", {
           requestId: requestId
