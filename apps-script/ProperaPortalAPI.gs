@@ -12,6 +12,11 @@ var CACHE_TTL = 30;
 var TENANT_SHEET_NAME = 'Tenants';
 /** Sheet name for activity/timeline log. Columns: TicketID, Action, By, Time; optional: Color. One row per activity. */
 var ACTIVITY_SHEET_NAME = 'Activity';
+/** Portal identity + RBAC: join to Staff / StaffAssignments. See portalBuildMePayload_(). */
+var PORTAL_USERS_SHEET_NAME = 'Users';
+var SR_STAFF_SHEET_NAME_PORTAL = 'Staff';
+var SR_CONTACTS_SHEET_NAME_PORTAL = 'Contacts';
+var SR_ASSIGNMENTS_SHEET_NAME_PORTAL = 'StaffAssignments';
 
 /**
  * Portal GET dispatcher. Called from PROPERA MAIN.gs doGet(e) when e.parameter.path is set.
@@ -30,10 +35,22 @@ function portalDoGet_(e) {
   } else if (path === 'tenants') {
     output = getTenantsList();
   } else if (path === 'me') {
-    var email = Session.getActiveUser().getEmail();
-    var firstName = email.split('@')[0].split('.')[0];
-    firstName = firstName.charAt(0).toUpperCase() + firstName.slice(1);
-    output = { name: firstName, email: email };
+    var token = (e && e.parameter && e.parameter.token) ? String(e.parameter.token).trim() : '';
+    var emailParam = (e && e.parameter && e.parameter.email) ? String(e.parameter.email).trim().toLowerCase() : '';
+    var expectedToken = (typeof ppGet_ === 'function') ? ppGet_('GLOBAL', 'PORTAL_API_TOKEN_PM', '') : '';
+    if (token && expectedToken && token === expectedToken && emailParam) {
+      output = portalBuildMePayload_(emailParam);
+    } else {
+      var email = '';
+      try {
+        email = Session.getActiveUser().getEmail();
+      } catch (err) {}
+      if (email) {
+        output = portalBuildMePayload_(String(email).trim().toLowerCase());
+      } else {
+        output = { name: 'Team', email: '', role: 'Read-only' };
+      }
+    }
   } else {
     output = { error: 'unknown path' };
   }
@@ -186,6 +203,12 @@ function portalDoPost_(e) {
   }
   if (path === 'pm.addAttachment') {
     return handlePmAddAttachment_(body || {});
+  }
+  if (path === 'pm.createProperty') {
+    return handlePmCreateProperty_(body || {});
+  }
+  if (path === 'portal.login') {
+    return handlePortalLogin_(body || {});
   }
 
   return json_({ ok: false, error: 'unknown_path' });
@@ -367,6 +390,117 @@ function handlePmDeleteTicket_(body) {
 }
 
 /**
+ * path=pm.createProperty
+ * Body: { token, propertyName, ticketPrefix, address, shortName? }
+ * Appends one row to the "Properties" sheet. Headers are detected on row 1 (same as getPropertiesFromSheet).
+ * Ticket prefix must be unique among existing rows (case-insensitive). PropertyID is generated if the sheet has that column.
+ */
+function handlePmCreateProperty_(body) {
+  try {
+    var name = (body.propertyName || body.name || '').toString().trim();
+    var prefixRaw = (body.ticketPrefix || body.propertyCode || '').toString().trim();
+    var prefix = prefixRaw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    var address = (body.address || '').toString().trim();
+    var shortNameOpt = (body.shortName || '').toString().trim();
+
+    if (!name) {
+      return json_({ ok: false, error: 'missing_propertyName' });
+    }
+    if (!prefix || prefix.length < 2) {
+      return json_({ ok: false, error: 'invalid_ticketPrefix', hint: 'Use at least 2 letters/numbers, e.g. MORR' });
+    }
+    if (!address) {
+      return json_({ ok: false, error: 'missing_address' });
+    }
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sh = ss.getSheetByName('Properties');
+    if (!sh) {
+      return json_({ ok: false, error: 'no_properties_sheet' });
+    }
+
+    var data = sh.getDataRange().getValues();
+    if (!data || data.length < 1) {
+      return json_({ ok: false, error: 'properties_sheet_empty' });
+    }
+
+    var headers = data[0].map(function(h) {
+      return String(h || '').trim().toLowerCase();
+    });
+
+    function colIndex(names) {
+      for (var n = 0; n < names.length; n++) {
+        var j = headers.indexOf(names[n]);
+        if (j >= 0) return j;
+      }
+      return -1;
+    }
+
+    var idCol = colIndex(['propertyid', 'property_id']);
+    var nameCol = colIndex(['propertyname', 'property']);
+    var prefixCol = colIndex(['ticketprefix', 'propertycode']);
+    var shortCol = colIndex(['shortname', 'displayname']);
+    var addrCol = colIndex(['address', 'propertyaddress']);
+    var activeCol = colIndex(['active']);
+
+    if (nameCol < 0 || prefixCol < 0) {
+      return json_({ ok: false, error: 'properties_header_mismatch', hint: 'Need PropertyName (or Property) and TicketPrefix (or PropertyCode) columns' });
+    }
+    if (addrCol < 0) {
+      return json_({ ok: false, error: 'properties_sheet_missing_address', hint: 'Add an Address (or PropertyAddress) column to the Properties sheet' });
+    }
+
+    for (var r = 1; r < data.length; r++) {
+      var existing = String(data[r][prefixCol] || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (existing && existing === prefix) {
+        return json_({ ok: false, error: 'duplicate_ticketPrefix', hint: 'That ticket prefix is already used' });
+      }
+    }
+
+    var newPropertyId = 'P-' + Utilities.getUuid().replace(/-/g, '').substring(0, 12).toUpperCase();
+    var displayShort = shortNameOpt;
+    if (!displayShort && prefix) {
+      displayShort = prefix.charAt(0) + prefix.slice(1).toLowerCase();
+    }
+
+    var numCols = headers.length;
+    var newRow = [];
+    for (var c = 0; c < numCols; c++) {
+      newRow.push('');
+    }
+    if (idCol >= 0) newRow[idCol] = newPropertyId;
+    newRow[nameCol] = name;
+    newRow[prefixCol] = prefix;
+    if (shortCol >= 0) newRow[shortCol] = displayShort;
+    if (addrCol >= 0) newRow[addrCol] = address;
+    if (activeCol >= 0) newRow[activeCol] = true;
+
+    sh.appendRow(newRow);
+
+    try {
+      CacheService.getScriptCache().remove(CACHE_KEY_PROPERTIES);
+    } catch (e1) {}
+
+    try {
+      portalLogFailsafe_('CREATE_PROPERTY', { property: name, ticketPrefix: prefix }, newPropertyId);
+    } catch (e2) {}
+
+    return json_({
+      ok: true,
+      propertyId: newPropertyId,
+      name: name,
+      ticketPrefix: prefix,
+      shortName: displayShort
+    });
+  } catch (err) {
+    return json_({
+      ok: false,
+      error: (err && err.message) ? err.message : 'create_property_error'
+    });
+  }
+}
+
+/**
  * path=pm.addAttachment
  * Body: { token, ticketId, attachments: [url1, url2, ...] }
  * Appends attachment URLs to existing ticket. Delegates to portalPmAddAttachmentToTicket_ in PROPERA MAIN.
@@ -393,6 +527,334 @@ function handlePmAddAttachment_(body) {
     });
   } catch (err) {
     return json_({ ok: false, error: (err && err.message) ? err.message : 'add_attachment_error' });
+  }
+}
+
+// ─── Portal Users ↔ Staff ↔ StaffAssignments (Propera linkage) ─────────────
+
+function portalSheetHeaderMap_(sheet) {
+  var lastCol = Math.max(sheet.getLastColumn(), 1);
+  var raw = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var map = {};
+  for (var i = 0; i < raw.length; i++) {
+    var h = String(raw[i] || '').trim();
+    if (!h) continue;
+    var key = h.toLowerCase().replace(/\s+/g, '');
+    map[key] = i;
+  }
+  return map;
+}
+
+function portalCol_(map, candidates) {
+  for (var i = 0; i < candidates.length; i++) {
+    var k = String(candidates[i] || '').toLowerCase().replace(/\s+/g, '');
+    if (map[k] !== undefined) return map[k];
+  }
+  return -1;
+}
+
+/** Accepts SelectPropertyCode or legacy typo SlectPropertyCode. */
+function portalUsersSelectPropertyCodeCol_(map) {
+  var a = portalCol_(map, ['SelectPropertyCode']);
+  if (a >= 0) return a;
+  return portalCol_(map, ['SlectPropertyCode']);
+}
+
+/**
+ * SHA-256 hex (lowercase). Pepper in Script properties: PORTAL_PASSWORD_PEPPER
+ * Precompute hash for sheet: same algorithm in Node or openssl; pepper must match.
+ */
+function portalHashPassword_(email, password) {
+  var props = PropertiesService.getScriptProperties();
+  var pepper = props.getProperty('PORTAL_PASSWORD_PEPPER') || 'propera-portal-pepper-set-PORTAL_PASSWORD_PEPPER';
+  var raw = pepper + String(email).toLowerCase().trim() + String(password);
+  var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, raw, Utilities.Charset.UTF_8);
+  var hex = '';
+  for (var i = 0; i < digest.length; i++) {
+    var b = digest[i];
+    if (b < 0) b += 256;
+    hex += ('0' + b.toString(16)).slice(-2);
+  }
+  return hex.toLowerCase();
+}
+
+function portalFindUserRowByEmail_(email) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(PORTAL_USERS_SHEET_NAME);
+  if (!sh) return null;
+  var data = sh.getDataRange().getValues();
+  if (!data || data.length < 2) return null;
+  var map = portalSheetHeaderMap_(sh);
+  var emailCol = portalCol_(map, ['Email']);
+  if (emailCol < 0) return null;
+  var want = String(email || '').trim().toLowerCase();
+  for (var r = 1; r < data.length; r++) {
+    var cell = String(data[r][emailCol] || '').trim().toLowerCase();
+    if (cell === want) {
+      return { sheet: sh, rowIndex: r, row: data[r], map: map };
+    }
+  }
+  return null;
+}
+
+function portalGetStaffRow_(staffId) {
+  var id = String(staffId || '').trim();
+  if (!id) return null;
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(SR_STAFF_SHEET_NAME_PORTAL);
+  if (!sh) return null;
+  var data = sh.getDataRange().getValues();
+  if (!data || data.length < 2) return null;
+  var map = portalSheetHeaderMap_(sh);
+  var sidCol = portalCol_(map, ['StaffId']);
+  var nameCol = portalCol_(map, ['StaffName', 'Name']);
+  var contactCol = portalCol_(map, ['ContactId', 'ContactID']);
+  var activeCol = portalCol_(map, ['Active']);
+  if (sidCol < 0) return null;
+  for (var r = 1; r < data.length; r++) {
+    if (String(data[r][sidCol] || '').trim() !== id) continue;
+    return {
+      staffId: id,
+      staffName: nameCol >= 0 ? String(data[r][nameCol] || '').trim() : '',
+      contactId: contactCol >= 0 ? String(data[r][contactCol] || '').trim() : '',
+      active: activeCol >= 0 ? data[r][activeCol] : true
+    };
+  }
+  return null;
+}
+
+function portalGetContactPhone_(contactId) {
+  var cid = String(contactId || '').trim();
+  if (!cid) return '';
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(SR_CONTACTS_SHEET_NAME_PORTAL);
+  if (!sh) return '';
+  var data = sh.getDataRange().getValues();
+  if (!data || data.length < 2) return '';
+  var map = portalSheetHeaderMap_(sh);
+  var idCol = portalCol_(map, ['ContactID', 'ContactId']);
+  var phoneCol = portalCol_(map, ['PhoneE164', 'Phone']);
+  if (idCol < 0) return '';
+  for (var r = 1; r < data.length; r++) {
+    if (String(data[r][idCol] || '').trim() === cid) {
+      return phoneCol >= 0 ? String(data[r][phoneCol] || '').trim() : '';
+    }
+  }
+  return '';
+}
+
+function portalGetAssignmentsForStaff_(staffId) {
+  var id = String(staffId || '').trim();
+  var list = [];
+  if (!id) return list;
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(SR_ASSIGNMENTS_SHEET_NAME_PORTAL);
+  if (!sh) return list;
+  var data = sh.getDataRange().getValues();
+  if (!data || data.length < 2) return list;
+  var map = portalSheetHeaderMap_(sh);
+  var sidCol = portalCol_(map, ['StaffId']);
+  var pidCol = portalCol_(map, ['PropertyId']);
+  var pcodeCol = portalCol_(map, ['PropertyCode']);
+  var domainCol = portalCol_(map, ['Domain']);
+  var roleCol = portalCol_(map, ['RoleType', 'Role']);
+  var activeCol = portalCol_(map, ['Active']);
+  if (sidCol < 0) return list;
+  for (var r = 1; r < data.length; r++) {
+    if (String(data[r][sidCol] || '').trim() !== id) continue;
+    var active = activeCol >= 0 ? data[r][activeCol] : true;
+    if (active === false || String(active).toLowerCase() === 'false') continue;
+    list.push({
+      propertyId: pidCol >= 0 ? String(data[r][pidCol] || '').trim() : '',
+      propertyCode: pcodeCol >= 0 ? String(data[r][pcodeCol] || '').trim().toUpperCase() : '',
+      domain: domainCol >= 0 ? String(data[r][domainCol] || '').trim() : '',
+      roleType: roleCol >= 0 ? String(data[r][roleCol] || '').trim() : ''
+    });
+  }
+  return list;
+}
+
+/**
+ * Full portal profile: Users row + Staff + Contacts + StaffAssignments.
+ * propertyScopeSource: "assignments" when StaffAssignments drive the property list; "users" when only Users Select*; "none" otherwise.
+ */
+function portalBuildMePayload_(email) {
+  var em = String(email || '').trim().toLowerCase();
+  var firstName = 'Team';
+  if (em && em.indexOf('@') > 0) {
+    var local = em.split('@')[0].split('.')[0];
+    if (local) firstName = local.charAt(0).toUpperCase() + local.slice(1);
+  }
+  var base = {
+    name: firstName,
+    email: em,
+    role: 'Read-only',
+    staffId: '',
+    staffName: '',
+    contactPhone: '',
+    selectPropertyId: '',
+    selectPropertyCode: '',
+    allowedPropertyIds: [],
+    allowedProperties: [],
+    defaultPropertyId: '',
+    defaultPropertyCode: '',
+    propertyScopeSource: 'none',
+    updatedAt: ''
+  };
+  var found = portalFindUserRowByEmail_(em);
+  if (!found) return base;
+
+  var row = found.row;
+  var map = found.map;
+  var roleCol = portalCol_(map, ['Role']);
+  var staffIdCol = portalCol_(map, ['StaffId']);
+  var selPidCol = portalCol_(map, ['SelectPropertyID']);
+  var selPcodeCol = portalUsersSelectPropertyCodeCol_(map);
+  var activeCol = portalCol_(map, ['Active']);
+  var updatedCol = portalCol_(map, ['UpdateAt', 'UpdatedAt']);
+
+  var role = roleCol >= 0 ? String(row[roleCol] || '').trim() : '';
+  var staffId = staffIdCol >= 0 ? String(row[staffIdCol] || '').trim() : '';
+  var selPid = selPidCol >= 0 ? String(row[selPidCol] || '').trim() : '';
+  var selPcode = selPcodeCol >= 0 ? String(row[selPcodeCol] || '').trim().toUpperCase() : '';
+  var uActive = activeCol >= 0 ? row[activeCol] : true;
+  var updatedAt = updatedCol >= 0 ? String(row[updatedCol] || '').trim() : '';
+
+  if (role) base.role = role;
+  base.staffId = staffId;
+  base.selectPropertyId = selPid;
+  base.selectPropertyCode = selPcode;
+  base.updatedAt = updatedAt;
+  if (uActive === false || String(uActive).toLowerCase() === 'false') {
+    base.role = 'Inactive';
+  }
+
+  var staff = staffId ? portalGetStaffRow_(staffId) : null;
+  if (staff && staff.staffName) {
+    base.name = staff.staffName;
+    base.staffName = staff.staffName;
+  }
+  if (staff && staff.contactId) {
+    base.contactPhone = portalGetContactPhone_(staff.contactId);
+  }
+
+  var assignments = staffId ? portalGetAssignmentsForStaff_(staffId) : [];
+  var allowedProps = [];
+  var seen = {};
+  for (var i = 0; i < assignments.length; i++) {
+    var a = assignments[i];
+    var pid = a.propertyId || '';
+    var pc = a.propertyCode || '';
+    var key = (pid + '|' + pc).toLowerCase();
+    if (seen[key]) continue;
+    seen[key] = true;
+    if (pid || pc) {
+      allowedProps.push({ propertyId: pid, propertyCode: pc, domain: a.domain, roleType: a.roleType });
+    }
+  }
+
+  base.allowedProperties = allowedProps;
+  var allowedIds = [];
+  for (var j = 0; j < allowedProps.length; j++) {
+    if (allowedProps[j].propertyId) allowedIds.push(allowedProps[j].propertyId);
+  }
+  base.allowedPropertyIds = allowedIds;
+
+  if (allowedProps.length > 0) {
+    base.propertyScopeSource = 'assignments';
+    var defPid = '';
+    var defCode = '';
+    if (selPid && allowedIds.indexOf(selPid) >= 0) {
+      defPid = selPid;
+    } else if (selPcode) {
+      var want = String(selPcode).toUpperCase();
+      for (var k = 0; k < allowedProps.length; k++) {
+        if (String(allowedProps[k].propertyCode || '').toUpperCase() === want) {
+          defPid = allowedProps[k].propertyId;
+          defCode = allowedProps[k].propertyCode;
+          break;
+        }
+      }
+    }
+    if (!defPid && allowedProps.length > 0) {
+      defPid = allowedProps[0].propertyId;
+      defCode = allowedProps[0].propertyCode;
+    } else if (!defCode && defPid) {
+      for (var m = 0; m < allowedProps.length; m++) {
+        if (allowedProps[m].propertyId === defPid) {
+          defCode = allowedProps[m].propertyCode;
+          break;
+        }
+      }
+    }
+    base.defaultPropertyId = defPid;
+    base.defaultPropertyCode = defCode;
+  } else if (selPid || selPcode) {
+    base.propertyScopeSource = 'users';
+    base.defaultPropertyId = selPid;
+    base.defaultPropertyCode = selPcode;
+  }
+
+  return base;
+}
+
+/**
+ * path=portal.login (POST, same PM token as other portal writes)
+ * Body: { token, email, password }
+ * Users sheet: PasswordHash = hex SHA-256 of PORTAL_PASSWORD_PEPPER + email + password
+ */
+function handlePortalLogin_(body) {
+  try {
+    var email = (body.email || '').toString().trim().toLowerCase();
+    var password = (body.password || '').toString();
+    if (!email || !password) {
+      return json_({ ok: false, error: 'missing_credentials' });
+    }
+    var found = portalFindUserRowByEmail_(email);
+    if (!found) {
+      return json_({ ok: false, error: 'invalid_credentials' });
+    }
+    var row = found.row;
+    var umap = found.map;
+    var hashCol = portalCol_(umap, ['PasswordHash', 'password_hash']);
+    if (hashCol < 0) {
+      return json_({ ok: false, error: 'password_not_configured' });
+    }
+    var storedHash = String(row[hashCol] || '').trim().toLowerCase();
+    if (!storedHash) {
+      return json_({ ok: false, error: 'password_not_set' });
+    }
+    var computed = portalHashPassword_(email, password);
+    if (computed !== storedHash) {
+      return json_({ ok: false, error: 'invalid_credentials' });
+    }
+    var activeCol = portalCol_(umap, ['Active']);
+    if (activeCol >= 0) {
+      var ac = row[activeCol];
+      if (ac === false || String(ac).toLowerCase() === 'false') {
+        return json_({ ok: false, error: 'account_inactive' });
+      }
+    }
+    var me = portalBuildMePayload_(email);
+    return json_({
+      ok: true,
+      name: me.name,
+      email: me.email,
+      role: me.role,
+      staffId: me.staffId,
+      staffName: me.staffName,
+      contactPhone: me.contactPhone,
+      selectPropertyId: me.selectPropertyId,
+      selectPropertyCode: me.selectPropertyCode,
+      allowedPropertyIds: me.allowedPropertyIds,
+      allowedProperties: me.allowedProperties,
+      defaultPropertyId: me.defaultPropertyId,
+      defaultPropertyCode: me.defaultPropertyCode,
+      propertyScopeSource: me.propertyScopeSource,
+      updatedAt: me.updatedAt
+    });
+  } catch (err) {
+    return json_({ ok: false, error: (err && err.message) ? err.message : 'login_error' });
   }
 }
 
@@ -518,7 +980,17 @@ function getTicketsFromSheet() {
     var row = data[r];
     var msg = messageCol >= 0 ? String(row[messageCol] || '').trim() : '';
     var iss = issueCol >= 0 ? String(row[issueCol] || '').trim() : '';
-    var summaryVal = msg ? (iss ? msg + ' | ' + iss : msg) : iss;
+    // List preview: Message (MSG) is canonical. Only append Issue when it adds info not already in Message
+    // (avoids "…full body… | …duplicate title line" when Issue repeats a line from MSG).
+    var summaryVal = msg || iss;
+    if (msg && iss) {
+      var issTrim = String(iss).trim();
+      if (issTrim && msg.toLowerCase().indexOf(issTrim.toLowerCase()) < 0) {
+        summaryVal = msg + ' | ' + issTrim;
+      } else {
+        summaryVal = msg;
+      }
+    }
     var createdVal = createdAtCol >= 0 ? String(row[createdAtCol] || '').trim() : '';
     if (!createdVal && timestampCol >= 0) createdVal = String(row[timestampCol] || '').trim();
     var attachments = attachmentsCol >= 0 ? parseAttachmentUrls(row[attachmentsCol]) : [];
