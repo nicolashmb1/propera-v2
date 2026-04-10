@@ -2,11 +2,14 @@
 
 This folder is the **new** Propera server. **Production today** is still Google Apps Script + Sheets — nothing here replaces that until you deliberately cut over.
 
+**Agents / Cursor:** start with **[AGENTS.md](./AGENTS.md)** — mandatory doc order, freeze stance, parity ledger pointer, commands. **Do not “continue V2” without reading it.**
+
 ## What you do **inside Cursor** (this repo)
 
 - Edit Node code under `src/`.
 - Run the server locally (see below).
 - Commit `propera-v2/` to git when you are happy.
+- **Keep docs current:** when behavior or migrations change, update **[docs/BRAIN_PORT_MAP.md](docs/BRAIN_PORT_MAP.md)** and **[docs/PROPERA_V2_GAS_EXIT_PLAN.md](docs/PROPERA_V2_GAS_EXIT_PLAN.md)** (and **[docs/OUTSIDE_CURSOR.md](docs/OUTSIDE_CURSOR.md)** if operators need new SQL/env steps). Logging / flight-recorder parity: **[docs/STRUCTURED_LOGS.md](docs/STRUCTURED_LOGS.md)**.
 
 ## What you do **outside Cursor** (browser only)
 
@@ -35,9 +38,13 @@ npm install
 npm start
 ```
 
+Use **`npm run dev`** for **`node --watch`** (restarts the process when you save files). **`npm start`** does not auto-reload.
+
 Open **http://localhost:8080/health** — you should see JSON with `"ok": true`.
 
 Copy `.env.example` to `.env` if you want to change `PORT` (default **8080**).
+
+**Brain port (GAS → Node):** see **[docs/BRAIN_PORT_MAP.md](docs/BRAIN_PORT_MAP.md)**. **Do not rewrite business rules** — port from GAS per **[docs/PORTING_FROM_GAS.md](docs/PORTING_FROM_GAS.md)**. Run **`npm test`** for router precursor parity tests. **Scenario / intake testing plan:** **[docs/TESTING_STRATEGY.md](docs/TESTING_STRATEGY.md)**.
 
 ### Port already in use (`EADDRINUSE`)
 
@@ -54,4 +61,16 @@ Something else is using **8080** (often a previous `node` you forgot to stop).
 - Dockerfile for later Cloud Run deploy.
 - No database yet; no Twilio yet.
 
-Next steps (later phases): Supabase project + schema, then Telegram/Twilio webhooks pointing at a **deployed** URL (still not production GAS).
+**Identity (dev):** After running `supabase/migrations/003_identity.sql`, try  
+`GET /api/dev/resolve-actor?phone=+19085550101` — expects **STAFF** for the seeded dev contact (edit seed SQL to match your real test phone).
+
+**Telegram on V2:** `POST /webhooks/telegram` — validates optional `TELEGRAM_WEBHOOK_SECRET`, normalizes to **InboundSignal**, upserts **`telegram_chat_link`** (run migration `005_telegram_chat_link.sql`), then **router precursors + lane** (`docs/BRAIN_PORT_MAP.md`). With **`CORE_ENABLED=1`** and DB + migration **006**, **`handleInboundCore`** can create **tickets** / **work_items** (maintenance slice). Optional **`TELEGRAM_OUTBOUND_ENABLED=1`** + **`TELEGRAM_BOT_TOKEN`** sends replies in chat (transport only).
+
+**Moving the bot webhook from GAS to V2 (one bot = one webhook):**
+
+1. Deploy or expose V2 over **HTTPS** (ngrok for dev, Cloud Run etc. for prod).
+2. In `.env`: `TELEGRAM_BOT_TOKEN`, optional `TELEGRAM_WEBHOOK_SECRET` (match Telegram `secret_token`), optional `TELEGRAM_OUTBOUND_ENABLED=1`.
+3. Call Telegram `setWebhook` with your **V2** URL ending in `/webhooks/telegram`. That **replaces** the previous webhook (GAS stops receiving updates for that bot).
+4. Run **`005_telegram_chat_link.sql`** in Supabase if you want chat rows persisted.
+
+GAS stays production for channels you have not cut over; full brain parity is incremental — see **BRAIN_PORT_MAP.md**.

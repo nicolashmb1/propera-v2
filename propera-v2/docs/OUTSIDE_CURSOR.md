@@ -28,6 +28,14 @@ Do these in your **web browser** at [supabase.com](https://supabase.com):
 
 **If `/health` says `Could not find the table 'public.conversation_ctx'`:** the migration was not applied to this project. Run step 5 again (full `001_core.sql`) in the **same** project as `SUPABASE_URL` in `.env`. Then confirm **Table Editor** lists `conversation_ctx`.
 
+**Identity tables (staff / properties):** run `supabase/migrations/003_identity.sql` in SQL Editor after `001` and `002`. Then test: `http://localhost:8080/api/dev/resolve-actor?phone=%2B19085550101` (dev mode — see README).
+
+**Sheet1 / ticket log parity (extra columns):** after `001`, run `supabase/migrations/006_tickets_sheet1_columns.sql` in SQL Editor. It extends `public.tickets` to align with `COL` in `01_PROPERA MAIN.gs` (55 columns). **Required** for V2 core finalize (`finalizeMaintenance.js`) to insert a full Sheet-shaped row; without `006`, inserts may error until you run that migration.
+
+**Optional (documentation in DB):** `007_category_final_legacy.sql` adds a `COMMENT` on legacy `category_final` (AppSheet-era). Safe to run anytime; not required for inserts.
+
+**Keep docs in sync:** When you add migrations or change first-run steps, update this file and **[BRAIN_PORT_MAP.md](BRAIN_PORT_MAP.md)** in the same change when possible.
+
 ---
 
 ## B. Later (not required yet)
