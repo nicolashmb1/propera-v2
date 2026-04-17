@@ -16,7 +16,7 @@ async function getIntakeSession(phoneE164) {
   const { data, error } = await sb
     .from("intake_sessions")
     .select(
-      "phone_e164, stage, expected, lane, draft_property, draft_unit, draft_issue, draft_schedule_raw, active_artifact_key, updated_at_iso"
+      "phone_e164, stage, expected, lane, draft_property, draft_unit, draft_issue, draft_schedule_raw, active_artifact_key, expires_at_iso, updated_at_iso"
     )
     .eq("phone_e164", key)
     .maybeSingle();
@@ -36,6 +36,7 @@ async function getIntakeSession(phoneE164) {
  * @param {string} [row.draft_issue]
  * @param {string} [row.draft_schedule_raw]
  * @param {string} [row.active_artifact_key] — ticket_key uuid while waiting post-create schedule
+ * @param {string} [row.expires_at_iso]
  */
 async function upsertIntakeSession(row) {
   const sb = getSupabase();
@@ -56,6 +57,7 @@ async function upsertIntakeSession(row) {
     active_artifact_key: String(
       row.active_artifact_key != null ? row.active_artifact_key : ""
     ),
+    expires_at_iso: String(row.expires_at_iso != null ? row.expires_at_iso : ""),
     updated_at_iso: now,
   };
 
@@ -87,6 +89,7 @@ async function clearIntakeSessionDraft(phoneE164) {
       draft_issue: "",
       draft_schedule_raw: "",
       active_artifact_key: "",
+      expires_at_iso: "",
       updated_at_iso: new Date().toISOString(),
     },
     { onConflict: "phone_e164" }
@@ -112,6 +115,7 @@ async function setScheduleWaitAfterFinalize(phoneE164, o) {
     draft_unit: o.draft_unit,
     draft_schedule_raw: "",
     active_artifact_key: o.ticketKey,
+    expires_at_iso: "",
   });
 }
 
@@ -120,7 +124,7 @@ async function setScheduleWaitAfterFinalize(phoneE164, o) {
  * `GLOBAL` stays in `properties` for staff assignments + roster; it must not appear here.
  * Policy defaults use `property_policy.property_code = 'GLOBAL'` (separate table), not this list.
  *
- * @returns {Promise<Array<{ code: string, display_name: string }>>}
+ * @returns {Promise<Array<{ code: string, display_name: string, aliases: string[] }>>}
  */
 async function listPropertiesForMenu() {
   const sb = getSupabase();
@@ -134,9 +138,31 @@ async function listPropertiesForMenu() {
     .order("code");
 
   if (error || !data) return [];
+
+  // Optional table (009 migration). If missing, keep behavior with empty aliases.
+  let aliasByCode = {};
+  try {
+    const { data: aliasRows, error: aliasErr } = await sb
+      .from("property_aliases")
+      .select("property_code, alias")
+      .eq("active", true);
+    if (!aliasErr && Array.isArray(aliasRows)) {
+      for (const row of aliasRows) {
+        const code = String(row && row.property_code ? row.property_code : "")
+          .trim()
+          .toUpperCase();
+        const alias = String(row && row.alias ? row.alias : "").trim();
+        if (!code || !alias) continue;
+        if (!aliasByCode[code]) aliasByCode[code] = [];
+        aliasByCode[code].push(alias);
+      }
+    }
+  } catch (_) {}
+
   return data.map((r) => ({
     code: String(r.code || "").toUpperCase(),
     display_name: String(r.display_name || ""),
+    aliases: aliasByCode[String(r.code || "").toUpperCase()] || [],
   }));
 }
 

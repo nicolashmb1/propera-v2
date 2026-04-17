@@ -116,6 +116,13 @@ async function handleStaffLifecycleCommand(o) {
         reason: resolved.reason,
         suggestedPrompts: resolved.suggestedPrompts || [],
         staff_id: staffId,
+        open_wi_count: openWis.length,
+        summary:
+          "No single ticket picked (" +
+          String(resolved.reason || "") +
+          ") · " +
+          openWis.length +
+          " open",
       },
     });
     return {
@@ -126,10 +133,28 @@ async function handleStaffLifecycleCommand(o) {
     };
   }
 
+  const matchedWi = openWis.find(
+    (w) => String(w.workItemId || "") === String(resolved.wiId || "")
+  );
+  const propId = matchedWi ? String(matchedWi.propertyId || "").trim() : "";
+  const unitId = matchedWi ? String(matchedWi.unitId || "").trim() : "";
   await appendEventLog({
     traceId,
     event: "STAFF_TARGET_RESOLVED",
-    payload: { wi_id: resolved.wiId, reason: resolved.reason, staff_id: staffId },
+    payload: {
+      wi_id: resolved.wiId,
+      reason: resolved.reason,
+      staff_id: staffId,
+      property_id: propId || null,
+      unit_id: unitId || null,
+      summary: [
+        resolved.wiId,
+        propId ? propId + (unitId ? " " + unitId : "") : "",
+        String(resolved.reason || ""),
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    },
   });
 
   if (looksLikeScheduleOnlyWithoutStatus(body)) {

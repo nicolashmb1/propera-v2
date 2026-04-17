@@ -48,9 +48,13 @@ Logs are not only for developers — they are the **evidence bundle** when the b
 
 Set `STRUCTURED_LOG=0` in `.env` (rarely needed).
 
-## Database (optional, next)
+## Database (`event_log` flight recorder)
 
-Table `event_log` is created in `002_event_log.sql`. Inserts via `appendEventLog` (`src/dal/appendEventLog.js`) run for some brain steps (e.g. `LANE_DECIDED`, core `CORE_*`) when Supabase is configured. **Many adapter/router lines still only go to stdout** via `emit` — see *GAS parity* below for the goal: same event should be queryable in DB *and* visible in the terminal with one shape.
+Table `event_log` — **002_event_log.sql**. Inserts via **`appendEventLog`** (`src/dal/appendEventLog.js`) when Supabase is configured. Inbound Telegram requests merge **`getInboundLogCtx()`** into `payload.ctx` (actor, chat, `tg_user_id`, preview) so rows match stdout filtering.
+
+**Also in DB (in addition to stdout `emitTimed`):** schedule policy (`SCHEDULE_PARSED`, `SCHEDULE_POLICY_CHECK`, `SCHEDULE_POLICY_OK` / `REJECT` / `ERROR`), intake (`INTAKE_PARSE_BRANCH`, `INTAKE_BRAIN_PATH`), staff resolution summaries, core milestones (`CORE_*`, `LANE_DECIDED`, …). **Router/adapter lines** may still be stdout-only unless duplicated — goal remains parity of *shape* where it matters for incidents.
+
+**Ops UI:** `GET /dashboard` + `GET /api/ops/event-log` — see **[HANDOFF_LOG.md](./HANDOFF_LOG.md)** (2026-04-11).
 
 ---
 
@@ -99,7 +103,8 @@ Keep this list aligned with [BRAIN_PORT_MAP.md](./BRAIN_PORT_MAP.md); do **not**
 4. **Stdout + DB:** Prefer **`emit` + optional `appendEventLog`** with the same payload so local dev without DB still sees the full story; when `event_log` is enabled, operators can query history.
 5. **PII:** Same discipline as GAS — truncate bodies in stored payloads if policy requires; full text can stay terminal-only in dev.
 
-### Current V2 coverage
+### Current V2 coverage (as of 2026-04)
 
-- **Present:** Telegram normalize, dedupe, router lane (`emit` + `LANE_DECIDED` in `event_log`), core milestones (`CORE_*` in `event_log` from `handleInboundCore`), outbound send logs.
-- **Not yet:** `COMPILE_TURN`, `EXPECT_RECOMPUTED`, `TURN_SUMMARY`, finalize phases, policy/lifecycle — add **`event` names and `payload` fields** as those modules land, reusing the GAS vocabulary where it matches behavior.
+- **Stdout (`emit` / `emitTimed`):** Telegram normalize, dedupe, router precursor/lane, core brain, intake LLM skip/request/response, schedule parse + policy, etc. — grep-friendly `event` names in `src/logging/structuredLog.js` header comment.
+- **`event_log` (DB):** `LANE_DECIDED`, core `CORE_*`, finalize, schedule capture, **full schedule policy chain** (`applyPreferredWindowByTicketKey`), **intake branch + brain path** (fast/compile path), **staff** lifecycle rows with resolution summaries — plus any step that calls `appendEventLog` in `src/`.
+- **Gaps:** Some adapter-only lines remain **stdout-only**; not every `emit` has a DB twin. **Post-finalize schedule capture** runs `parseMaintenanceDraftAsync` before merge so `INTAKE_PARSE_BRANCH` / `INTAKE_BRAIN_PATH` align with other core turns; **merge** still uses sync `parseMaintenanceDraft` inside `mergeMaintenanceDraftTurn` for slot fill — see **[PARITY_LEDGER.md](./PARITY_LEDGER.md)** §1–2.

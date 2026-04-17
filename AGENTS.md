@@ -11,10 +11,11 @@ If the user says **“keep working on V2”** or **“continue Propera V2”**, 
 3. **`docs/PARITY_LEDGER.md`** — **single source of truth** for what is PORTED vs PARTIAL vs STUB vs NOT STARTED (GAS ↔ V2). **Flow parity ≠ semantic parity.**  
 4. **`docs/PORTING_FROM_GAS.md`** — rule: port GAS behavior; no parallel brain rules.  
 5. **`docs/BRAIN_PORT_MAP.md`** — what files exist, Telegram → router → core path, handoff table.  
-6. **`docs/PROPERA_V2_GAS_EXIT_PLAN.md`** — phases / cutover narrative (when relevant).  
-7. **`docs/OUTSIDE_CURSOR.md`** — SQL/env steps operators run outside the editor.
+6. **`docs/ADAPTER_ONBOARDING.md`** — when adding channels, follow adapter-only boundary + shared media contract.  
+7. **`docs/PROPERA_V2_GAS_EXIT_PLAN.md`** — phases / cutover narrative (when relevant).  
+8. **`docs/OUTSIDE_CURSOR.md`** — SQL/env steps operators run outside the editor.
 
-Optional: **`docs/TESTING_STRATEGY.md`**, **`docs/STRUCTURED_LOGS.md`**.
+Optional: **`docs/TESTING_STRATEGY.md`**, **`docs/STRUCTURED_LOGS.md`**, **`docs/HANDOFF_LOG.md`** (what changed recently — read **latest dated section** before deep-diving).
 
 ---
 
@@ -34,9 +35,11 @@ Conversations **drift**: freeze lifts, scope shifts, priorities change, a port l
 |------------------|-------------------------------------|
 | What’s PORTED / PARTIAL / STUB, or semantic gaps | **`docs/PARITY_LEDGER.md`** |
 | Files, flows, handoff status, “what’s wired” | **`docs/BRAIN_PORT_MAP.md`** |
+| Adapter contract or channel onboarding rules | **`docs/ADAPTER_ONBOARDING.md`** |
 | New GAS ↔ V2 mapping or porting rule | **`docs/PORTING_FROM_GAS.md`** |
 | Phases, cutover, migration strategy | **`docs/PROPERA_V2_GAS_EXIT_PLAN.md`** |
 | Operators must run SQL, new env vars, webhook steps | **`docs/OUTSIDE_CURSOR.md`**, **`README.md`**, **`.env.example`** |
+| Session wrap-up: what shipped, where to continue | **`docs/HANDOFF_LOG.md`** (append a **dated section**) |
 | Freeze lifted, new priority (e.g. parity-only → new paths), or agent instructions | **`AGENTS.md`** (this file) — **especially “Current stance”** |
 | Test strategy / what to run for regression | **`docs/TESTING_STRATEGY.md`** (if testing expectations changed) |
 
@@ -49,7 +52,9 @@ Conversations **drift**: freeze lifts, scope shifts, priorities change, a port l
 | Need | Location |
 |------|----------|
 | Parity status (what matches GAS, what’s missing) | `docs/PARITY_LEDGER.md` |
+| Recent session / ops notes (dated; not parity SSOT) | `docs/HANDOFF_LOG.md` |
 | File / flow map | `docs/BRAIN_PORT_MAP.md` |
+| New channel onboarding checklist | `docs/ADAPTER_ONBOARDING.md` |
 | Porting rules + GAS source table | `docs/PORTING_FROM_GAS.md` |
 | Runnable code | `propera-v2/src/` |
 | Unit tests | `propera-v2/tests/` |

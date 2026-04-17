@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node --test tests/routerPrecursor.test.js tests/staffBrain.test.js tests/parseMaintenanceDraft.test.js tests/ticketDefaults.test.js tests/recomputeDraftExpected.test.js tests/mergeMaintenanceDraft.test.js tests/extractUnitGas.test.js tests/addressContext.test.js tests/parsePreferredWindowShared.test.js"
+    "test": "node --test tests/*.test.js"
   },
   "engines": {
     "node": ">=20"

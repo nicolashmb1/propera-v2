@@ -2,6 +2,7 @@
  * @see 15_GATEWAY_WEBHOOK.gs — normalizeInboundEvent_
  */
 const crypto = require("crypto");
+const { parseMediaJson } = require("../shared/mediaPayload");
 
 /**
  * @param {Record<string, string | undefined>} parameter — RouterParameter
@@ -24,6 +25,7 @@ function normalizeInboundEventFromRouterParameter(parameter, extra) {
   else if (isTgActor) channelNorm = "telegram";
 
   const bodyTrim = body.trim();
+  const media = parseMediaJson(p._mediaJson);
   const messageSid = String(p.MessageSid || p.SmsMessageSid || "").trim();
   const eventId =
     String(p._telegramUpdateId || "").trim() ||
@@ -33,7 +35,7 @@ function normalizeInboundEventFromRouterParameter(parameter, extra) {
   const meta = Object.assign(
     {
       channel: channelNorm,
-      numMedia: "0",
+      numMedia: String(media.length),
     },
     (extra && extra.meta) || {}
   );
@@ -47,7 +49,7 @@ function normalizeInboundEventFromRouterParameter(parameter, extra) {
     body,
     bodyTrim,
     bodyLower: bodyTrim.toLowerCase(),
-    media: [],
+    media,
     eventId,
     timestamp: new Date(),
     meta,

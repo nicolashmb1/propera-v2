@@ -9,7 +9,12 @@ This folder is the **new** Propera server. **Production today** is still Google 
 - Edit Node code under `src/`.
 - Run the server locally (see below).
 - Commit `propera-v2/` to git when you are happy.
-- **Keep docs current:** when behavior or migrations change, update **[docs/BRAIN_PORT_MAP.md](docs/BRAIN_PORT_MAP.md)** and **[docs/PROPERA_V2_GAS_EXIT_PLAN.md](docs/PROPERA_V2_GAS_EXIT_PLAN.md)** (and **[docs/OUTSIDE_CURSOR.md](docs/OUTSIDE_CURSOR.md)** if operators need new SQL/env steps). Logging / flight-recorder parity: **[docs/STRUCTURED_LOGS.md](docs/STRUCTURED_LOGS.md)**.
+- **Keep docs current:** when behavior or migrations change, update **[docs/BRAIN_PORT_MAP.md](docs/BRAIN_PORT_MAP.md)** and **[docs/PROPERA_V2_GAS_EXIT_PLAN.md](docs/PROPERA_V2_GAS_EXIT_PLAN.md)** (and **[docs/OUTSIDE_CURSOR.md](docs/OUTSIDE_CURSOR.md)** if operators need new SQL/env steps). Logging / flight-recorder: **[docs/STRUCTURED_LOGS.md](docs/STRUCTURED_LOGS.md)**. **Recent session notes:** **[docs/HANDOFF_LOG.md](docs/HANDOFF_LOG.md)**.
+
+## Adding a new channel
+
+Use **[docs/ADAPTER_ONBOARDING.md](docs/ADAPTER_ONBOARDING.md)**.  
+It defines the adapter-only boundary, required `InboundSignal`/`RouterParameter` contract, shared `_mediaJson` bridge, and docs/tests required before merge.
 
 ## What you do **outside Cursor** (browser only)
 
@@ -42,7 +47,9 @@ Use **`npm run dev`** for **`node --watch`** (restarts the process when you save
 
 Open **http://localhost:8080/health** — you should see JSON with `"ok": true`.
 
-Copy `.env.example` to `.env` if you want to change `PORT` (default **8080**).
+Copy `.env.example` to **`propera-v2/.env`** if you want to change `PORT` (default **8080**). Env is loaded from the **package root** (`src/config/env.js`), so variables apply even if you start Node from a parent directory.
+
+**Ops dashboard (local):** **`http://127.0.0.1:8080/dashboard`** — reads Supabase **`event_log`** (`GET /api/ops/event-log`). Use **http** (not https) for localhost. **`DASHBOARD_ENABLED`** defaults on in development; optional **`DASHBOARD_TOKEN`** query param or `Authorization: Bearer`. See **[docs/HANDOFF_LOG.md](docs/HANDOFF_LOG.md)** for UI behavior (outcome-first cards, collapsed raw events).
 
 **Brain port (GAS → Node):** see **[docs/BRAIN_PORT_MAP.md](docs/BRAIN_PORT_MAP.md)**. **Do not rewrite business rules** — port from GAS per **[docs/PORTING_FROM_GAS.md](docs/PORTING_FROM_GAS.md)**. Run **`npm test`** for router precursor parity tests. **Scenario / intake testing plan:** **[docs/TESTING_STRATEGY.md](docs/TESTING_STRATEGY.md)**.
 
@@ -61,10 +68,10 @@ Something else is using **8080** (often a previous `node` you forgot to stop).
 - Dockerfile for later Cloud Run deploy.
 - No database yet; no Twilio yet.
 
-**Identity (dev):** After running `supabase/migrations/003_identity.sql`, try  
-`GET /api/dev/resolve-actor?phone=+19085550101` — expects **STAFF** for the seeded dev contact (edit seed SQL to match your real test phone).
+**Identity (dev):** After **`003_identity.sql`** (and **`008_properties_dal_columns.sql`** or **`004_roster_and_policy_seed.sql`** so `properties.legacy_property_id` exists), try  
+`GET /api/dev/resolve-actor?phone=+19085550101` — expects **STAFF** for the seeded dev contact (edit seed SQL to match your real test phone). Migration order: **`supabase/migrations/README.md`**.
 
-**Telegram on V2:** `POST /webhooks/telegram` — validates optional `TELEGRAM_WEBHOOK_SECRET`, normalizes to **InboundSignal**, upserts **`telegram_chat_link`** (run migration `005_telegram_chat_link.sql`), then **router precursors + lane** (`docs/BRAIN_PORT_MAP.md`). With **`CORE_ENABLED=1`** and DB + migration **006**, **`handleInboundCore`** can create **tickets** / **work_items** (maintenance slice). Optional **`TELEGRAM_OUTBOUND_ENABLED=1`** + **`TELEGRAM_BOT_TOKEN`** sends replies in chat (transport only).
+**Telegram on V2:** `POST /webhooks/telegram` — validates optional `TELEGRAM_WEBHOOK_SECRET`, normalizes to **InboundSignal**, upserts **`telegram_chat_link`** (migration **005**), then **router precursors + lane** (`docs/BRAIN_PORT_MAP.md`). With **`CORE_ENABLED=1`** and DB + migrations **006** (+ **008** or **004** for property columns), **`handleInboundCore`** can create **tickets** / **work_items** (maintenance slice). Optional **`TELEGRAM_OUTBOUND_ENABLED=1`** + **`TELEGRAM_BOT_TOKEN`** sends replies in chat (transport only).
 
 **Moving the bot webhook from GAS to V2 (one bot = one webhook):**
 

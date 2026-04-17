@@ -6,8 +6,7 @@
  * (Node honors `TZ` for local time). Labels use `Intl` with `opts.timeZone` (default `process.env.TZ`
  * or `UTC`).
  *
- * PARITY: `validateSchedPolicy_` (`17_PROPERTY_SCHEDULE_ENGINE.gs`) is NOT run after parse — see
- * docs/PARITY_LEDGER.md §3.
+ * Policy: `validateSchedPolicy_` runs in `src/dal/ticketPreferredWindow.js` after parse (commit path).
  */
 
 /**

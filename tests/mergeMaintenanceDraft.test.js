@@ -7,8 +7,8 @@ const {
 
 const known = new Set(["PENN", "MORRIS"]);
 const props = [
-  { code: "PENN", display_name: "The Grand at Penn" },
-  { code: "MORRIS", display_name: "The Grand at Morris" },
+  { code: "PENN", display_name: "Property PENN", aliases: ["penn building"] },
+  { code: "MORRIS", display_name: "Property MORRIS", aliases: ["morris tower"] },
 ];
 
 test("resolvePropertyFromReply — number index", () => {
@@ -17,6 +17,14 @@ test("resolvePropertyFromReply — number index", () => {
 
 test("resolvePropertyFromReply — code token", () => {
   assert.equal(resolvePropertyFromReply("MORRIS", props), "MORRIS");
+});
+
+test("resolvePropertyFromReply — strong name token", () => {
+  assert.equal(resolvePropertyFromReply("issue at morris building", props), "MORRIS");
+});
+
+test("resolvePropertyFromReply — db alias token", () => {
+  assert.equal(resolvePropertyFromReply("problem at penn building", props), "PENN");
 });
 
 test("merge ISSUE stage fills issue from body", () => {
@@ -31,6 +39,26 @@ test("merge ISSUE stage fills issue from body", () => {
     propertiesList: props,
   });
   assert.ok(m.draft_issue.toLowerCase().includes("icemaker"));
+});
+
+test("merge uses parsedDraft from async intake when provided", () => {
+  const m = mergeMaintenanceDraftTurn({
+    bodyText: "this text should not win",
+    expected: "ISSUE",
+    draft_issue: "",
+    draft_property: "",
+    draft_unit: "",
+    draft_schedule_raw: "",
+    knownPropertyCodesUpper: known,
+    propertiesList: props,
+    parsedDraft: {
+      propertyCode: "PENN",
+      unitLabel: "",
+      issueText: "compiled intake issue",
+    },
+  });
+  assert.equal(m.draft_issue, "compiled intake issue");
+  assert.equal(m.draft_property, "PENN");
 });
 
 test("merge PROPERTY stage sets code", () => {

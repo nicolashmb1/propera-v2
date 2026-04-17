@@ -1,6 +1,7 @@
 # Brain port map — GAS → V2 (Node)
 
 **New agent / “continue V2”:** read **[../AGENTS.md](../AGENTS.md)** first (mandatory doc list + freeze + commands).
+**Adding a channel:** follow **[ADAPTER_ONBOARDING.md](./ADAPTER_ONBOARDING.md)** (adapter-only boundary, canonical contracts, media bridge).
 
 **Direction:** Port the real Propera brain incrementally. No parallel “preview” logic. Node/Postgres is the destination; GAS/Sheets remains backup/reference until cutover.
 
@@ -10,12 +11,14 @@
 
 ## Handoff status (for the next agent)
 
+**Latest session notes:** **[HANDOFF_LOG.md](./HANDOFF_LOG.md)** (dated blocks — ops dashboard, `event_log` expansion, `.env` path, intake flags).
+
 | Phase | Status |
 |-------|--------|
 | **PHASE 1–2** Map + canonical `RouterParameter` contract | **Done** — see builder + `InboundSignal` |
 | **PHASE 3** First real slice (precursors only) | **Done** — `src/brain/router/*`, `src/contracts/buildRouterParameterFromTelegram.js` |
 | **PHASE 4** Tests | **Done** — `npm test` (router, parse draft, staff brain, `ticketDefaults`) |
-| **PHASE 5** Next slices | **In progress** — see **Current V2 core slice** below. Staff lifecycle partial; **next:** GAS **`compileTurn_`** + intake package + canonical merge → lifecycle/policy; schedule/outgate follow **engine truth**, not one-off UX rules. |
+| **PHASE 5** Next slices | **In progress** — see **Current V2 core slice** below. Staff lifecycle partial; **post-finalize schedule** turns run **`parseMaintenanceDraftAsync`** before merge, and merge now accepts async `parsedDraft` from compile/intake path. `_mediaJson` channel-agnostic bridge is wired (adapter → router → core text merge), but OCR/vision extraction itself is still pending. **Next:** deepen compile-driven slot semantics and finish full GAS property grounding (`_variants` / explicit-only resolution) per **PARITY_LEDGER.md** §7; full lifecycle/policy vs GAS; schedule/outgate follow **engine truth**. |
 
 **Migration plan (canonical in repo):** [PROPERA_V2_GAS_EXIT_PLAN.md](./PROPERA_V2_GAS_EXIT_PLAN.md) (YAML todos + phases).
 
@@ -33,13 +36,14 @@
 4. `upsertTelegramChatLink` — `src/identity/upsertTelegramChatLink.js`
 5. `resolveStaffContextFromRouterParameter` — `src/identity/resolveStaffContext.js` (GAS `isStaffSender_` + Telegram `staffActorKey` / chat fallback)
 6. ~~`processInboundSignalStub`~~ → **precursor evaluation** + logging
-7. **Lane + core (when enabled):** `decideLane` → **`handleInboundCore`** — maintenance draft parse (`parseMaintenanceDraft`) → if complete, **`finalizeMaintenanceDraft`** → `tickets` + `work_items` + `conversation_ctx` (requires DB + migration **006**; see `src/dal/finalizeMaintenance.js`).
+7. **Lane + core (when enabled):** `decideLane` → **`handleInboundCore`** — maintenance draft parse (`parseMaintenanceDraft`) → if complete, **`finalizeMaintenanceDraft`** → `tickets` + `work_items` + `conversation_ctx` (requires DB: migration **006** for `tickets` columns; **008** or **004** for `properties.legacy_property_id`; see `src/dal/finalizeMaintenance.js`, **`supabase/migrations/README.md`**).
 8. Optional `sendTelegramMessage` — `src/outbound/telegramSendMessage.js` (transport only)
+9. **Ops:** `GET /dashboard`, `GET /api/ops/event-log` — `src/dashboard/registerDashboard.js` + `dashboardPage.html` + `eventLogApi.js` (not GAS; flight recorder UI)
 
 ### Current V2 core slice (honest scope)
 
 - **Flow (partial):** **`recomputeDraftExpected`** — pre-ticket slice (see ledger). **`intake_sessions`** + merge. **Unit:** GAS **`extractUnit_`** port — `extractUnitGas.js`. **`handleInboundCore`**: prompts + fast path via **`parseMaintenanceDraft`** (not full **`compileTurn_`**). Events: **`EXPECT_RECOMPUTED`**, **`TURN_SUMMARY`**, **`TICKET_CREATED_ASK_SCHEDULE`**, etc.
-- **Semantics (gaps):** **`parsePreferredWindowShared_`**, **`validateSchedPolicy_`**, **`scheduled_end_at`** from parsed window, full **`compileTurn_`** / intake package, full GAS property detection — see **[PARITY_LEDGER.md](./PARITY_LEDGER.md)**. Do not equate “V2 runs” with “GAS-equivalent brain.”
+- **Semantics (gaps):** full **`compileTurn_`** / intake package, full GAS property detection, full **`handleInboundRouter_`** graph — see **[PARITY_LEDGER.md](./PARITY_LEDGER.md)**. Schedule parse + **`validateSchedPolicy_`** + `inferStageDayFromText_` are ported on the ticket schedule commit path; **`property_policy`** must match GAS PropertyPolicy for identical decisions.
 
 ### GAS Telegram → brain (reference)
 
@@ -66,7 +70,7 @@ Shape matches the object under `e.parameter` that `handleInboundRouter_` reads (
 | `_phoneE164` | Router “actor key” | Same as GAS: `TG:` + user id (not always E.164) |
 | `_telegramChatId` | Reply target | `msg.chat.id` |
 | `_telegramUpdateId` | Dedupe | `update_id` |
-| `_mediaJson` | Media bridge | `""` until media port |
+| `_mediaJson` | Media bridge payload | JSON string array (`[]` when absent); parsed channel-agnostically in router/core; adapters may enrich `ocr_text` before core |
 
 **Builder:** `src/contracts/buildRouterParameterFromTelegram.js`  
 **Canonical signal (cross-channel):** `src/signal/inboundSignal.js` — adapters normalize; contracts map to `RouterParameter`.
@@ -130,5 +134,6 @@ After meaningful changes to V2 behavior — or when **conversation direction / s
 | **OUTSIDE_CURSOR.md** | New SQL migrations operators must run, or new env vars for hosted setup. |
 | **STRUCTURED_LOGS.md** | New `log_kind` / `event` vocabulary, `event_log` shape, or observability parity vs GAS log sheet. |
 | **PORTING_FROM_GAS.md** | Which GAS file owns each behavior; **no parallel rewrites** of stage/parse/policy rules. |
+| **ADAPTER_ONBOARDING.md** | New channel implementation checklist (adapter/contract/tests/docs) with channel-agnostic core constraints. |
 | **TESTING_STRATEGY.md** | Scenario / integration tests; **staged implementation** (tests when the corresponding brain slice has a stable boundary). |
 | **README.md** (propera-v2) | New scripts (`npm run dev`), ports, or first-run steps. |

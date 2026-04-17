@@ -19,6 +19,8 @@ function buildRouterParameterFromTelegram(signal, rawPayload) {
   const t = signal.transport || {};
   const body = signal.body || {};
   const text = String(body.text || "").trim();
+  const mediaJson =
+    Array.isArray(body.media) && body.media.length > 0 ? JSON.stringify(body.media) : "";
 
   const userId = String(t.telegram_user_id || "").trim();
   const actorId = userId ? "TG:" + userId : "";
@@ -41,7 +43,7 @@ function buildRouterParameterFromTelegram(signal, rawPayload) {
     _telegramUpdateId: updateId,
     From: actorId,
     Body: text,
-    _mediaJson: "",
+    _mediaJson: mediaJson,
   };
 }
 

@@ -10,9 +10,39 @@ const {
   localCategoryFromText,
   buildThreadIdV2,
 } = require("./ticketDefaults");
+const { parseMediaJson } = require("../brain/shared/mediaPayload");
 
 function shortWiSuffix() {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase();
+}
+
+function buildTicketAttachmentsFromRouterParameter(routerParameter) {
+  const p = routerParameter || {};
+  const media = parseMediaJson(p._mediaJson);
+  if (!media.length) return "";
+
+  const lines = [];
+  const seen = new Set();
+  for (const m of media) {
+    const url = String((m && (m.url || m.file_url || m.fileUrl)) || "").trim();
+    const provider = String((m && m.provider) || "").trim().toLowerCase();
+    const fileId = String((m && m.file_id) || "").trim();
+    const fileName = String((m && m.file_name) || "").trim();
+
+    let token = "";
+    if (url) token = url;
+    else if (provider === "telegram" && fileId) token = "telegram:" + fileId;
+    else if (fileName) token = "file:" + fileName;
+    if (!token) continue;
+
+    const k = token.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    lines.push(token);
+  }
+  if (!lines.length) return "";
+  const joined = lines.join("\n");
+  return joined.length > 3800 ? joined.slice(0, 3800) : joined;
 }
 
 /**
@@ -44,6 +74,8 @@ async function finalizeMaintenanceDraft(o) {
     o.mode === "MANAGER" ? "" : String(o.actorKey || "").trim();
 
   const p = o.routerParameter || {};
+  const ticketAttachments = buildTicketAttachmentsFromRouterParameter(p);
+  const mediaForMeta = parseMediaJson(p._mediaJson);
   const threadId = buildThreadIdV2({
     traceId: o.traceId,
     mode: o.mode,
@@ -63,6 +95,8 @@ async function finalizeMaintenanceDraft(o) {
     staff_actor: o.staffActorKey || null,
     ticket_human_id: humanTicketId,
     ticket_uuid: uuidTicketKey,
+    media_count: mediaForMeta.length,
+    media_ocr_present: mediaForMeta.some((m) => String((m && m.ocr_text) || "").trim().length > 0),
   };
 
   /** Full Sheet1 parity (requires supabase/migrations/006_tickets_sheet1_columns.sql). */
@@ -98,7 +132,7 @@ async function finalizeMaintenanceDraft(o) {
     priority: "",
     service_notes: "",
     closed_at: null,
-    attachments: "",
+    attachments: ticketAttachments,
 
     completed_msg_sent: "No",
     completed_msg_sent_at: null,
@@ -187,4 +221,4 @@ async function finalizeMaintenanceDraft(o) {
   };
 }
 
-module.exports = { finalizeMaintenanceDraft };
+module.exports = { finalizeMaintenanceDraft, buildTicketAttachmentsFromRouterParameter };

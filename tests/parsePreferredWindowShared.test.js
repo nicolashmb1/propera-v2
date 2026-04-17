@@ -50,4 +50,28 @@ describe("parsePreferredWindowShared (GAS port)", () => {
   it("empty → null", () => {
     assert.equal(parsePreferredWindowShared("", null, { timeZone: "UTC" }), null);
   });
+
+  it("Intl timeZone must match Node TZ for morning labels (mismatch shows 1–4 PM)", () => {
+    const prevTz = process.env.TZ;
+    const prevP = process.env.PROPERA_TZ;
+    process.env.TZ = "America/New_York";
+    process.env.PROPERA_TZ = "";
+    const now = new Date(2026, 3, 10, 12, 0, 0);
+    const wrong = parsePreferredWindowShared("tomorrow morning", "Tomorrow", {
+      now,
+      timeZone: "UTC",
+      scheduleLatestHour: 17,
+    });
+    assert.ok(wrong && wrong.kind === "DAYPART");
+    assert.match(String(wrong.label), /1:\d\d\s*PM/i, "UTC Intl on Eastern instants mimics the bad tenant copy");
+
+    const right = parsePreferredWindowShared("tomorrow morning", "Tomorrow", {
+      now,
+      timeZone: "America/New_York",
+      scheduleLatestHour: 17,
+    });
+    assert.match(String(right.label), /9:\d\d\s*AM/i);
+    process.env.TZ = prevTz;
+    process.env.PROPERA_TZ = prevP;
+  });
 });

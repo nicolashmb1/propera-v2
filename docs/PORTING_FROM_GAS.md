@@ -30,9 +30,9 @@ You are **not** being too strict — you are preventing the migration from drift
 | Address list global | `PROPERTY_ADDRESSES` (GAS global) | `PROPERTY_ADDRESSES_JSON` env → `src/config/propertyAddresses.js` |
 | Draft stage order pre-ticket | `recomputeDraftExpected_` — `11_TICKET_FINALIZE_ENGINE.gs` ~147–171 | `src/brain/core/recomputeDraftExpected.js` |
 | Category label (deterministic) | `localCategoryFromText_` — `18_MESSAGING_ENGINE.gs` | `src/dal/ticketDefaults.js` |
-| **Schedule / preferred window** | `parsePreferredWindowShared_` — `08_INTAKE_RUNTIME.gs`; `validateSchedPolicy_` — `17_PROPERTY_SCHEDULE_ENGINE.gs` | **Parse:** `src/brain/gas/parsePreferredWindowShared.js` + `src/dal/ticketPreferredWindow.js`. **Policy:** not ported — [PARITY_LEDGER.md](./PARITY_LEDGER.md) §3 |
-| **Property from body / menu** | `detectPropertyFromBody_` — `PROPERA_MAIN_BACKUP.gs` / MAIN ~13348+ | *Partial — `mergeMaintenanceDraft` / menu; full parity when porting* |
-| **compileTurn / intake package** | `compileTurn_`, `properaBuildIntakePackage_` — `08_INTAKE_RUNTIME.gs` | *LLM shell + merge rules — port, don’t duplicate* |
+| **Schedule / preferred window** | `parsePreferredWindowShared_` — `08_INTAKE_RUNTIME.gs`; `inferStageDayFromText_` + `validateSchedPolicy_` — `17_PROPERTY_SCHEDULE_ENGINE.gs` | **Parse:** `src/brain/gas/parsePreferredWindowShared.js`. **Stage day:** `src/brain/gas/inferStageDayFromText.js`. **Policy:** `src/brain/gas/validateSchedPolicy.js` + `src/dal/propertyPolicy.js` (`property_policy`); commit path `src/dal/ticketPreferredWindow.js` — [PARITY_LEDGER.md](./PARITY_LEDGER.md) §3 |
+| **Property from body / menu** | `detectPropertyFromBody_` — `PROPERA_MAIN_BACKUP.gs` / MAIN ~13348+ | *Partial — `detectPropertyFromBody` in `lifecycleExtract.js`; DB-config aliases via `property_aliases` + `listPropertiesForMenu`; full parity pending GAS variant/ticketPrefix semantics* |
+| **compileTurn / intake package** | `compileTurn_`, `properaBuildIntakePackage_` — `08_INTAKE_RUNTIME.gs` + `07_PROPERA_INTAKE_PACKAGE.gs` | **Partial:** `src/brain/intake/compileTurn.js`, `properaBuildIntakePackage.js`, `openaiStructuredSignal.js` — enable **`INTAKE_COMPILE_TURN=1`**; optional LLM: **`OPENAI_API_KEY`** + **`INTAKE_LLM_ENABLED=1`** — [PARITY_LEDGER.md](./PARITY_LEDGER.md) §1–2 |
 
 When you add behavior, **find the GAS function first**, add a row to this table, then implement.
 
@@ -50,3 +50,5 @@ Example (illustrative):
 
 Update **[PARITY_LEDGER.md](./PARITY_LEDGER.md)** for every behavior change (status, gaps, risk).  
 Update this file when a new **ported** module lands. Cross-link from **BRAIN_PORT_MAP.md**.
+
+**Non-port work** (dashboard, env plumbing, flight-recorder-only): does not change GAS parity — log in **[HANDOFF_LOG.md](./HANDOFF_LOG.md)** (dated) and **[PARITY_LEDGER.md](./PARITY_LEDGER.md)** §10 if it affects observability.

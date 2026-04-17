@@ -44,6 +44,29 @@ test("all three pre-ticket → FINALIZE_DRAFT", () => {
   assert.equal(next, "FINALIZE_DRAFT");
 });
 
+test("all three pre-ticket + openerNext=SCHEDULE → SCHEDULE_PRETICKET", () => {
+  const { next } = recomputeDraftExpected({
+    hasIssue: true,
+    hasProperty: true,
+    hasUnit: true,
+    pendingTicketRow: 0,
+    openerNext: "SCHEDULE",
+  });
+  assert.equal(next, "SCHEDULE_PRETICKET");
+});
+
+test("pre-ticket with schedule already filled does not stay SCHEDULE_PRETICKET", () => {
+  const { next } = recomputeDraftExpected({
+    hasIssue: true,
+    hasProperty: true,
+    hasUnit: true,
+    hasSchedule: true,
+    pendingTicketRow: 0,
+    openerNext: "SCHEDULE",
+  });
+  assert.equal(next, "FINALIZE_DRAFT");
+});
+
 test("post-ticket row without schedule → SCHEDULE", () => {
   const { next } = recomputeDraftExpected({
     hasIssue: true,
@@ -62,6 +85,19 @@ test("emergency continuation skips SCHEDULE → EMERGENCY_DONE", () => {
     hasUnit: true,
     hasSchedule: false,
     pendingTicketRow: 5,
+    isEmergencyContinuation: true,
+  });
+  assert.equal(next, "EMERGENCY_DONE");
+});
+
+test("emergency continuation skips SCHEDULE_PRETICKET → EMERGENCY_DONE", () => {
+  const { next } = recomputeDraftExpected({
+    hasIssue: true,
+    hasProperty: true,
+    hasUnit: true,
+    hasSchedule: false,
+    pendingTicketRow: 0,
+    openerNext: "SCHEDULE",
     isEmergencyContinuation: true,
   });
   assert.equal(next, "EMERGENCY_DONE");

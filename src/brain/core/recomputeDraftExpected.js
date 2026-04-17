@@ -1,7 +1,8 @@
 /**
  * Port of GAS `recomputeDraftExpected_` — **pre-ticket** slice only (`11_TICKET_FINALIZE_ENGINE.gs` ~147–171).
  *
- * PARITY GAP: `SCHEDULE_PRETICKET` / opener branches and full GAS branch set not ported.
+ * PARITY GAP: full GAS branch set not ported, but opener `SCHEDULE_PRETICKET`
+ * and emergency override behavior are now aligned for the V2 maintenance slice.
  * Intake order: Issue → Property → Unit → (schedule post-ticket in full GAS) → FINALIZE_DRAFT.
  *
  * @param {object} s
@@ -12,6 +13,7 @@
  * @param {number} [s.pendingTicketRow] — Sheet row; 0 = no ticket yet. V2: 0 until finalize creates one.
  * @param {boolean} [s.skipScheduling] — ctx / emergency: skip schedule stage
  * @param {boolean} [s.isEmergencyContinuation]
+ * @param {string} [s.openerNext] — compile opener hint (`SCHEDULE` => ask pre-ticket schedule)
  */
 function recomputeDraftExpected(s) {
   const hasIssue = !!s.hasIssue;
@@ -21,6 +23,7 @@ function recomputeDraftExpected(s) {
   const pendingRow = Number(s.pendingTicketRow || 0);
   const skipScheduling = !!s.skipScheduling;
   const emerg = !!s.isEmergencyContinuation;
+  const openerNext = String(s.openerNext || "").trim().toUpperCase();
 
   let next = "";
   if (!hasIssue) next = "ISSUE";
@@ -29,12 +32,14 @@ function recomputeDraftExpected(s) {
   else if (pendingRow > 0 && !hasSchedule) {
     next = "SCHEDULE";
   } else if (pendingRow <= 0) {
-    next = "FINALIZE_DRAFT";
+    next = !hasSchedule && openerNext === "SCHEDULE"
+      ? "SCHEDULE_PRETICKET"
+      : "FINALIZE_DRAFT";
   } else {
     next = "";
   }
 
-  if (next === "SCHEDULE" && (emerg || skipScheduling)) {
+  if ((next === "SCHEDULE" || next === "SCHEDULE_PRETICKET") && (emerg || skipScheduling)) {
     next = "EMERGENCY_DONE";
   }
 

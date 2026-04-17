@@ -23,4 +23,24 @@ describe("parseMaintenanceDraft", () => {
     const d = parseMaintenanceDraft("sink broken unit 12", known);
     assert.equal(isMaintenanceDraftComplete(d), false);
   });
+
+  test("property name token resolves code (detectPropertyFromBody parity slice)", () => {
+    const known = new Set(["PENN", "MORRIS"]);
+    const props = [
+      { code: "PENN", display_name: "Property PENN", aliases: ["penn building"] },
+      { code: "MORRIS", display_name: "Property MORRIS", aliases: ["morris tower"] },
+    ];
+    const d = parseMaintenanceDraft("leak in 303 at morris", known, props);
+    assert.equal(d.propertyCode, "MORRIS");
+  });
+
+  test("property alias resolves code (database-driven alias list)", () => {
+    const known = new Set(["PENN", "MORRIS"]);
+    const props = [
+      { code: "PENN", display_name: "Property PENN", aliases: ["penn building"] },
+      { code: "MORRIS", display_name: "Property MORRIS", aliases: ["morris tower"] },
+    ];
+    const d = parseMaintenanceDraft("heater issue at penn building unit 303", known, props);
+    assert.equal(d.propertyCode, "PENN");
+  });
 });

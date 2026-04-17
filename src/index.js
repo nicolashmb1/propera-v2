@@ -14,10 +14,16 @@ const { createTrace } = require("./trace/createTrace");
 const { isDbConfigured, pingDb } = require("./db/supabase");
 const { requestContext } = require("./middleware/requestContext");
 const { boot, emit } = require("./logging/structuredLog");
+const {
+  buildTelegramInboundCtx,
+  previewText,
+  runWithInboundLogCtx,
+} = require("./logging/inboundLogContext");
 const { resolveActor } = require("./identity/resolveActor");
 const { resolveStaffContextFromRouterParameter } = require("./identity/resolveStaffContext");
 const { verifyTelegramWebhookSecret } = require("./adapters/telegram/verifyWebhookSecret");
 const { normalizeTelegramUpdate } = require("./adapters/telegram/normalizeTelegramUpdate");
+const { enrichTelegramMediaWithOcr } = require("./adapters/telegram/enrichTelegramMediaWithOcr");
 const { tryConsumeUpdateId } = require("./adapters/telegram/dedupeUpdateId");
 const { upsertTelegramChatLink } = require("./identity/upsertTelegramChatLink");
 const { sendTelegramMessage } = require("./outbound/telegramSendMessage");
@@ -25,19 +31,26 @@ const { CHANNEL_TELEGRAM } = require("./signal/inboundSignal");
 const { buildRouterParameterFromTelegram } = require("./contracts/buildRouterParameterFromTelegram");
 const { evaluateRouterPrecursor } = require("./brain/router/evaluateRouterPrecursor");
 const { normalizeInboundEventFromRouterParameter } = require("./brain/router/normalizeInboundEvent");
+const {
+  parseMediaJson,
+  composeInboundTextWithMedia,
+} = require("./brain/shared/mediaPayload");
 const { decideLane } = require("./brain/router/decideLane");
 const { appendEventLog } = require("./dal/appendEventLog");
 const { handleStaffLifecycleCommand } = require("./brain/staff/handleStaffLifecycleCommand");
 const { handleInboundCore } = require("./brain/core/handleInboundCore");
+const { registerDashboardRoutes } = require("./dashboard/registerDashboard");
 
 const app = express();
 
 app.use(express.json({ limit: "2mb" }));
 app.use(requestContext);
 
+registerDashboardRoutes(app);
+
 app.get("/", (_req, res) => {
   res.type("text/plain").send(
-    "Propera V2 — GET /health | POST /webhooks/telegram | dev: GET /api/dev/resolve-actor?phone=+1..."
+    "Propera V2 — GET /health | POST /webhooks/telegram | GET /dashboard (ops log, DASHBOARD_ENABLED=1) | dev: GET /api/dev/resolve-actor?phone=+1..."
   );
 });
 
@@ -52,9 +65,10 @@ app.post("/webhooks/telegram", async (req, res) => {
     emit({
       level: "warn",
       trace_id: traceId,
+      trace_start_ms: req.traceStartMs,
       log_kind: "telegram_webhook",
       event: "secret_mismatch",
-      data: {},
+      data: { crumb: "secret_mismatch" },
     });
     return res.status(401).json({ ok: false, error: "unauthorized" });
   }
@@ -69,9 +83,10 @@ app.post("/webhooks/telegram", async (req, res) => {
     emit({
       level: "info",
       trace_id: traceId,
+      trace_start_ms: req.traceStartMs,
       log_kind: "telegram_webhook",
       event: "skipped_no_user_message",
-      data: { update_id: payload.update_id ?? null },
+      data: { update_id: payload.update_id ?? null, crumb: "skipped_no_user_message" },
     });
     return res.status(200).json({ ok: true, ignored: true });
   }
@@ -80,9 +95,10 @@ app.post("/webhooks/telegram", async (req, res) => {
     emit({
       level: "info",
       trace_id: traceId,
+      trace_start_ms: req.traceStartMs,
       log_kind: "telegram_webhook",
       event: "deduped",
-      data: { update_id: payload.update_id },
+      data: { update_id: payload.update_id, crumb: "deduped" },
     });
     return res.status(200).json({ ok: true, deduped: true });
   }
@@ -91,22 +107,8 @@ app.post("/webhooks/telegram", async (req, res) => {
   if (!signal) {
     return res.status(200).json({ ok: true, ignored: true });
   }
-
-  emit({
-    level: "info",
-    trace_id: traceId,
-    log_kind: "telegram_adapter",
-    event: "normalized",
-    data: {
-      channel: signal.channel,
-      update_id: signal.transport && signal.transport.update_id,
-      chat_id: signal.transport && signal.transport.chat_id,
-      text_len: signal.body && signal.body.text ? String(signal.body.text).length : 0,
-    },
-  });
-
-  if (signal.channel === CHANNEL_TELEGRAM) {
-    await upsertTelegramChatLink(signal, traceId);
+  if (signal.body && Array.isArray(signal.body.media) && signal.body.media.length > 0) {
+    signal.body.media = await enrichTelegramMediaWithOcr(signal.body.media);
   }
 
   let routerParameter;
@@ -116,11 +118,53 @@ app.post("/webhooks/telegram", async (req, res) => {
     emit({
       level: "error",
       trace_id: traceId,
+      trace_start_ms: req.traceStartMs,
       log_kind: "router_contract",
       event: "build_parameter_failed",
-      data: { error: String(err && err.message ? err.message : err) },
+      data: {
+        error: String(err && err.message ? err.message : err),
+        crumb: "router_parameter_build_failed",
+      },
     });
     return res.status(200).json({ ok: true, error: "router_parameter_build_failed" });
+  }
+
+  const inboundCtx = buildTelegramInboundCtx(signal, routerParameter);
+
+  return runWithInboundLogCtx(inboundCtx, async () => {
+  emit({
+    level: "info",
+    trace_id: traceId,
+    trace_start_ms: req.traceStartMs,
+    log_kind: "telegram_webhook",
+    event: "INBOUND_THREAD_START",
+    data: {
+      crumb: "inbound_thread_start",
+      thread_start: true,
+      trace_id: traceId,
+      actor_key: inboundCtx.actor_key,
+      chat_id: inboundCtx.chat_id,
+      update_id: inboundCtx.update_id,
+    },
+  });
+
+  emit({
+    level: "info",
+    trace_id: traceId,
+    trace_start_ms: req.traceStartMs,
+    log_kind: "telegram_adapter",
+    event: "normalized",
+    data: {
+      channel: signal.channel,
+      update_id: signal.transport && signal.transport.update_id,
+      chat_id: signal.transport && signal.transport.chat_id,
+      text_len: signal.body && signal.body.text ? String(signal.body.text).length : 0,
+      crumb: "signal_normalized",
+    },
+  });
+
+  if (signal.channel === CHANNEL_TELEGRAM) {
+    await upsertTelegramChatLink(signal, traceId);
   }
 
   const staffContext = await resolveStaffContextFromRouterParameter(routerParameter);
@@ -135,6 +179,7 @@ app.post("/webhooks/telegram", async (req, res) => {
   emit({
     level: "info",
     trace_id: traceId,
+    trace_start_ms: req.traceStartMs,
     log_kind: "router_precursor",
     event: precursor.outcome || "unknown",
     data: {
@@ -145,6 +190,7 @@ app.post("/webhooks/telegram", async (req, res) => {
       staff_actor_key: staffContext.staffActorKey,
       staff_reason: staffContext.reason,
       body_len: precursor.bodyTrim ? String(precursor.bodyTrim).length : 0,
+      crumb: "router_precursor",
     },
   });
 
@@ -176,9 +222,10 @@ app.post("/webhooks/telegram", async (req, res) => {
   emit({
     level: "info",
     trace_id: traceId,
+    trace_start_ms: req.traceStartMs,
     log_kind: "router_lane",
     event: laneDecision.lane,
-    data: { reason: laneDecision.reason, mode: laneDecision.mode },
+    data: { reason: laneDecision.reason, mode: laneDecision.mode, crumb: "lane_decided" },
   });
 
   let staffRun = null;
@@ -203,13 +250,16 @@ app.post("/webhooks/telegram", async (req, res) => {
 
   if (canEnterCore) {
     const isStaffCapture = precursor.outcome === "STAFF_CAPTURE_HASH";
-    const bodyForCore = isStaffCapture
+    const bodyBase = isStaffCapture
       ? String(
           (precursor.staffCapture && precursor.staffCapture.stripped) || ""
         ).trim()
       : String(routerParameter.Body || "").trim();
+    const mediaForCore = parseMediaJson(routerParameter._mediaJson);
+    const bodyForCore = composeInboundTextWithMedia(bodyBase, mediaForCore, 1400);
     coreRun = await handleInboundCore({
       traceId,
+      traceStartMs: req.traceStartMs,
       routerParameter,
       mode: isStaffCapture ? "MANAGER" : "TENANT",
       bodyText: bodyForCore,
@@ -249,6 +299,33 @@ app.post("/webhooks/telegram", async (req, res) => {
     brain = staffContext.staff ? "staff_gate_no_handler" : "staff_gate_missing_staff_row";
   }
 
+  const replyForPreview =
+    (staffRun && staffRun.replyText) ||
+    (coreRun && coreRun.replyText) ||
+    "";
+  emit({
+    level: "info",
+    trace_id: traceId,
+    trace_start_ms: req.traceStartMs,
+    log_kind: "telegram_webhook",
+    event: "request_complete",
+    data: {
+      crumb: "webhook_request_complete",
+      thread_end: true,
+      trace_id: traceId,
+      actor_key: inboundCtx.actor_key,
+      chat_id: inboundCtx.chat_id,
+      update_id: inboundCtx.update_id,
+      brain,
+      lane: laneDecision.lane,
+      lane_mode: laneDecision.mode,
+      total_ms: Date.now() - req.traceStartMs,
+      inbound_preview: inboundCtx.inbound_text_preview,
+      reply_preview: replyForPreview ? previewText(replyForPreview, 120) : "",
+      outbound_sent: !!(outbound && outbound.ok),
+    },
+  });
+
   return res.status(200).json({
     ok: true,
     brain,
@@ -286,6 +363,7 @@ app.post("/webhooks/telegram", async (req, res) => {
       ? { ok: outbound.ok, error: outbound.error || null }
       : { skipped: true },
   });
+  });
 });
 
 /**
@@ -301,9 +379,10 @@ app.get("/api/dev/resolve-actor", async (req, res) => {
   emit({
     level: "info",
     trace_id: req.traceId,
+    trace_start_ms: req.traceStartMs,
     log_kind: "identity_resolve",
     event: out.lane,
-    data: { phone: out.phoneE164, reason: out.reason },
+    data: { phone: out.phoneE164, reason: out.reason, crumb: "identity_resolve" },
   });
   res.json({ ok: true, ...out });
 });

@@ -6,7 +6,8 @@
  */
 const {
   extractUnitFromBody,
-  extractPropertyHintFromBody,
+  resolvePropertyExplicitOnly,
+  detectPropertyFromBody,
 } = require("../staff/lifecycleExtract");
 const { parseMaintenanceDraft } = require("./parseMaintenanceDraft");
 
@@ -18,13 +19,12 @@ function resolvePropertyFromReply(bodyTrim, propertiesList) {
   const t = String(bodyTrim || "").trim();
   if (!t || !propertiesList || propertiesList.length === 0) return "";
 
-  const n = parseInt(t, 10);
-  if (String(n) === t && n >= 1 && n <= propertiesList.length) {
-    return propertiesList[n - 1].code.toUpperCase();
-  }
-
-  const known = new Set(propertiesList.map((p) => p.code.toUpperCase()));
-  const hint = extractPropertyHintFromBody(t, known);
+  const known = new Set(
+    propertiesList.map((p) => String(p.code || "").trim().toUpperCase())
+  );
+  const strict = resolvePropertyExplicitOnly(t, propertiesList);
+  if (strict) return strict;
+  const hint = detectPropertyFromBody(t, propertiesList, known);
   if (hint) return hint;
 
   const tl = t.toLowerCase();
@@ -45,6 +45,7 @@ function resolvePropertyFromReply(bodyTrim, propertiesList) {
  * @param {string} [o.draft_property]
  * @param {string} [o.draft_unit]
  * @param {string} [o.draft_schedule_raw]
+ * @param {{ propertyCode?: string, unitLabel?: string, issueText?: string, scheduleRaw?: string, openerNext?: string }} [o.parsedDraft] — compile/async parse output
  * @param {Set<string>} o.knownPropertyCodesUpper
  * @param {Array<{ code: string, display_name: string }>} o.propertiesList
  */
@@ -59,7 +60,17 @@ function mergeMaintenanceDraftTurn(o) {
   let unit = String(o.draft_unit != null ? o.draft_unit : "").trim();
   let sched = String(o.draft_schedule_raw != null ? o.draft_schedule_raw : "").trim();
 
-  const parsed = parseMaintenanceDraft(bodyText, known);
+  const parsed =
+    o.parsedDraft && typeof o.parsedDraft === "object"
+      ? {
+          propertyCode: String(o.parsedDraft.propertyCode || "").trim().toUpperCase(),
+          unitLabel: String(o.parsedDraft.unitLabel || "").trim(),
+          issueText: String(o.parsedDraft.issueText || "").trim(),
+          scheduleRaw: String(o.parsedDraft.scheduleRaw || "").trim(),
+          openerNext: String(o.parsedDraft.openerNext || "").trim().toUpperCase(),
+        }
+      : parseMaintenanceDraft(bodyText, known, propertiesList);
+  const hasParsedDraft = !!(o.parsedDraft && typeof o.parsedDraft === "object");
 
   if (!issue && parsed.issueText) issue = parsed.issueText;
   if (!prop && parsed.propertyCode) prop = parsed.propertyCode;
@@ -67,8 +78,10 @@ function mergeMaintenanceDraftTurn(o) {
   // set on UNIT stage (or fast path in handleInboundCore before merge).
 
   if (exp === "ISSUE" || exp === "") {
-    if (bodyText) {
-      const p2 = parseMaintenanceDraft(bodyText, known);
+    if (hasParsedDraft && parsed.issueText) {
+      issue = parsed.issueText;
+    } else if (bodyText) {
+      const p2 = parseMaintenanceDraft(bodyText, known, propertiesList);
       issue = p2.issueText || bodyText;
     }
     if (!prop && parsed.propertyCode) prop = parsed.propertyCode;
@@ -82,7 +95,8 @@ function mergeMaintenanceDraftTurn(o) {
     }
     if (u) unit = u;
   } else if (exp === "SCHEDULE" || exp === "SCHEDULE_PRETICKET") {
-    if (bodyText) sched = bodyText;
+    if (hasParsedDraft && parsed.scheduleRaw) sched = parsed.scheduleRaw;
+    else if (bodyText) sched = bodyText;
   }
 
   return {

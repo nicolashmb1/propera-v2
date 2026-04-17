@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Propera — Event log (tenant threads)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0c0f14;
+      --surface: #141a22;
+      --surface2: #1a2330;
+      --border: #2a3544;
+      --text: #e8edf4;
+      --muted: #8b9aaf;
+      --accent: #3db8a6;
+      --accent-dim: #2a8f82;
+      --warn: #e6a23c;
+      --err: #e85d6a;
+      --radius: 10px;
+      --font: "DM Sans", system-ui, sans-serif;
+      --mono: "JetBrains Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.45;
+    }
+    header {
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, var(--surface) 0%, var(--bg) 100%);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem 1rem;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    header h1 span { color: var(--accent); font-weight: 600; }
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+      flex: 1;
+    }
+    label { font-size: 0.75rem; color: var(--muted); display: flex; flex-direction: column; gap: 0.2rem; }
+    input, select, button {
+      font-family: var(--font);
+      font-size: 0.875rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text);
+      padding: 0.45rem 0.6rem;
+    }
+    input::placeholder { color: #5c6b82; }
+    button {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 0.45rem 1rem;
+    }
+    button:hover { filter: brightness(1.08); }
+    button.secondary {
+      background: transparent;
+      border-color: var(--border);
+      color: var(--muted);
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(240px, 280px) 1fr;
+      min-height: calc(100vh - 64px);
+    }
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+      aside { border-right: none; border-bottom: 1px solid var(--border); max-height: 220px; }
+    }
+    aside {
+      border-right: 1px solid var(--border);
+      background: var(--surface);
+      overflow: auto;
+      padding: 0.75rem;
+    }
+    aside h2 {
+      margin: 0 0 0.5rem;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+    .tenant-item {
+      padding: 0.6rem 0.65rem;
+      border-radius: var(--radius);
+      margin-bottom: 0.35rem;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .tenant-item:hover { background: var(--surface2); }
+    .tenant-item.active {
+      border-color: var(--accent);
+      background: rgba(61, 184, 166, 0.12);
+    }
+    .tenant-item .tg-id { font-family: var(--mono); font-size: 0.95rem; font-weight: 700; color: var(--accent); letter-spacing: -0.02em; }
+    .tenant-item .actor { font-family: var(--mono); font-size: 0.72rem; word-break: break-all; color: #7a8ca3; margin-top: 0.2rem; }
+    .tenant-item .meta { font-size: 0.72rem; color: var(--muted); margin-top: 0.25rem; }
+    main { padding: 1rem 1.25rem; overflow: auto; }
+    .status {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-bottom: 1rem;
+    }
+    .status.error { color: var(--err); }
+    .thread {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 1.25rem;
+      overflow: hidden;
+    }
+    .request-hero {
+      padding: 1.15rem 1.25rem 1.05rem;
+      background: linear-gradient(
+        165deg,
+        rgba(61, 184, 166, 0.12) 0%,
+        var(--surface2) 42%,
+        var(--surface) 100%
+      );
+      border-bottom: 1px solid var(--border);
+    }
+    .request-hero .rs-grid {
+      display: grid;
+      gap: 0.55rem 1.25rem;
+      grid-template-columns: minmax(0, 1fr);
+    }
+    @media (min-width: 640px) {
+      .request-hero .rs-grid {
+        grid-template-columns: auto 1fr;
+        align-items: baseline;
+      }
+    }
+    .request-hero .rs-label {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+      font-weight: 600;
+      min-width: 5.5rem;
+    }
+    .request-hero .rs-value {
+      font-size: 0.92rem;
+      color: var(--text);
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .request-hero .rs-row--result .rs-value {
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: -0.02em;
+    }
+    .request-hero .rs-row--ticket .rs-value {
+      font-family: var(--mono);
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: #c5e8e2;
+    }
+    .request-hero .rs-row--message .rs-value {
+      font-size: 0.88rem;
+      color: #b8c5d9;
+      max-height: 4.5em;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+    }
+    .request-hero .rs-meta {
+      margin-top: 0.75rem;
+      padding-top: 0.65rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.72rem;
+      font-family: var(--mono);
+      color: #6b7c95;
+      word-break: break-all;
+    }
+    .event-log-details {
+      border: none;
+      margin: 0;
+    }
+    .event-log-details > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 0.75rem 1rem;
+      font-size: 0.82rem;
+      color: var(--muted);
+      background: var(--bg);
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      user-select: none;
+    }
+    .event-log-details > summary::-webkit-details-marker { display: none; }
+    .event-log-details > summary::before {
+      content: "▶";
+      font-size: 0.65rem;
+      color: var(--accent);
+      transition: transform 0.15s;
+    }
+    .event-log-details[open] > summary::before {
+      transform: rotate(90deg);
+    }
+    .event-log-details > summary:hover {
+      color: var(--text);
+      background: rgba(26, 35, 48, 0.6);
+    }
+    .event-log-details .events { border-top: 1px solid var(--border); }
+    .thread-head {
+      padding: 0.85rem 1rem;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 1.5rem;
+      align-items: baseline;
+    }
+    .thread-head .tid {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--muted);
+      word-break: break-all;
+    }
+    .thread-head strong { font-size: 0.9rem; }
+    .thread-head .pill {
+      font-size: 0.7rem;
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+      background: rgba(61, 184, 166, 0.15);
+      color: var(--accent);
+    }
+    .events { padding: 0; margin: 0; list-style: none; }
+    .events li {
+      padding: 0.65rem 1rem;
+      border-bottom: 1px solid var(--border);
+      display: grid;
+      grid-template-columns: 88px 100px 1fr;
+      gap: 0.75rem;
+      align-items: start;
+      font-size: 0.82rem;
+    }
+    @media (max-width: 700px) {
+      .events li { grid-template-columns: 1fr; }
+    }
+    .events li:last-child { border-bottom: none; }
+    .ev-time { font-family: var(--mono); font-size: 0.72rem; color: var(--muted); }
+    .ev-kind { font-size: 0.68rem; color: #6b7c95; text-transform: uppercase; letter-spacing: 0.04em; }
+    .ev-title { font-weight: 600; color: #c5d0e0; margin-bottom: 0.25rem; }
+    .ev-summary {
+      font-size: 0.78rem;
+      color: var(--accent);
+      margin-bottom: 0.35rem;
+      line-height: 1.35;
+    }
+    .ev-payload {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: #9eb0c8;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 180px;
+      overflow: auto;
+      background: var(--bg);
+      padding: 0.5rem 0.65rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+    .empty {
+      text-align: center;
+      padding: 3rem 1rem;
+      color: var(--muted);
+    }
+    .hint {
+      font-size: 0.8rem;
+      color: var(--muted);
+      max-width: 52rem;
+      margin-top: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Propera <span>· Ops log</span></h1>
+    <p class="hint" style="margin:0;width:100%;font-size:0.8rem">Use <strong>http://</strong> (not https) — e.g. <code>http://127.0.0.1:8080/dashboard</code></p>
+    <div class="filters">
+      <label>Hours
+        <select id="hours">
+          <option value="6">6</option>
+          <option value="24">24</option>
+          <option value="48" selected>48</option>
+          <option value="96">96</option>
+          <option value="168">7d</option>
+        </select>
+      </label>
+      <label style="min-width:140px">Telegram user ID
+        <input type="text" id="tg" placeholder="e.g. 7108534136" inputmode="numeric" autocomplete="off" />
+      </label>
+      <label style="min-width:180px">Trace id
+        <input type="text" id="trace" placeholder="uuid" autocomplete="off" />
+      </label>
+      <label style="min-width:120px">Chat id
+        <input type="text" id="chat" placeholder="telegram chat" autocomplete="off" />
+      </label>
+      <button type="button" id="reload">Refresh</button>
+      <button type="button" class="secondary" id="clear">Clear filters</button>
+    </div>
+  </header>
+  <div class="layout">
+    <aside>
+      <h2>By Telegram user ID</h2>
+      <div id="tenants"></div>
+      <p class="hint" style="padding:0 0.25rem">Rows without <code>payload.ctx</code> won’t appear here. New traffic only.</p>
+    </aside>
+    <main>
+      <div id="status" class="status"></div>
+      <div id="threads"></div>
+    </main>
+  </div>
+  <script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const params = new URLSearchParams(location.search);
+  const token = params.get("token") || "";
+
+  function apiUrl() {
+    const q = new URLSearchParams();
+    q.set("hours", $("hours").value);
+    const tg = $("tg").value.trim();
+    const t = $("trace").value.trim();
+    const c = $("chat").value.trim();
+    if (tg) q.set("telegram_user_id", tg);
+    if (t) q.set("trace_id", t);
+    if (c) q.set("chat_id", c);
+    if (token) q.set("token", token);
+    return "/api/ops/event-log?" + q.toString();
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  function eventPayloadHtml(ev) {
+    const p = ev.payload;
+    const sum =
+      p &&
+      typeof p === "object" &&
+      p.summary != null &&
+      String(p.summary).trim()
+        ? `<div class="ev-summary">${esc(String(p.summary))}</div>`
+        : "";
+    return (
+      sum +
+      `<div class="ev-payload">${esc(JSON.stringify(ev.payload, null, 2))}</div>`
+    );
+  }
+
+  function fmtTime(iso) {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  }
+
+  function evPayload(ev) {
+    return ev && ev.payload && typeof ev.payload === "object" ? ev.payload : {};
+  }
+
+  function fmtDur(sec) {
+    if (sec == null || !isFinite(sec) || sec < 0) return "—";
+    if (sec < 60) return sec.toFixed(1) + " sec";
+    const m = Math.floor(sec / 60);
+    const s = sec - m * 60;
+    return m + "m " + s.toFixed(0) + "s";
+  }
+
+  /**
+   * Derive outcome-focused summary from raw event rows (same data the API returns).
+   */
+  function summarizeRequest(th) {
+    const events = th.events || [];
+    const firstWithCtx = events.find(
+      (e) => evPayload(e).ctx && typeof evPayload(e).ctx === "object"
+    );
+    const ctx = firstWithCtx ? evPayload(firstWithCtx).ctx : {};
+    const preview =
+      th.inbound_preview ||
+      (ctx.inbound_text_preview != null ? String(ctx.inbound_text_preview) : "") ||
+      "—";
+    const tenant =
+      th.actor_key ||
+      (ctx.actor_key != null ? String(ctx.actor_key) : "") ||
+      (th.telegram_user_id ? "TG:" + th.telegram_user_id : "—");
+
+    let result = "Processed";
+    let ticketId = "—";
+    let llm = "—";
+
+    const names = new Set(events.map((e) => e && e.event).filter(Boolean));
+
+    const finEv = events.find((e) => e.event === "CORE_FINALIZED");
+    if (finEv) {
+      const p = evPayload(finEv);
+      if (p.ticket_id) ticketId = String(p.ticket_id);
+    }
+
+    if (names.has("STAFF_TARGET_UNRESOLVED")) result = "Staff · which ticket?";
+    else if (names.has("STAFF_OUTCOME_APPLIED")) result = "Staff outcome saved";
+    else if (names.has("STAFF_SCHEDULE_DEFERRED")) result = "Staff · schedule deferred (V2)";
+    else if (names.has("STAFF_OUTCOME_UNRESOLVED")) result = "Staff · need outcome text";
+    else if (names.has("STAFF_TARGET_RESOLVED")) result = "Staff ticket targeted";
+    else if (names.has("SCHEDULE_CAPTURED")) result = "Schedule captured";
+    else if (names.has("SCHEDULE_POLICY_REJECT")) result = "Schedule rejected (policy)";
+    else if (names.has("CORE_FINALIZED")) {
+      result = names.has("TICKET_CREATED_ASK_SCHEDULE")
+        ? "Ticket created · ask schedule"
+        : "Ticket created";
+    } else if (names.has("LANE_DECIDED")) result = "Routed";
+
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i];
+      if (ev.event === "INTAKE_BRAIN_PATH") {
+        const p = evPayload(ev);
+        if (p.llm_structured_used === true) llm = "Yes";
+        else if (p.llm_structured_used === false) llm = "No";
+        break;
+      }
+    }
+
+    let durationSec = null;
+    if (th.started_at && th.ended_at) {
+      durationSec =
+        (new Date(th.ended_at).getTime() - new Date(th.started_at).getTime()) /
+        1000;
+    }
+
+    return {
+      tenant,
+      preview,
+      result,
+      ticketId,
+      llm,
+      durationSec,
+      durationLabel: fmtDur(durationSec),
+      eventCount: events.length,
+    };
+  }
+
+  let selectedTg = params.get("telegram_user_id") || "";
+
+  function renderTenants(tenantIndex) {
+    const el = $("tenants");
+    if (!tenantIndex || !tenantIndex.length) {
+      el.innerHTML = '<div class="empty" style="padding:1rem">No Telegram ctx yet</div>';
+      return;
+    }
+    el.innerHTML = tenantIndex
+      .map(
+        (x) =>
+          `<div class="tenant-item${String(selectedTg) === String(x.telegram_user_id) ? " active" : ""}" data-tg="${esc(x.telegram_user_id)}">
+            <div class="tg-id">${esc(x.telegram_user_id)}</div>
+            <div class="actor">${esc(x.actor_key || "TG:" + x.telegram_user_id)} · chat ${esc(x.chat_id || "—")}</div>
+            <div class="meta">${esc(x.event_count)} events · ${x.trace_count} traces · ${fmtTime(x.last_at)}</div>
+          </div>`
+      )
+      .join("");
+    el.querySelectorAll(".tenant-item").forEach((node) => {
+      node.addEventListener("click", () => {
+        selectedTg = node.getAttribute("data-tg") || "";
+        $("tg").value = selectedTg;
+        load();
+      });
+    });
+  }
+
+  function renderThreads(data) {
+    const el = $("threads");
+    if (!data.ok) {
+      el.innerHTML = "";
+      return;
+    }
+    const threads = data.threads || [];
+    if (!threads.length) {
+      el.innerHTML =
+        '<div class="empty">No rows in this window. widen <strong>Hours</strong> or check Supabase <code>event_log</code>.</div>';
+      return;
+    }
+    el.innerHTML = threads
+      .map((th) => {
+        const s = summarizeRequest(th);
+        const msgHtml =
+          s.preview === "—"
+            ? `<div class="rs-row rs-row--message"><span class="rs-label">Message</span><span class="rs-value">—</span></div>`
+            : `<div class="rs-row rs-row--message"><span class="rs-label">Message</span><span class="rs-value">“${esc(s.preview)}”</span></div>`;
+        const evs = (th.events || [])
+          .map(
+            (ev) =>
+              `<li>
+                <div class="ev-time">${esc(fmtTime(ev.created_at))}</div>
+                <div class="ev-kind">${esc(ev.log_kind || "")}</div>
+                <div>
+                  <div class="ev-title">${esc(ev.event || "")}</div>
+                  ${eventPayloadHtml(ev)}
+                </div>
+              </li>`
+          )
+          .join("");
+        return `<section class="thread">
+          <div class="request-hero">
+            <div class="rs-grid">
+              <div class="rs-row rs-row--tenant"><span class="rs-label">Tenant</span><span class="rs-value">${esc(s.tenant)}</span></div>
+              ${msgHtml}
+              <div class="rs-row rs-row--result"><span class="rs-label">Result</span><span class="rs-value">${esc(s.result)}</span></div>
+              <div class="rs-row rs-row--ticket"><span class="rs-label">Ticket</span><span class="rs-value">${esc(s.ticketId)}</span></div>
+              <div class="rs-row rs-row--llm"><span class="rs-label">LLM</span><span class="rs-value">${esc(s.llm)}</span></div>
+              <div class="rs-row rs-row--dur"><span class="rs-label">Duration</span><span class="rs-value">${esc(s.durationLabel)}</span></div>
+            </div>
+            <div class="rs-meta">trace ${esc(th.trace_id)} · ${s.eventCount} events</div>
+          </div>
+          <details class="event-log-details">
+            <summary>Event log · ${s.eventCount} rows · expand for timestamps &amp; payloads</summary>
+            <ul class="events">${evs}</ul>
+          </details>
+        </section>`;
+      })
+      .join("");
+  }
+
+  async function load() {
+    $("status").textContent = "Loading…";
+    $("status").className = "status";
+    try {
+      const r = await fetch(apiUrl());
+      const data = await r.json();
+      if (!r.ok) {
+        $("status").textContent = data.error || "Request failed";
+        $("status").className = "status error";
+        $("threads").innerHTML = "";
+        return;
+      }
+      $("status").textContent =
+        `${data.meta && data.meta.row_count != null ? data.meta.row_count : 0} rows · ${(data.threads && data.threads.length) || 0} threads · last ${$("hours").value}h`;
+      renderTenants(data.tenantIndex || []);
+      renderThreads(data);
+    } catch (e) {
+      $("status").textContent = String(e.message || e);
+      $("status").className = "status error";
+    }
+  }
+
+  $("reload").addEventListener("click", load);
+  $("clear").addEventListener("click", () => {
+    $("tg").value = "";
+    $("trace").value = "";
+    $("chat").value = "";
+    selectedTg = "";
+    load();
+  });
+  ["hours", "tg", "trace", "chat"].forEach((id) => {
+    $(id).addEventListener("change", load);
+    $(id).addEventListener("keydown", (e) => {
+      if (e.key === "Enter") load();
+    });
+  });
+
+  if (params.get("telegram_user_id")) {
+    $("tg").value = params.get("telegram_user_id");
+    selectedTg = params.get("telegram_user_id");
+  } else if (params.get("actor_key")) {
+    const a = String(params.get("actor_key"));
+    const m = a.match(/^TG:(\d+)$/i);
+    $("tg").value = m ? m[1] : /^\d+$/.test(a) ? a : "";
+  }
+  if (params.get("trace_id")) $("trace").value = params.get("trace_id");
+
+  load();
+})();
+  </script>
+</body>
+</html>
