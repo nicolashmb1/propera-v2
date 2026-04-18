@@ -51,8 +51,28 @@ function getInboundLogCtx() {
   return inboundLogAls.getStore();
 }
 
+/**
+ * @param {Record<string, string | undefined>} routerParameter
+ */
+function buildTwilioInboundCtx(routerParameter) {
+  const p = routerParameter || {};
+  const from = String(p.From || "").trim();
+  const isWa = from.toLowerCase().indexOf("whatsapp:") === 0;
+  const text = String(p.Body != null ? p.Body : "");
+  return {
+    channel: isWa ? "whatsapp" : "sms",
+    actor_key: String(p._phoneE164 || from || "").trim(),
+    chat_id: "",
+    update_id: String(p.MessageSid || p.SmsMessageSid || "").trim(),
+    message_id: "",
+    tg_user_id: "",
+    inbound_text_preview: previewText(text, 96),
+  };
+}
+
 module.exports = {
   buildTelegramInboundCtx,
+  buildTwilioInboundCtx,
   previewText,
   runWithInboundLogCtx,
   getInboundLogCtx,

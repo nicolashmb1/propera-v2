@@ -2,6 +2,7 @@
 
 **Purpose:** Single place to see how Google Sheets data in Propera maps to relational tables in V2 (Supabase/Postgres).  
 **Status:** Living document — adjust as we implement migrations.  
+**What is live in V2:** **`supabase/migrations/README.md`** + **[PARITY_LEDGER.md](./PARITY_LEDGER.md)** (not every sheet below has a 1:1 table yet).  
 **Sources (repo root):** `01_PROPERA MAIN.gs` (`COL`), `14_DIRECTORY_SESSION_DAL.gs` (`DIR_COL`), `11_TICKET_FINALIZE_ENGINE.gs` (`ensureWorkBackbone_`), `apps-script/ProperaPortalAPI.gs`.
 
 ---

@@ -16,7 +16,7 @@ async function getIntakeSession(phoneE164) {
   const { data, error } = await sb
     .from("intake_sessions")
     .select(
-      "phone_e164, stage, expected, lane, draft_property, draft_unit, draft_issue, draft_schedule_raw, active_artifact_key, expires_at_iso, updated_at_iso"
+      "phone_e164, stage, expected, lane, draft_property, draft_unit, draft_issue, issue_buf_json, draft_schedule_raw, active_artifact_key, expires_at_iso, updated_at_iso"
     )
     .eq("phone_e164", key)
     .maybeSingle();
@@ -34,6 +34,7 @@ async function getIntakeSession(phoneE164) {
  * @param {string} [row.draft_property]
  * @param {string} [row.draft_unit]
  * @param {string} [row.draft_issue]
+ * @param {string[]} [row.issue_buf_json]
  * @param {string} [row.draft_schedule_raw]
  * @param {string} [row.active_artifact_key] — ticket_key uuid while waiting post-create schedule
  * @param {string} [row.expires_at_iso]
@@ -51,6 +52,12 @@ async function upsertIntakeSession(row) {
     draft_property: String(row.draft_property != null ? row.draft_property : ""),
     draft_unit: String(row.draft_unit != null ? row.draft_unit : ""),
     draft_issue: String(row.draft_issue != null ? row.draft_issue : ""),
+    issue_buf_json: Array.isArray(row.issue_buf_json)
+      ? row.issue_buf_json
+          .map((x) => String(x || "").trim())
+          .filter((x) => x.length >= 4)
+          .slice(0, 24)
+      : [],
     draft_schedule_raw: String(
       row.draft_schedule_raw != null ? row.draft_schedule_raw : ""
     ),
@@ -87,6 +94,7 @@ async function clearIntakeSessionDraft(phoneE164) {
       draft_property: "",
       draft_unit: "",
       draft_issue: "",
+      issue_buf_json: [],
       draft_schedule_raw: "",
       active_artifact_key: "",
       expires_at_iso: "",
@@ -102,7 +110,7 @@ async function clearIntakeSessionDraft(phoneE164) {
  * After ticket create — GAS `TICKET_CREATED_ASK_SCHEDULE` / WI wait on SCHEDULE.
  * Keeps draft slots so the next turn can merge schedule only; `active_artifact_key` = ticket_key.
  * @param {string} phoneE164
- * @param {{ ticketKey: string, draft_issue: string, draft_property: string, draft_unit: string }} o
+ * @param {{ ticketKey: string, draft_issue: string, draft_property: string, draft_unit: string, issue_buf_json?: string[] }} o
  */
 async function setScheduleWaitAfterFinalize(phoneE164, o) {
   return upsertIntakeSession({
@@ -111,6 +119,7 @@ async function setScheduleWaitAfterFinalize(phoneE164, o) {
     expected: "SCHEDULE",
     lane: "MAINTENANCE",
     draft_issue: o.draft_issue,
+    issue_buf_json: Array.isArray(o.issue_buf_json) ? o.issue_buf_json : [],
     draft_property: o.draft_property,
     draft_unit: o.draft_unit,
     draft_schedule_raw: "",
@@ -124,7 +133,7 @@ async function setScheduleWaitAfterFinalize(phoneE164, o) {
  * `GLOBAL` stays in `properties` for staff assignments + roster; it must not appear here.
  * Policy defaults use `property_policy.property_code = 'GLOBAL'` (separate table), not this list.
  *
- * @returns {Promise<Array<{ code: string, display_name: string, aliases: string[] }>>}
+ * @returns {Promise<Array<{ code: string, display_name: string, ticket_prefix?: string, short_name?: string, address?: string, aliases: string[] }>>}
  */
 async function listPropertiesForMenu() {
   const sb = getSupabase();
@@ -132,7 +141,7 @@ async function listPropertiesForMenu() {
 
   const { data, error } = await sb
     .from("properties")
-    .select("code, display_name")
+    .select("code, display_name, ticket_prefix, short_name, address")
     .eq("active", true)
     .neq("code", "GLOBAL")
     .order("code");
@@ -162,6 +171,9 @@ async function listPropertiesForMenu() {
   return data.map((r) => ({
     code: String(r.code || "").toUpperCase(),
     display_name: String(r.display_name || ""),
+    ticket_prefix: String(r.ticket_prefix || ""),
+    short_name: String(r.short_name || ""),
+    address: String(r.address || ""),
     aliases: aliasByCode[String(r.code || "").toUpperCase()] || [],
   }));
 }

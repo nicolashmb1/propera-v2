@@ -75,6 +75,102 @@ test("merge PROPERTY stage sets code", () => {
   assert.equal(m.draft_property, "MORRIS");
 });
 
+test("merge PROPERTY stage can still capture issue from actionable turn", () => {
+  const m = mergeMaintenanceDraftTurn({
+    bodyText: "Morris and the ac does not run",
+    expected: "PROPERTY",
+    draft_issue: "",
+    draft_property: "",
+    draft_unit: "",
+    draft_schedule_raw: "",
+    knownPropertyCodesUpper: known,
+    propertiesList: props,
+  });
+  assert.equal(m.draft_property, "MORRIS");
+  assert.ok(String(m.draft_issue || "").toLowerCase().includes("ac"));
+  assert.ok(Array.isArray(m.draft_issue_buf_json));
+  assert.ok(m.draft_issue_buf_json.length >= 1);
+});
+
+test("merge accumulates distinct issues into issue buffer", () => {
+  const m = mergeMaintenanceDraftTurn({
+    bodyText: "and the sink is leaking too",
+    expected: "PROPERTY",
+    draft_issue: "ac does not run",
+    draft_issue_buf_json: ["ac does not run"],
+    draft_property: "MORRIS",
+    draft_unit: "401",
+    draft_schedule_raw: "",
+    knownPropertyCodesUpper: known,
+    propertiesList: props,
+  });
+  assert.equal(m.draft_issue, "ac does not run");
+  assert.ok(Array.isArray(m.draft_issue_buf_json));
+  assert.equal(m.draft_issue_buf_json.length, 2);
+  assert.ok(m.draft_issue_buf_json.some((x) => String(x).toLowerCase().includes("sink")));
+});
+
+test("merge PROPERTY — schedule-only body does not pollute issue buffer", () => {
+  const m = mergeMaintenanceDraftTurn({
+    bodyText: "tomorrow morning 9-11am",
+    expected: "PROPERTY",
+    draft_issue: "ac does not run",
+    draft_issue_buf_json: ["ac does not run"],
+    draft_property: "MORRIS",
+    draft_unit: "401",
+    draft_schedule_raw: "",
+    knownPropertyCodesUpper: known,
+    propertiesList: props,
+  });
+  assert.equal(m.draft_issue, "ac does not run");
+  assert.equal(m.attachMessageRole, "schedule_fill_only");
+  assert.equal(m.draft_issue_buf_json.length, 1);
+});
+
+test("merge UNIT — conflicting unit without explicit new marker requests clarify", () => {
+  const m = mergeMaintenanceDraftTurn({
+    bodyText: "502",
+    expected: "UNIT",
+    draft_issue: "sink leak",
+    draft_property: "MORRIS",
+    draft_unit: "401",
+    draft_schedule_raw: "",
+    knownPropertyCodesUpper: known,
+    propertiesList: props,
+  });
+  assert.equal(m.attachDecision, "clarify_attach_vs_new");
+});
+
+test("merge UNIT — attachClarifyOutcome attach bypasses unit mismatch clarify", () => {
+  const m = mergeMaintenanceDraftTurn({
+    bodyText: "502",
+    expected: "UNIT",
+    draft_issue: "sink leak",
+    draft_property: "MORRIS",
+    draft_unit: "401",
+    draft_schedule_raw: "",
+    knownPropertyCodesUpper: known,
+    propertiesList: props,
+    attachClarifyOutcome: "attach",
+  });
+  assert.notEqual(m.attachDecision, "clarify_attach_vs_new");
+  assert.equal(m.draft_unit, "502");
+});
+
+test("merge PROPERTY — explicit new ticket marker clears attach decision to start_new_intake", () => {
+  const m = mergeMaintenanceDraftTurn({
+    bodyText: "another issue: toilet not flushing",
+    expected: "PROPERTY",
+    draft_issue: "sink leak",
+    draft_property: "MORRIS",
+    draft_unit: "401",
+    draft_schedule_raw: "",
+    knownPropertyCodesUpper: known,
+    propertiesList: props,
+  });
+  assert.equal(m.attachDecision, "start_new_intake");
+});
+
 test("merge UNIT stage", () => {
   const m = mergeMaintenanceDraftTurn({
     bodyText: "401",

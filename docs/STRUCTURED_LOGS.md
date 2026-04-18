@@ -21,7 +21,7 @@ Logs are not only for developers — they are the **evidence bundle** when the b
 
 **Implementation bar:** Anything that changes user-visible behavior or could explain a support ticket **must** leave a structured line: **`event` + `reason` + minimal context**. Plumbing-only steps can stay quiet; **“no message sent”** never should be quiet.
 
-**Brain (core) examples:** `EXPECT_RECOMPUTED` (draft slot flags + next stage), `TURN_SUMMARY` (lane/stage path), `CORE_FAST_PATH_COMPLETE` (single-message parse), `CORE_FINALIZED` — see `handleInboundCore.js` + `appendEventLog` / `emit` pairs.
+**Brain (core) examples:** `EXPECT_RECOMPUTED` (draft slot flags + next stage), `TURN_SUMMARY` (lane/stage path), `CORE_FAST_PATH_COMPLETE` (single-message parse), `CORE_FINALIZED`, **`ATTACH_CLARIFY_REQUIRED`** (unit mismatch / ambiguous attach — `conversation_ctx.pending_expected=ATTACH_CLARIFY`), **`INTAKE_START_NEW`** (explicit new-issue restart) — see `handleInboundCore.js` + `appendEventLog` / `emit` pairs.
 
 ---
 
@@ -52,7 +52,7 @@ Set `STRUCTURED_LOG=0` in `.env` (rarely needed).
 
 Table `event_log` — **002_event_log.sql**. Inserts via **`appendEventLog`** (`src/dal/appendEventLog.js`) when Supabase is configured. Inbound Telegram requests merge **`getInboundLogCtx()`** into `payload.ctx` (actor, chat, `tg_user_id`, preview) so rows match stdout filtering.
 
-**Also in DB (in addition to stdout `emitTimed`):** schedule policy (`SCHEDULE_PARSED`, `SCHEDULE_POLICY_CHECK`, `SCHEDULE_POLICY_OK` / `REJECT` / `ERROR`), intake (`INTAKE_PARSE_BRANCH`, `INTAKE_BRAIN_PATH`), staff resolution summaries, core milestones (`CORE_*`, `LANE_DECIDED`, …). **Router/adapter lines** may still be stdout-only unless duplicated — goal remains parity of *shape* where it matters for incidents.
+**Also in DB (in addition to stdout `emitTimed`):** schedule policy (`SCHEDULE_PARSED`, `SCHEDULE_POLICY_CHECK`, `SCHEDULE_POLICY_OK` / `REJECT` / `ERROR`), intake (`INTAKE_PARSE_BRANCH`, `INTAKE_BRAIN_PATH`), staff resolution summaries, core milestones (`CORE_*`, `LANE_DECIDED`, …), **Outgate** (`log_kind: outgate` — `OUTBOUND_SENT` / `OUTBOUND_FAILED` / `OUTBOUND_SKIPPED`), router **`LANE_STUB`** (vendor/system lane — no maintenance core). **Router/adapter lines** may still be stdout-only unless duplicated — goal remains parity of *shape* where it matters for incidents.
 
 **Ops UI:** `GET /dashboard` + `GET /api/ops/event-log` — see **[HANDOFF_LOG.md](./HANDOFF_LOG.md)** (2026-04-11).
 
@@ -107,4 +107,4 @@ Keep this list aligned with [BRAIN_PORT_MAP.md](./BRAIN_PORT_MAP.md); do **not**
 
 - **Stdout (`emit` / `emitTimed`):** Telegram normalize, dedupe, router precursor/lane, core brain, intake LLM skip/request/response, schedule parse + policy, etc. — grep-friendly `event` names in `src/logging/structuredLog.js` header comment.
 - **`event_log` (DB):** `LANE_DECIDED`, core `CORE_*`, finalize, schedule capture, **full schedule policy chain** (`applyPreferredWindowByTicketKey`), **intake branch + brain path** (fast/compile path), **staff** lifecycle rows with resolution summaries — plus any step that calls `appendEventLog` in `src/`.
-- **Gaps:** Some adapter-only lines remain **stdout-only**; not every `emit` has a DB twin. **Post-finalize schedule capture** runs `parseMaintenanceDraftAsync` before merge so `INTAKE_PARSE_BRANCH` / `INTAKE_BRAIN_PATH` align with other core turns; **merge** still uses sync `parseMaintenanceDraft` inside `mergeMaintenanceDraftTurn` for slot fill — see **[PARITY_LEDGER.md](./PARITY_LEDGER.md)** §1–2.
+- **Gaps:** Some adapter-only lines remain **stdout-only**; not every `emit` has a DB twin. **Post-finalize schedule capture** runs `parseMaintenanceDraftAsync` before merge so `INTAKE_PARSE_BRANCH` / `INTAKE_BRAIN_PATH` align with other core turns; **merge** still uses sync `parseMaintenanceDraft` inside `mergeMaintenanceDraftTurn` for slot fill — see **[PARITY_LEDGER.md](./PARITY_LEDGER.md)** §1–2. **Attach clarify:** latch + prompt + merge-side classify are in; **full GAS-style resolution** (next-turn `1`/`2` handling, clearing `pending_expected`, re-merge guards) is still partial — expect more `appendEventLog` events as that port completes.

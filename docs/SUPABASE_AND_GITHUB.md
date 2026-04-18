@@ -29,4 +29,4 @@ Use your normal branch (`master` / `main`). If `git push` asks for auth, use Git
 
 ## Optional: Supabase CLI later
 
-Install CLI, `supabase link` to the project, then `supabase db push` can apply migrations from this folder without manual paste — not required for Phase 0.
+Install CLI, `supabase link` to the project, then `supabase db push` can apply migrations from this folder without manual paste — optional; manual SQL Editor paste remains valid.

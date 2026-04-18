@@ -14,6 +14,7 @@ Run SQL files in **numeric order** in the Supabase SQL Editor (same project as `
 | **008_properties_dal_columns.sql** | `properties.legacy_property_id`, `address`, `short_name` | **`getPropertyByCode`** — run if you have **003** (and **006**) but have **not** run **004** yet |
 | **009_property_aliases.sql** | `property_aliases` (config-driven per-property aliases) | Intake property detection (`listPropertiesForMenu` → `detectPropertyFromBody`) uses this when present; safe fallback if absent |
 | **010_property_aliases_seed_from_properties.sql** | Optional seed helper for `property_aliases` from `properties.short_name` / `display_name` / controlled address token | Optional convenience after 009; safe idempotent seed (`ON CONFLICT DO NOTHING`) |
+| **011_sms_opt_out.sql** | `sms_opt_out` — compliance STOP/START persistence | **`src/dal/smsOptOut.js`**, **`src/inbound/runInboundPipeline.js`** (SMS-only branch) |
 
 ### Minimum paths
 

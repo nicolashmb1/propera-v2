@@ -7,6 +7,139 @@
 
 ---
 
+## 2026-04-18 — Documentation sync (orchestrator + outgate + README reality)
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **README / AGENTS / BRAIN_PORT_MAP** | Current scope: Twilio + Telegram, `runInboundPipeline`, `routeInboundDecision`, Outgate `dispatchOutbound`, migrations **011** — no “Phase 0 / no DB” drift. |
+| **PORTING_FROM_GAS** | Rows for orchestrator + outgate partial port. |
+| **ORCHESTRATOR_ROUTING** | Linked from README, AGENTS, BRAIN_PORT_MAP, PROPERTY_POLICY_PARITY, PARITY_LEDGER §9. |
+| **STRUCTURED_LOGS** | Documents `log_kind: outgate`, `LANE_STUB`. |
+| **PROPERA_V2_GAS_EXIT_PLAN** | `gateway-router-telegram-first` todo set **in_progress** with accurate remainder. |
+| **TESTING_STRATEGY** | `routeInboundDecision` in unit-test row. |
+| **ADAPTER_ONBOARDING** | Outbound-only-via-outgate rule. |
+
+### Commands
+
+```bash
+cd propera-v2
+npm test
+```
+
+---
+
+## 2026-04-18 — `recomputeDraftExpected` expiry parity + tests
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`expiryMinutesForExpectedStage`** | GAS `11_TICKET_FINALIZE_ENGINE.gs` ~174: 30 min for `SCHEDULE` / `SCHEDULE_PRETICKET`, else 10; `null` when `next` is empty. |
+| **`recomputeDraftExpected` return** | Adds **`expiryMinutes`** for callers / logs. |
+| **`handleInboundCore`** | `computePendingExpiresAtIso` uses **`expiryMinutesForExpectedStage`** (single source with recompute). |
+| **Tests** | Post-ticket + `hasSchedule` → empty `next`; `skipScheduling` → `EMERGENCY_DONE` on post-ticket schedule branch; expiry minutes assertions. |
+
+### Commands
+
+```bash
+cd propera-v2
+npm test
+```
+
+---
+
+## 2026-04-18 — ATTACH_CLARIFY resolution path (conversation_ctx + core)
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`parseAttachClarifyReply.js`** | GAS `16_ROUTER_ENGINE.gs` ~470–482: digits `1`/`2`, NL `same request` / `new one` / etc., with stripped remainder. |
+| **`conversationCtxAttach.js`** | `getConversationCtxAttach`, `clearAttachClarifyLatch` — clear `pending_expected` after resolution. |
+| **`handleInboundCore.js`** | If `conversation_ctx.pending_expected === ATTACH_CLARIFY`, resolve before multi-turn merge; **`start_new`** clears session + restarts like existing latch; **`attach`** sets `attachClarifyOutcome` + `effectiveBody`. |
+| **`intakeAttachClassify.js`** | `attachClarifyOutcome: 'attach'` skips unit-mismatch **`clarify_attach_vs_new`** and handles digit/phrase attach class (`PROPERA_MAIN_BACKUP` class). |
+| **`mergeMaintenanceDraft.js`** | Passes `attachClarifyOutcome` through. |
+| **Tests** | `parseAttachClarifyReply.test.js`, merge bypass test. |
+
+### Commands
+
+```bash
+cd propera-v2
+npm test
+```
+
+---
+
+## 2026-04-18 — GAS `parseIssueDeterministic_` port + intake fallback alignment
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`issueParseDeterministic.js`** | Full port of GAS `issueParseDeterministic_` (`09_ISSUE_CLASSIFICATION_ENGINE.gs`) with bundled helpers from `14_DIRECTORY_SESSION_DAL.gs` / `16_ROUTER_ENGINE.gs` (`looksActionableIssue_`, `isScheduleWindowLike_`, `looksLikeAckOnly_`, etc.). Category via `localCategoryFromText` (`ticketDefaults.js`). |
+| **`properaBuildIntakePackage.js`** | Deterministic path now matches GAS `properaFallbackStructuredSignalFromDeterministicParse_` (`07_PROPERA_INTAKE_PACKAGE.gs`): multi-clause **issues** array, confidence **0.35**, `issueMeta` from parsed output (`issue_parse_deterministic`). Removed ad-hoc `parseIssueDeterministicV2` strip-only helper. |
+| **Tests** | `tests/issueParseDeterministic.test.js` |
+| **Docs** | **`PARITY_LEDGER.md`** §1 + §7, **`PORTING_FROM_GAS.md`** table |
+
+### Commands
+
+```bash
+cd propera-v2
+npm test
+```
+
+---
+
+## 2026-04-17 — AGENTS.md bootstrap roadmap (execution order)
+
+### Done
+
+- Added **Bootstrap roadmap** section to **`AGENTS.md`**: numbered priorities (maintenance parity → router front door → compile/intake truth → tests → staff lifecycle → media/OCR → docs), aligned with **`PARITY_LEDGER.md` §7** and the “continue V2” workflow.
+
+### Commands
+
+```bash
+cd propera-v2
+npm test
+```
+
+---
+
+## 2026-04-17 — Session wrap (docs sync + maintenance intake parity)
+
+### Shipped this session (high level)
+
+| Area | Notes |
+|------|--------|
+| **Intake merge / session** | `issue_buf_json` read/write + accumulation; deterministic **attach classify** port (`intakeAttachClassify.js`) wired into `mergeMaintenanceDraftTurn`; `handleInboundCore` handles **`ATTACH_CLARIFY`** (`conversation_ctx.pending_expected`) and **`start_new_intake`** restart path. |
+| **Property grounding** | DB-backed menu rows now include `ticket_prefix`, `short_name`, `address`; variant expansion closer to GAS `buildPropertyVariants_` (still **PARTIAL** — see ledger). |
+| **Multi-ticket finalize** | Split finalize with regression guard so split mode never also emits the full combined string as its own ticket. |
+| **Regression net** | `npm test` — **85** passing at session end. |
+
+### Docs updated (same session)
+
+| File | Why |
+|------|-----|
+| **`PARITY_LEDGER.md`** | Merge + session rows reflect attach classify + issue buffer progress. |
+| **`PORTING_FROM_GAS.md`** | Maps `properaIntakeAttachClassify_` → V2 partial port. |
+| **`BRAIN_PORT_MAP.md`**, **`PROPERA_V2_GAS_EXIT_PLAN.md`**, **`AGENTS.md`**, **`README.md`**, **`OUTSIDE_CURSOR.md`**, **`STRUCTURED_LOGS.md`** | Handoff truth + ops notes aligned with code (session-end sync). |
+
+### Next session (recommended order)
+
+1. **`ATTACH_CLARIFY` resolution path** in V2 core (digits `1/2`, same-request / new-issue phrases) — still partial vs GAS router latch.  
+2. **`PARITY_LEDGER.md` §7** remaining rows: full compile/intake + full router graph (out of scope for this session).  
+
+### Commands
+
+```bash
+cd propera-v2
+npm test
+```
+
+---
+
 ## 2026-04-17 — Channel-agnostic media bridge (adapter-neutral core)
 
 ### Done
@@ -24,6 +157,9 @@
 | **Explicit-only property grounding** | Added `resolvePropertyExplicitOnly` parity slice and wired it into deterministic compile intake + property-reply resolution; avoids broad contains false-positives (`morning` no longer maps to `MORRIS` in compile path unless explicit property mention). |
 | **Session/recompute parity slice** | Ported active-ticket recompute guard (continuation whitelist) and session expiry sync (`expires_at_iso` 10/30 min by expected stage) in V2 core/session upsert path. |
 | **Multi-ticket creation slice** | Added deterministic issue grouping (`buildIssueTicketGroups`) and finalize loop so distinct issue families create multiple tickets, while same-system sub-issues stay bundled (e.g. AC filter + AC drain => one ticket group). |
+| **Maintenance parity hardening (property + merge)** | Ported more GAS-like property variants into V2 grounding (`ticket_prefix`, `short_name`, `address` tokens + stripped name variants from DB-backed `properties`) and added slot-stage issue capture in merge so actionable issue text is not dropped during PROPERTY/UNIT/SCHEDULE collection turns. |
+| **Issue buffer parity slice** | Wired `issue_buf_json` through V2 intake session/core merge path: read from session, accumulate distinct issue snippets during slot collection, persist on upsert, and include buffered issue text in finalize split/e-mergency evaluation input. |
+| **Attach classifier parity slice** | Ported deterministic GAS `properaIntakeAttachClassify_` rules into V2 merge (`intakeAttachClassify.js`): schedule-only turns no longer append as issues, pure property/unit slot replies stay slot-only, continuation split can append residual symptom, unit mismatch without explicit new markers surfaces `clarify_attach_vs_new` and sets `conversation_ctx.pending_expected=ATTACH_CLARIFY` via `conversationCtxAttach.js`. |
 
 ### Next / open
 

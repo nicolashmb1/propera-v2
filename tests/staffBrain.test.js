@@ -4,7 +4,10 @@
 const { test, describe } = require("node:test");
 const assert = require("node:assert/strict");
 const { resolveTargetWorkItemForStaff } = require("../src/brain/staff/resolveTargetWorkItemForStaff");
-const { normalizeStaffOutcome } = require("../src/brain/staff/normalizeStaffOutcome");
+const { normalizeStaffOutcome, parsePartsEta } = require("../src/brain/staff/normalizeStaffOutcome");
+const {
+  staffExtractScheduleRemainderFromTarget,
+} = require("../src/brain/staff/lifecycleExtract");
 
 describe("resolveTargetWorkItemForStaff", () => {
   test("single open WI — owner match", () => {
@@ -40,6 +43,83 @@ describe("resolveTargetWorkItemForStaff", () => {
     assert.equal(r.wiId, "WI_X2");
     assert.equal(r.reason, "WI_ID_MATCH");
   });
+
+  test("multi candidate — issue hint match (GAS scoreCandidatesByIssueHints_)", () => {
+    const openWis = [
+      {
+        workItemId: "WI_A",
+        unitId: "12",
+        propertyId: "PENN",
+        metadata_json: { issueSummary: "Kitchen sink clogged" },
+      },
+      {
+        workItemId: "WI_B",
+        unitId: "12",
+        propertyId: "PENN",
+        metadata_json: { issueSummary: "Toilet running" },
+      },
+    ];
+    const r = resolveTargetWorkItemForStaff({
+      openWis,
+      bodyTrim: "sink clogged done",
+      ctx: null,
+      knownPropertyCodesUpper: new Set(["PENN"]),
+    });
+    assert.equal(r.wiId, "WI_A");
+    assert.equal(r.reason, "ISSUE_HINT_MATCH");
+  });
+
+  test("CTX fallback when pending id not in open list but DB row is open + owner match", () => {
+    const openWis = [
+      { workItemId: "WI_OTHER", unitId: "1", propertyId: "PENN", metadata_json: {} },
+      { workItemId: "WI_Z", unitId: "2", propertyId: "PENN", metadata_json: {} },
+    ];
+    /** Property + unit filter yields 0 matches so resolver reaches CTX (not CLARIFICATION_MULTI_MATCH). */
+    const r = resolveTargetWorkItemForStaff({
+      openWis,
+      bodyTrim: "PENN unit 999 done",
+      ctx: { pending_work_item_id: "WI_CTX" },
+      knownPropertyCodesUpper: new Set(["PENN"]),
+      staffId: "STAFF_1",
+      ctxPendingWi: {
+        status: "OPEN",
+        owner_id: "STAFF_1",
+      },
+    });
+    assert.equal(r.wiId, "WI_CTX");
+    assert.equal(r.reason, "CTX");
+  });
+
+  test("CTX fallback does not steal another owner ticket", () => {
+    const openWis = [
+      { workItemId: "WI_OTHER", unitId: "1", propertyId: "PENN", metadata_json: {} },
+      { workItemId: "WI_Z", unitId: "2", propertyId: "PENN", metadata_json: {} },
+    ];
+    const r = resolveTargetWorkItemForStaff({
+      openWis,
+      bodyTrim: "PENN unit 999 done",
+      ctx: { pending_work_item_id: "WI_CTX" },
+      knownPropertyCodesUpper: new Set(["PENN"]),
+      staffId: "STAFF_1",
+      ctxPendingWi: {
+        status: "OPEN",
+        owner_id: "STAFF_2",
+      },
+    });
+    assert.equal(r.wiId, "");
+  });
+});
+
+describe("staffExtractScheduleRemainderFromTarget (GAS staffExtractScheduleRemainderFromTarget_)", () => {
+  test("strips property code and unit, leaves schedule phrase", () => {
+    const r = staffExtractScheduleRemainderFromTarget(
+      "PENN unit 12 tomorrow 9-11am",
+      "12",
+      "PENN"
+    );
+    assert.match(r, /tomorrow/i);
+    assert.match(r, /9/);
+  });
 });
 
 describe("normalizeStaffOutcome", () => {
@@ -50,5 +130,17 @@ describe("normalizeStaffOutcome", () => {
     const o = normalizeStaffOutcome("waiting on parts");
     assert.equal(typeof o, "object");
     assert.equal(o.outcome, "WAITING_PARTS");
+  });
+
+  test("parts ETA — slash date (GAS lifecycleParsePartsEta_)", () => {
+    const eta = parsePartsEta("waiting on parts eta 4/17/2026");
+    assert.ok(eta.partsEtaAt);
+    assert.match(eta.partsEtaText, /4\/17/);
+  });
+
+  test("parts ETA — month name", () => {
+    const eta = parsePartsEta("waiting for parts by april 20");
+    assert.ok(eta.partsEtaAt);
+    assert.match(eta.partsEtaText, /april/i);
   });
 });

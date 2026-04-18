@@ -1,6 +1,9 @@
 /**
  * GAS `properaCanonizeStructuredSignal_` — subset sufficient for V2 package build
  * (`07_PROPERA_INTAKE_PACKAGE.gs` ~1287–1397).
+ *
+ * Ported: actor/turn/safety/issues/schedule/confidence; strict `propertyCode` grounding vs message text.
+ * Not ported: full GAS vision/CIG slots, media queue semantics, every legacy template field — see PARITY_LEDGER §2.
  */
 const { properaStructuredSignalEmpty } = require("./structuredSignal");
 

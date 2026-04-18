@@ -1,5 +1,36 @@
 /**
  * Tenant-visible prompts for missing draft slots — GAS outgate class (simplified copy).
+ * Stable keys for Outgate / MessageSpec binding (facts stay in brain; copy can evolve).
+ */
+const MAINTENANCE_TEMPLATE = {
+  ISSUE: "MAINTENANCE_ISSUE",
+  PROPERTY_MENU: "MAINTENANCE_PROPERTY_MENU",
+  UNIT: "MAINTENANCE_UNIT",
+  SCHEDULE_ASK: "MAINTENANCE_SCHEDULE_ASK",
+  EMERGENCY_DONE: "MAINTENANCE_EMERGENCY_DONE",
+  ATTACH_CLARIFY: "MAINTENANCE_ATTACH_CLARIFY",
+  FALLBACK: "MAINTENANCE_FALLBACK",
+};
+
+/**
+ * Map `recomputeDraftExpected` slot → Outgate template id (not final text).
+ * @param {string} next
+ * @returns {string}
+ */
+function maintenanceTemplateKeyForNext(next) {
+  const n = String(next || "").toUpperCase();
+  if (n === "ISSUE") return MAINTENANCE_TEMPLATE.ISSUE;
+  if (n === "PROPERTY") return MAINTENANCE_TEMPLATE.PROPERTY_MENU;
+  if (n === "UNIT") return MAINTENANCE_TEMPLATE.UNIT;
+  if (n === "SCHEDULE" || n === "SCHEDULE_PRETICKET") {
+    return MAINTENANCE_TEMPLATE.SCHEDULE_ASK;
+  }
+  if (n === "EMERGENCY_DONE") return MAINTENANCE_TEMPLATE.EMERGENCY_DONE;
+  if (n === "ATTACH_CLARIFY") return MAINTENANCE_TEMPLATE.ATTACH_CLARIFY;
+  return MAINTENANCE_TEMPLATE.FALLBACK;
+}
+
+/**
  * @param {string} next — from recomputeDraftExpected
  * @param {Array<{ code: string, display_name: string }>} propertiesList
  */
@@ -48,7 +79,19 @@ function buildMaintenancePrompt(next, propertiesList) {
     );
   }
 
+  if (n === "ATTACH_CLARIFY") {
+    return (
+      "Quick check: is this about the same open request we are already working on, " +
+      "or a separate new issue?\n\n" +
+      "Reply 1 for same request, or 2 for a separate new issue."
+    );
+  }
+
   return "Thanks — we need a bit more information to open a ticket.";
 }
 
-module.exports = { buildMaintenancePrompt };
+module.exports = {
+  buildMaintenancePrompt,
+  maintenanceTemplateKeyForNext,
+  MAINTENANCE_TEMPLATE,
+};

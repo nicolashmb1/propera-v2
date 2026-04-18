@@ -73,7 +73,7 @@ Assert the right:
 
 | Layer | What it proves | Speed | Default `npm test` |
 |-------|----------------|-------|---------------------|
-| **Pure unit** | Pure functions: `recomputeDraftExpected`, `mergeMaintenanceDraftTurn`, `parseMaintenanceDraft`, `resolvePropertyFromReply`, router precursors, `normMsg`, etc. | Fastest | Yes |
+| **Pure unit** | Pure functions: `recomputeDraftExpected`, `mergeMaintenanceDraftTurn`, `parseMaintenanceDraft`, `resolvePropertyFromReply`, router precursors, **`routeInboundDecision`** (`computeCanEnterCore`, lane stubs), `normMsg`, etc. | Fastest | Yes |
 | **Scenario / golden** | Multi-turn stories **in memory**: fixture → merge → recompute → assert stage + draft; optional stubbed finalize | Fast | Yes (grow over time) |
 | **Replay / parity** | Normalized transcripts or golden inbounds replayed through the **same stack** as prod; lane + expected-next + no duplicate handling | Medium | Yes or separate `npm run test:replay` when heavy |
 | **Integration** | Real Supabase dev DB: `intake_sessions`, tickets, `event_log`, dedupe, idempotency | Slower | Separate CI job |

@@ -9,7 +9,7 @@ This folder is the **new** Propera server. **Production today** is still Google 
 - Edit Node code under `src/`.
 - Run the server locally (see below).
 - Commit `propera-v2/` to git when you are happy.
-- **Keep docs current:** when behavior or migrations change, update **[docs/BRAIN_PORT_MAP.md](docs/BRAIN_PORT_MAP.md)** and **[docs/PROPERA_V2_GAS_EXIT_PLAN.md](docs/PROPERA_V2_GAS_EXIT_PLAN.md)** (and **[docs/OUTSIDE_CURSOR.md](docs/OUTSIDE_CURSOR.md)** if operators need new SQL/env steps). Logging / flight-recorder: **[docs/STRUCTURED_LOGS.md](docs/STRUCTURED_LOGS.md)**. **Recent session notes:** **[docs/HANDOFF_LOG.md](docs/HANDOFF_LOG.md)**.
+- **Keep docs current:** when behavior or migrations change, update **[docs/BRAIN_PORT_MAP.md](docs/BRAIN_PORT_MAP.md)**, **[docs/PARITY_LEDGER.md](docs/PARITY_LEDGER.md)**, and **[docs/PROPERA_V2_GAS_EXIT_PLAN.md](docs/PROPERA_V2_GAS_EXIT_PLAN.md)** (and **[docs/OUTSIDE_CURSOR.md](docs/OUTSIDE_CURSOR.md)** if operators need new SQL/env steps). **Inbound routing (order, core guards, lane stubs):** **[docs/ORCHESTRATOR_ROUTING.md](docs/ORCHESTRATOR_ROUTING.md)**. Logging / flight-recorder: **[docs/STRUCTURED_LOGS.md](docs/STRUCTURED_LOGS.md)**. **Recent session notes:** **[docs/HANDOFF_LOG.md](docs/HANDOFF_LOG.md)**.
 
 ## Adding a new channel
 
@@ -62,16 +62,19 @@ Something else is using **8080** (often a previous `node` you forgot to stop).
    `netstat -ano | findstr :8080` — note the **PID** in the last column, then if it is `node.exe`:  
    `taskkill /PID <that_number> /F`
 
-## Phase 0 scope
+## Current runtime scope (what V2 does today)
 
-- Express app with `GET /` and `GET /health`.
+- Express app: `GET /`, `GET /health`, **`POST /webhooks/telegram`**, **`POST /webhooks/twilio`**, **`POST /webhooks/sms`** (Twilio SMS + WhatsApp share the Twilio handler).
+- **Postgres (Supabase)** when `SUPABASE_*` are set — see **`supabase/migrations/README.md`** for required migrations.
+- **Shared inbound pipeline:** **`src/inbound/runInboundPipeline.js`** — staff context → **precursors** → **lane** (`src/inbound/routeInboundDecision.js`) → SMS compliance / opt-out (SMS only) → optional **vendor/system lane stub** → **`handleInboundCore`** (maintenance) → **Outgate** **`dispatchOutbound`** (Telegram or Twilio). **Do not** call transport senders from brain code. Order and guards: **`docs/ORCHESTRATOR_ROUTING.md`**.
 - Dockerfile for later Cloud Run deploy.
-- No database yet; no Twilio yet.
 
 **Identity (dev):** After **`003_identity.sql`** (and **`008_properties_dal_columns.sql`** or **`004_roster_and_policy_seed.sql`** so `properties.legacy_property_id` exists), try  
 `GET /api/dev/resolve-actor?phone=+19085550101` — expects **STAFF** for the seeded dev contact (edit seed SQL to match your real test phone). Migration order: **`supabase/migrations/README.md`**.
 
-**Telegram on V2:** `POST /webhooks/telegram` — validates optional `TELEGRAM_WEBHOOK_SECRET`, normalizes to **InboundSignal**, upserts **`telegram_chat_link`** (migration **005**), then **router precursors + lane** (`docs/BRAIN_PORT_MAP.md`). With **`CORE_ENABLED=1`** and DB + migrations **006** (+ **008** or **004** for property columns), **`handleInboundCore`** can create **tickets** / **work_items** (maintenance slice). Optional **`TELEGRAM_OUTBOUND_ENABLED=1`** + **`TELEGRAM_BOT_TOKEN`** sends replies in chat (transport only).
+**Telegram on V2:** `POST /webhooks/telegram` — validates optional `TELEGRAM_WEBHOOK_SECRET`, normalizes to **InboundSignal**, upserts **`telegram_chat_link`** (migration **005**), then **same pipeline as SMS** (`runInboundPipeline`). With **`CORE_ENABLED=1`** and DB + migrations **006** (+ **008** or **004** for property columns), **`handleInboundCore`** can create **tickets** / **work_items** (maintenance slice), run deterministic **attach classify** during merge, and latch **`ATTACH_CLARIFY`** on **`conversation_ctx`** when GAS would ask “same issue vs new?” (full GAS parity still tracked in **`docs/PARITY_LEDGER.md`**). Optional **`TELEGRAM_OUTBOUND_ENABLED=1`** + **`TELEGRAM_BOT_TOKEN`** sends replies via Outgate.
+
+**Twilio SMS/WhatsApp on V2:** `POST /webhooks/twilio` or `/webhooks/sms` — builds **`RouterParameter`** from form body, **`transportChannel`** `sms` vs `whatsapp`; TCPA compliance + **`sms_opt_out`** (migration **011**) apply **only to SMS**, not WhatsApp. See **`docs/ORCHESTRATOR_ROUTING.md`** and **`PROPERTY_POLICY_PARITY.md`** (SMS section).
 
 **Moving the bot webhook from GAS to V2 (one bot = one webhook):**
 

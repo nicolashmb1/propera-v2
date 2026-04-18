@@ -35,6 +35,39 @@ function parsePartsEta(bodyTrim) {
       return out;
     }
   }
+  const md =
+    t.match(
+      /\b(?:eta|expected|by|on|delivery)\s*[:\s]*(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/i
+    ) || t.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
+  if (md) {
+    const m = parseInt(md[1], 10);
+    const day = parseInt(md[2], 10);
+    let y = md[3] ? parseInt(md[3], 10) : year;
+    if (md[3] && md[3].length <= 2) y = 2000 + (y % 100);
+    const d4 = new Date(y, m - 1, day);
+    if (isFinite(d4.getTime()) && d4.getMonth() === m - 1) {
+      out.partsEtaAt = d4;
+      out.partsEtaText = md[0].slice(0, 30);
+      return out;
+    }
+  }
+  const monthNames =
+    "january|february|march|april|may|june|july|august|september|october|november|december";
+  const mon = new RegExp(
+    "\\b(" + monthNames + ")\\s+(\\d{1,2})(?:\\s*,?\\s*(\\d{4}))?\\b",
+    "i"
+  ).exec(t);
+  if (mon) {
+    const midx = monthNames.split("|").indexOf(mon[1].toLowerCase());
+    const day2 = parseInt(mon[2], 10);
+    const y2 = mon[3] ? parseInt(mon[3], 10) : year;
+    const d5 = new Date(y2, midx, day2);
+    if (isFinite(d5.getTime())) {
+      out.partsEtaAt = d5;
+      out.partsEtaText = mon[0].slice(0, 30);
+      return out;
+    }
+  }
   return out;
 }
 

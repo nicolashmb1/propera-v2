@@ -25,14 +25,26 @@ const {
   setPendingExpectedSchedule,
   clearPendingExpected,
 } = require("../../dal/conversationCtxSchedule");
+const {
+  setPendingAttachClarify,
+  getConversationCtxAttach,
+  clearAttachClarifyLatch,
+} = require("../../dal/conversationCtxAttach");
+const { parseAttachClarifyReply } = require("../gas/parseAttachClarifyReply");
 const { setWorkItemSubstate } = require("../../dal/workItemSubstate");
 const {
   parseMaintenanceDraftAsync,
   isMaintenanceDraftComplete,
 } = require("./parseMaintenanceDraft");
 const { mergeMaintenanceDraftTurn } = require("./mergeMaintenanceDraft");
-const { recomputeDraftExpected } = require("./recomputeDraftExpected");
-const { buildMaintenancePrompt } = require("./buildMaintenancePrompt");
+const {
+  recomputeDraftExpected,
+  expiryMinutesForExpectedStage,
+} = require("./recomputeDraftExpected");
+const {
+  buildMaintenancePrompt,
+  maintenanceTemplateKeyForNext,
+} = require("./buildMaintenancePrompt");
 const { inferEmergency } = require("../../dal/ticketDefaults");
 const { buildIssueTicketGroups } = require("./splitIssueGroups");
 
@@ -48,11 +60,12 @@ async function loadPropertyCodesUpper(sb) {
 
 function draftFlagsFromSlots(d) {
   const issue = String(d.draft_issue || "").trim();
+  const issueBuf = Array.isArray(d.draft_issue_buf_json) ? d.draft_issue_buf_json : [];
   const prop = String(d.draft_property || "").trim();
   const unit = String(d.draft_unit || "").trim();
   const sched = String(d.draft_schedule_raw || "").trim();
   return {
-    hasIssue: issue.length >= 2,
+    hasIssue: issue.length >= 2 || issueBuf.length >= 1,
     hasProperty: !!prop,
     hasUnit: !!unit,
     hasSchedule: !!sched,
@@ -60,9 +73,8 @@ function draftFlagsFromSlots(d) {
 }
 
 function computePendingExpiresAtIso(next) {
-  const n = String(next || "").trim().toUpperCase();
-  if (!n) return "";
-  const mins = n === "SCHEDULE" || n === "SCHEDULE_PRETICKET" ? 30 : 10;
+  const mins = expiryMinutesForExpectedStage(next);
+  if (mins == null) return "";
   return new Date(Date.now() + mins * 60 * 1000).toISOString();
 }
 
@@ -91,6 +103,28 @@ function buildFinalizeGroups(issueText) {
   }
   if (!cleaned.length) return [{ key: "single", issueText: String(issueText || "").trim() }];
   return cleaned;
+}
+
+/** Outgate hints — templateKey is stable; text still built by brain until MessageSpec bind. */
+function outgateMeta(templateKey, extra) {
+  return { outgate: { templateKey, ...(extra || {}) } };
+}
+
+function issueTextForFinalize(draftIssue, issueBuf) {
+  const base = String(draftIssue || "").trim();
+  const extras = Array.isArray(issueBuf)
+    ? issueBuf.map((x) => String(x || "").trim()).filter(Boolean)
+    : [];
+  if (!base && !extras.length) return "";
+  const seen = new Set();
+  const out = [];
+  for (const x of [base, ...extras]) {
+    const k = normalizeIssueForCompare(x);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(x);
+  }
+  return out.join(" | ").slice(0, 900);
 }
 
 /**
@@ -126,6 +160,7 @@ async function handleInboundCore(o) {
       ok: false,
       brain: "core_skip",
       replyText: "Database is not configured; cannot create tickets in V2.",
+      ...outgateMeta("MAINTENANCE_ERROR_DB"),
     };
   }
 
@@ -134,6 +169,7 @@ async function handleInboundCore(o) {
       ok: false,
       brain: "core_skip",
       replyText: "Missing actor (From / _phoneE164).",
+      ...outgateMeta("MAINTENANCE_ERROR_NO_ACTOR"),
     };
   }
 
@@ -150,6 +186,7 @@ async function handleInboundCore(o) {
       ok: true,
       brain: "core_empty_body",
       replyText: "",
+      ...outgateMeta("OUTBOUND_SKIP_EMPTY"),
     };
   }
 
@@ -169,6 +206,102 @@ async function handleInboundCore(o) {
   const known = await loadPropertyCodesUpper(sb);
   const propertiesList = await listPropertiesForMenu();
   const sessionAtStart = await getIntakeSession(actorKey);
+
+  let effectiveBody = bodyText;
+  let attachClarifyOutcomePass = "";
+  const ctxAttach = await getConversationCtxAttach(actorKey);
+  if (
+    ctxAttach &&
+    String(ctxAttach.pending_expected || "").trim().toUpperCase() === "ATTACH_CLARIFY"
+  ) {
+    const pr = parseAttachClarifyReply(bodyText);
+    if (!pr.outcome) {
+      await appendEventLog({
+        traceId,
+        event: "ATTACH_CLARIFY_UNRESOLVED",
+        payload: { len: bodyText.length },
+      });
+      return {
+        ok: true,
+        brain: "attach_clarify_repeat",
+        replyText: buildMaintenancePrompt("ATTACH_CLARIFY", propertiesList),
+        ...outgateMeta(maintenanceTemplateKeyForNext("ATTACH_CLARIFY")),
+      };
+    }
+    await clearAttachClarifyLatch(actorKey);
+    await appendEventLog({
+      traceId,
+      event: "ATTACH_CLARIFY_RESOLVED",
+      payload: { outcome: pr.outcome },
+    });
+    emitTimed(traceStartMs, {
+      level: "info",
+      trace_id: traceId,
+      log_kind: "brain",
+      event: "ATTACH_CLARIFY_RESOLVED",
+      data: { outcome: pr.outcome, crumb: "attach_clarify_resolved" },
+    });
+    if (pr.outcome === "start_new") {
+      await clearIntakeSessionDraft(actorKey);
+      const restartBody =
+        pr.stripped && pr.stripped.length >= 4 ? pr.stripped : "";
+      const fastRestart = await parseMaintenanceDraftAsync(restartBody, known, {
+        traceId,
+        traceStartMs,
+        propertiesList,
+      });
+      const restarted = mergeMaintenanceDraftTurn({
+        bodyText: restartBody,
+        expected: "ISSUE",
+        draft_issue: "",
+        draft_property: "",
+        draft_unit: "",
+        draft_schedule_raw: "",
+        draft_issue_buf_json: [],
+        knownPropertyCodesUpper: known,
+        propertiesList,
+        parsedDraft: fastRestart,
+      });
+      const flagsNew = draftFlagsFromSlots(restarted);
+      const recNew = recomputeDraftExpected({
+        hasIssue: flagsNew.hasIssue,
+        hasProperty: flagsNew.hasProperty,
+        hasUnit: flagsNew.hasUnit,
+        hasSchedule: flagsNew.hasSchedule,
+        pendingTicketRow: 0,
+        skipScheduling: false,
+        isEmergencyContinuation: false,
+        openerNext:
+          fastRestart && fastRestart.openerNext ? fastRestart.openerNext : "",
+      });
+      const nextNew = recNew.next;
+      const pendingExpiresNew = computePendingExpiresAtIso(nextNew);
+      await upsertIntakeSession({
+        phone_e164: actorKey,
+        stage: nextNew,
+        expected: nextNew,
+        lane: "MAINTENANCE",
+        draft_issue: restarted.draft_issue,
+        draft_property: restarted.draft_property,
+        draft_unit: restarted.draft_unit,
+        draft_schedule_raw: restarted.draft_schedule_raw,
+        issue_buf_json: restarted.draft_issue_buf_json,
+        active_artifact_key: "",
+        expires_at_iso: pendingExpiresNew,
+      });
+      return {
+        ok: true,
+        brain: "intake_start_new",
+        draft: restarted,
+        expected: nextNew,
+        replyText: buildMaintenancePrompt(nextNew, propertiesList),
+        ...outgateMeta(maintenanceTemplateKeyForNext(nextNew)),
+      };
+    }
+    attachClarifyOutcomePass = "attach";
+    effectiveBody =
+      pr.stripped && pr.stripped.length >= 4 ? pr.stripped : bodyText;
+  }
 
   const expStart = String(
     sessionAtStart && sessionAtStart.expected != null ? sessionAtStart.expected : ""
@@ -194,6 +327,7 @@ async function handleInboundCore(o) {
       draft_property: sessionAtStart ? sessionAtStart.draft_property : "",
       draft_unit: sessionAtStart ? sessionAtStart.draft_unit : "",
       draft_schedule_raw: sessionAtStart ? sessionAtStart.draft_schedule_raw : "",
+      draft_issue_buf_json: sessionAtStart ? sessionAtStart.issue_buf_json : [],
       knownPropertyCodesUpper: known,
       propertiesList,
     });
@@ -214,6 +348,9 @@ async function handleInboundCore(o) {
               applied.policyKey,
               applied.policyVars
             ),
+            ...outgateMeta("MAINTENANCE_SCHEDULE_POLICY_REJECT", {
+              policyKey: applied.policyKey || "",
+            }),
           };
         }
         await appendEventLog({
@@ -225,6 +362,7 @@ async function handleInboundCore(o) {
           ok: false,
           brain: "core_schedule_apply_failed",
           replyText: "Could not save your preferred time. Please try again in a moment.",
+          ...outgateMeta("MAINTENANCE_ERROR_SCHEDULE_SAVE"),
         };
       }
       await clearIntakeSessionDraft(actorKey);
@@ -261,16 +399,20 @@ async function handleInboundCore(o) {
           "Thanks — we noted your preferred time: " +
           displayWindow +
           ". We'll follow up if we need to adjust.",
+        ...outgateMeta("MAINTENANCE_SCHEDULE_CONFIRMED", {
+          displayWindow: String(displayWindow || "").slice(0, 200),
+        }),
       };
     }
     return {
       ok: true,
       brain: "core_schedule_prompt_repeat",
       replyText: buildMaintenancePrompt("SCHEDULE", propertiesList),
+      ...outgateMeta(maintenanceTemplateKeyForNext("SCHEDULE")),
     };
   }
 
-  const fastDraft = await parseMaintenanceDraftAsync(bodyText, known, {
+  const fastDraft = await parseMaintenanceDraftAsync(effectiveBody, known, {
     traceId,
     traceStartMs,
     propertiesList,
@@ -316,6 +458,9 @@ async function handleInboundCore(o) {
           brain: "core_finalize_failed",
           draft: fastDraft,
           replyText: "Could not save ticket: " + (f.error || "error"),
+          ...outgateMeta("MAINTENANCE_ERROR_FINALIZE", {
+            path: "fast",
+          }),
         };
       }
       finsFast.push(f);
@@ -355,6 +500,7 @@ async function handleInboundCore(o) {
         brain: "core_finalize_failed",
         draft: fastDraft,
         replyText: "Could not save ticket: " + (fin.error || "error"),
+        ...outgateMeta("MAINTENANCE_ERROR_FINALIZE", { path: "fast" }),
       };
     }
 
@@ -372,6 +518,10 @@ async function handleInboundCore(o) {
         finalize: fin,
         path: "fast",
         replyText: receiptFast,
+        ...outgateMeta("MAINTENANCE_RECEIPT_ONLY", {
+          path: "fast",
+          emergency: true,
+        }),
       };
     }
 
@@ -408,6 +558,10 @@ async function handleInboundCore(o) {
       finalize: fin,
       path: "fast",
       replyText: receiptFast + "\n\n" + buildMaintenancePrompt("SCHEDULE", propertiesList),
+      ...outgateMeta(maintenanceTemplateKeyForNext("SCHEDULE"), {
+        promptComposite: "after_receipt",
+        path: "fast",
+      }),
     };
   }
 
@@ -417,19 +571,99 @@ async function handleInboundCore(o) {
   ).toUpperCase();
 
   const merged = mergeMaintenanceDraftTurn({
-    bodyText,
+    bodyText: effectiveBody,
     expected: expectedSlot,
     draft_issue: session ? session.draft_issue : "",
     draft_property: session ? session.draft_property : "",
     draft_unit: session ? session.draft_unit : "",
     draft_schedule_raw: session ? session.draft_schedule_raw : "",
+    draft_issue_buf_json: session ? session.issue_buf_json : [],
     knownPropertyCodesUpper: known,
     propertiesList,
     parsedDraft: fastDraft,
+    attachClarifyOutcome: attachClarifyOutcomePass || undefined,
   });
 
+  if (merged.attachDecision === "clarify_attach_vs_new") {
+    await setPendingAttachClarify(actorKey);
+    await appendEventLog({
+      traceId,
+      event: "ATTACH_CLARIFY_REQUIRED",
+      payload: {
+        reason: String((merged.attachReasonTags && merged.attachReasonTags[0]) || ""),
+        stage: expectedSlot,
+      },
+    });
+    return {
+      ok: true,
+      brain: "attach_clarify",
+      draft: merged,
+      replyText: buildMaintenancePrompt("ATTACH_CLARIFY", propertiesList),
+      ...outgateMeta(maintenanceTemplateKeyForNext("ATTACH_CLARIFY")),
+    };
+  }
+
+  if (merged.attachDecision === "start_new_intake") {
+    await clearIntakeSessionDraft(actorKey);
+    await appendEventLog({
+      traceId,
+      event: "INTAKE_START_NEW",
+      payload: { reason: String(merged.attachMessageRole || "") },
+    });
+    const restarted = mergeMaintenanceDraftTurn({
+      bodyText: effectiveBody,
+      expected: "ISSUE",
+      draft_issue: "",
+      draft_property: "",
+      draft_unit: "",
+      draft_schedule_raw: "",
+      draft_issue_buf_json: [],
+      knownPropertyCodesUpper: known,
+      propertiesList,
+      parsedDraft: fastDraft,
+    });
+    const flagsNew = draftFlagsFromSlots(restarted);
+    const recNew = recomputeDraftExpected({
+      hasIssue: flagsNew.hasIssue,
+      hasProperty: flagsNew.hasProperty,
+      hasUnit: flagsNew.hasUnit,
+      hasSchedule: flagsNew.hasSchedule,
+      pendingTicketRow: 0,
+      skipScheduling: false,
+      isEmergencyContinuation: false,
+      openerNext: fastDraft && fastDraft.openerNext ? fastDraft.openerNext : "",
+    });
+    let nextNew = recNew.next;
+    const pendingExpiresNew = computePendingExpiresAtIso(nextNew);
+    await upsertIntakeSession({
+      phone_e164: actorKey,
+      stage: nextNew,
+      expected: nextNew,
+      lane: "MAINTENANCE",
+      draft_issue: restarted.draft_issue,
+      draft_property: restarted.draft_property,
+      draft_unit: restarted.draft_unit,
+      draft_schedule_raw: restarted.draft_schedule_raw,
+      issue_buf_json: restarted.draft_issue_buf_json,
+      active_artifact_key: "",
+      expires_at_iso: pendingExpiresNew,
+    });
+    return {
+      ok: true,
+      brain: "intake_start_new",
+      draft: restarted,
+      expected: nextNew,
+      replyText: buildMaintenancePrompt(nextNew, propertiesList),
+      ...outgateMeta(maintenanceTemplateKeyForNext(nextNew)),
+    };
+  }
+
   const flags = draftFlagsFromSlots(merged);
-  const em = inferEmergency(merged.draft_issue);
+  const issueForFinalize = issueTextForFinalize(
+    merged.draft_issue,
+    merged.draft_issue_buf_json
+  );
+  const em = inferEmergency(issueForFinalize || merged.draft_issue);
   const skipScheduling = em.emergency === "Yes";
 
   const pendingTicketRow =
@@ -508,6 +742,7 @@ async function handleInboundCore(o) {
     draft_property: merged.draft_property,
     draft_unit: merged.draft_unit,
     draft_schedule_raw: merged.draft_schedule_raw,
+    issue_buf_json: merged.draft_issue_buf_json,
     active_artifact_key: session ? String(session.active_artifact_key || "") : "",
     expires_at_iso: pendingExpiresAtIso,
   });
@@ -539,7 +774,7 @@ async function handleInboundCore(o) {
   });
 
   if (next === "FINALIZE_DRAFT") {
-    const groupsMt = buildFinalizeGroups(merged.draft_issue);
+    const groupsMt = buildFinalizeGroups(issueForFinalize || merged.draft_issue);
     const finsMt = [];
     for (const g of groupsMt) {
       const f = await finalizeMaintenanceDraft({
@@ -559,6 +794,7 @@ async function handleInboundCore(o) {
           brain: "core_finalize_failed",
           draft: merged,
           replyText: "Could not save ticket: " + (f.error || "error"),
+          ...outgateMeta("MAINTENANCE_ERROR_FINALIZE", { path: "multi_turn" }),
         };
       }
       finsMt.push(f);
@@ -598,6 +834,7 @@ async function handleInboundCore(o) {
         brain: "core_finalize_failed",
         draft: merged,
         replyText: "Could not save ticket: " + (fin.error || "error"),
+        ...outgateMeta("MAINTENANCE_ERROR_FINALIZE", { path: "multi_turn" }),
       };
     }
 
@@ -615,12 +852,17 @@ async function handleInboundCore(o) {
         finalize: fin,
         path: "multi_turn",
         replyText: receiptMt,
+        ...outgateMeta("MAINTENANCE_RECEIPT_ONLY", {
+          path: "multi_turn",
+          emergency: true,
+        }),
       };
     }
 
     await setScheduleWaitAfterFinalize(actorKey, {
       ticketKey: fin.ticketKey,
       draft_issue: merged.draft_issue,
+      issue_buf_json: merged.draft_issue_buf_json,
       draft_property: merged.draft_property,
       draft_unit: merged.draft_unit,
     });
@@ -651,6 +893,10 @@ async function handleInboundCore(o) {
       finalize: fin,
       path: "multi_turn",
       replyText: receiptMt + "\n\n" + buildMaintenancePrompt("SCHEDULE", propertiesList),
+      ...outgateMeta(maintenanceTemplateKeyForNext("SCHEDULE"), {
+        promptComposite: "after_receipt",
+        path: "multi_turn",
+      }),
     };
   }
 
@@ -661,6 +907,7 @@ async function handleInboundCore(o) {
     draft: merged,
     expected: next,
     replyText,
+    ...outgateMeta(maintenanceTemplateKeyForNext(next)),
   };
 }
 

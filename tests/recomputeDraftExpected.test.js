@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   recomputeDraftExpected,
+  expiryMinutesForExpectedStage,
 } = require("../src/brain/core/recomputeDraftExpected");
 
 test("empty draft → ISSUE", () => {
@@ -90,7 +91,7 @@ test("emergency continuation skips SCHEDULE → EMERGENCY_DONE", () => {
   assert.equal(next, "EMERGENCY_DONE");
 });
 
-test("emergency continuation skips SCHEDULE_PRETICKET → EMERGENCY_DONE", () => {
+test("GAS ~161–171: emergency guard applies to SCHEDULE only, not SCHEDULE_PRETICKET", () => {
   const { next } = recomputeDraftExpected({
     hasIssue: true,
     hasProperty: true,
@@ -100,5 +101,43 @@ test("emergency continuation skips SCHEDULE_PRETICKET → EMERGENCY_DONE", () =>
     openerNext: "SCHEDULE",
     isEmergencyContinuation: true,
   });
+  assert.equal(next, "SCHEDULE_PRETICKET");
+});
+
+test("post-ticket row with schedule already set → next empty (GAS ~150–157)", () => {
+  const { next, expiryMinutes } = recomputeDraftExpected({
+    hasIssue: true,
+    hasProperty: true,
+    hasUnit: true,
+    hasSchedule: true,
+    pendingTicketRow: 5,
+  });
+  assert.equal(next, "");
+  assert.equal(expiryMinutes, null);
+});
+
+test("skipScheduling forces SCHEDULE → EMERGENCY_DONE (GAS ctx skipScheduling)", () => {
+  const { next } = recomputeDraftExpected({
+    hasIssue: true,
+    hasProperty: true,
+    hasUnit: true,
+    hasSchedule: false,
+    pendingTicketRow: 5,
+    skipScheduling: true,
+  });
   assert.equal(next, "EMERGENCY_DONE");
+});
+
+test("expiryMinutes: 30 for SCHEDULE / SCHEDULE_PRETICKET, else 10", () => {
+  assert.equal(expiryMinutesForExpectedStage("SCHEDULE"), 30);
+  assert.equal(expiryMinutesForExpectedStage("SCHEDULE_PRETICKET"), 30);
+  assert.equal(expiryMinutesForExpectedStage("PROPERTY"), 10);
+  assert.equal(expiryMinutesForExpectedStage(""), null);
+  const r = recomputeDraftExpected({
+    hasIssue: true,
+    hasProperty: true,
+    hasUnit: true,
+    pendingTicketRow: 0,
+  });
+  assert.equal(r.expiryMinutes, 10);
 });

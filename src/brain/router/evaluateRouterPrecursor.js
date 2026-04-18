@@ -3,7 +3,7 @@
  * Ordering matches GAS: # staff capture → non-# staff lifecycle intercept → compliance → tenant commands.
  * @see ../../../16_ROUTER_ENGINE.gs — # 223–241; staff intercept 300–312; compliance 382–398; tenant 555–562
  *
- * Does NOT invoke routeToCoreSafe_, staffHandleLifecycleCommand_, Sheets, Twilio, or opt-out storage.
+ * Does NOT invoke routeToCoreSafe_, staffHandleLifecycleCommand_, or Sheets. Opt-out **persistence** is in `src/index.js` + `src/dal/smsOptOut.js` (GAS `setSmsOptOut_`).
  */
 
 const { normMsg } = require("./normMsg");

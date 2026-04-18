@@ -18,7 +18,7 @@
 | **PHASE 1–2** Map + canonical `RouterParameter` contract | **Done** — see builder + `InboundSignal` |
 | **PHASE 3** First real slice (precursors only) | **Done** — `src/brain/router/*`, `src/contracts/buildRouterParameterFromTelegram.js` |
 | **PHASE 4** Tests | **Done** — `npm test` (router, parse draft, staff brain, `ticketDefaults`) |
-| **PHASE 5** Next slices | **In progress** — see **Current V2 core slice** below. Staff lifecycle partial; **post-finalize schedule** turns run **`parseMaintenanceDraftAsync`** before merge, and merge now accepts async `parsedDraft` from compile/intake path. `_mediaJson` channel-agnostic bridge is wired (adapter → router → core text merge), but OCR/vision extraction itself is still pending. **Next:** deepen compile-driven slot semantics and finish full GAS property grounding (`_variants` / explicit-only resolution) per **PARITY_LEDGER.md** §7; full lifecycle/policy vs GAS; schedule/outgate follow **engine truth**. |
+| **PHASE 5** Next slices | **In progress** — maintenance + staff slices are live; **orchestrator** explicit in **`src/inbound/routeInboundDecision.js`** + **`docs/ORCHESTRATOR_ROUTING.md`** (core guards, vendor/system **lane stubs**). **Outgate:** `src/outgate/` — `dispatchOutbound` only place for user-facing sends; compliance **MessageSpecs** + maintenance template keys on **`coreRun.outgate`**. Staff lifecycle partial; schedule commit runs **`parsePreferredWindowShared`**, **`inferStageDayFromText_`**, **`validateSchedPolicy_`** (`ticketPreferredWindow.js`). **Remaining:** full GAS canonical intake, full lifecycle graph, template map — **PARITY_LEDGER.md** §7. |
 
 **Migration plan (canonical in repo):** [PROPERA_V2_GAS_EXIT_PLAN.md](./PROPERA_V2_GAS_EXIT_PLAN.md) (YAML todos + phases).
 
@@ -28,22 +28,25 @@
 
 ## PHASE 1 — Current vs target flow
 
-### V2 Telegram inbound (today)
+### V2 inbound — Telegram **and** Twilio (same pipeline)
 
-1. `POST /webhooks/telegram` — `src/index.js`
-2. `verifyTelegramWebhookSecret` — `src/adapters/telegram/verifyWebhookSecret.js`
-3. `normalizeTelegramUpdate` — `src/adapters/telegram/normalizeTelegramUpdate.js` → `InboundSignal`
-4. `upsertTelegramChatLink` — `src/identity/upsertTelegramChatLink.js`
-5. `resolveStaffContextFromRouterParameter` — `src/identity/resolveStaffContext.js` (GAS `isStaffSender_` + Telegram `staffActorKey` / chat fallback)
-6. ~~`processInboundSignalStub`~~ → **precursor evaluation** + logging
-7. **Lane + core (when enabled):** `decideLane` → **`handleInboundCore`** — maintenance draft parse (`parseMaintenanceDraft`) → if complete, **`finalizeMaintenanceDraft`** → `tickets` + `work_items` + `conversation_ctx` (requires DB: migration **006** for `tickets` columns; **008** or **004** for `properties.legacy_property_id`; see `src/dal/finalizeMaintenance.js`, **`supabase/migrations/README.md`**).
-8. Optional `sendTelegramMessage` — `src/outbound/telegramSendMessage.js` (transport only)
-9. **Ops:** `GET /dashboard`, `GET /api/ops/event-log` — `src/dashboard/registerDashboard.js` + `dashboardPage.html` + `eventLogApi.js` (not GAS; flight recorder UI)
+1. **HTTP** — `src/index.js`: `POST /webhooks/telegram` **or** `POST /webhooks/twilio` / `/webhooks/sms`
+2. **Adapter** — Telegram: `verifyTelegramWebhookSecret`, `normalizeTelegramUpdate`, optional `enrichTelegramMediaWithOcr` → `buildRouterParameterFromTelegram`. Twilio: `buildRouterParameterFromTwilio` (form body).
+3. **`runInboundPipeline`** — `src/inbound/runInboundPipeline.js` (shared):
+   - `upsertTelegramChatLink` (Telegram only)
+   - `resolveStaffContextFromRouterParameter`
+   - `evaluateRouterPrecursor` → `normalizeInboundEventFromRouterParameter`
+   - **`buildLaneDecision`** — `src/inbound/routeInboundDecision.js` (staff capture / staff gate **or** `decideLane`)
+   - Staff lifecycle / SMS compliance / opt-out suppress / **non-maintenance lane stub** (vendor/system) / **`handleInboundCore`**
+   - **Outgate:** `renderOutboundIntent` → **`dispatchOutbound`** → `telegramSendMessage` **or** `twilioSendMessage` (transport only; **no** direct sends from core)
+4. **Ops:** `GET /dashboard`, `GET /api/ops/event-log` — `src/dashboard/` (not GAS)
+
+**Routing truth:** **[ORCHESTRATOR_ROUTING.md](./ORCHESTRATOR_ROUTING.md)**.
 
 ### Current V2 core slice (honest scope)
 
-- **Flow (partial):** **`recomputeDraftExpected`** — pre-ticket slice (see ledger). **`intake_sessions`** + merge. **Unit:** GAS **`extractUnit_`** port — `extractUnitGas.js`. **`handleInboundCore`**: prompts + fast path via **`parseMaintenanceDraft`** (not full **`compileTurn_`**). Events: **`EXPECT_RECOMPUTED`**, **`TURN_SUMMARY`**, **`TICKET_CREATED_ASK_SCHEDULE`**, etc.
-- **Semantics (gaps):** full **`compileTurn_`** / intake package, full GAS property detection, full **`handleInboundRouter_`** graph — see **[PARITY_LEDGER.md](./PARITY_LEDGER.md)**. Schedule parse + **`validateSchedPolicy_`** + `inferStageDayFromText_` are ported on the ticket schedule commit path; **`property_policy`** must match GAS PropertyPolicy for identical decisions.
+- **Flow (partial):** **`recomputeDraftExpected`** — pre-ticket slice (see ledger). **`intake_sessions`** + merge (includes **`issue_buf_json`** persistence + deterministic **attach classify** gates). **Unit:** GAS **`extractUnit_`** port — `extractUnitGas.js`. **`handleInboundCore`**: prompts + fast path via **`parseMaintenanceDraft`** / async compile when enabled. **Deterministic issue clauses:** GAS **`parseIssueDeterministic_`** port — `src/brain/gas/issueParseDeterministic.js`, wired through **`properaBuildIntakePackage`** (fallback signal shape matches GAS `properaFallbackStructuredSignalFromDeterministicParse_`). Events: **`EXPECT_RECOMPUTED`**, **`TURN_SUMMARY`**, **`TICKET_CREATED_ASK_SCHEDULE`**, **`ATTACH_CLARIFY_REQUIRED`**, **`INTAKE_START_NEW`**, etc.
+- **Semantics (gaps):** full GAS **`compileTurn_`** graph + vision/CIG/media queue, full property directory variants vs **`detectPropertyFromBody_`**, full **`handleInboundRouter_`** graph (incl. full **`ATTACH_CLARIFY`** lifecycle) — see **[PARITY_LEDGER.md](./PARITY_LEDGER.md)**. Schedule parse + **`validateSchedPolicy_`** + `inferStageDayFromText_` are ported on the ticket schedule commit path; **`property_policy`** must match GAS PropertyPolicy for identical decisions.
 
 ### GAS Telegram → brain (reference)
 
@@ -86,11 +89,11 @@ Shape matches the object under `e.parameter` that `handleInboundRouter_` reads (
 | `16_ROUTER_ENGINE.gs` | `detectTenantCommand_` (47–73) | `src/brain/router/detectTenantCommand.js` |
 | `16_ROUTER_ENGINE.gs` | `handleInboundRouter_` precursor chain (ordering only) | `src/brain/router/evaluateRouterPrecursor.js` |
 
-**Partially ported:** `decideLane_` / `normalizeInboundEvent_` shapes — see `src/brain/router/`. **Core path:** `handleInboundCore` performs real DB writes when configured (not a stub). **Still missing vs GAS:** full `routeToCoreSafe_` session graph, `compileTurn_`, SMS opt-out writes, Sheets, full outgate templates.
+**Partially ported:** `decideLane` / `normalizeInboundEvent` — see `src/brain/router/`. **Orchestrator:** `routeInboundDecision.js` encodes core entry guards + vendor/system lane stubs (**20-B/C**). **Core path:** `handleInboundCore` performs real DB writes when configured. **SMS opt-out:** migration **011** + `smsOptOut.js` + pipeline (SMS **only**). **Still missing vs GAS:** full lifecycle state machine, full canonical intake/vision, full `handleInboundRouter_` depth — see **PARITY_LEDGER.md**.
 
-**Staff:** DB-backed staff resolution + `STAFF_LIFECYCLE_GATE`; lifecycle command handler exists but full parity is ongoing.
+**Staff:** DB-backed staff resolution + `STAFF_LIFECYCLE_GATE`; `handleStaffLifecycleCommand` — full GAS `handleLifecycleSignal_` parity ongoing (**PARITY_LEDGER** §6).
 
-**Seam:** Precursors are real; core finalize is real for the maintenance slice above — **full** behavior parity requires intake compile + lifecycle + outgate next.
+**Outgate:** Phase 1 — `src/outgate/` (intent → render → `dispatchOutbound`); not full **19_OUTGATE.gs** template map.
 
 ---
 
@@ -104,11 +107,10 @@ Shape matches the object under `e.parameter` that `handleInboundRouter_` reads (
 
 ## PHASE 5 — Next slices (order)
 
-1. **Router:** ~~`isStaffSender_` / staff keys~~ → `resolveStaffContext.js` + `STAFF_LIFECYCLE_GATE` in `evaluateRouterPrecursor`. **Remainder:** `staffHandleLifecycleCommand_` (real handler).
-2. **Router:** `decideLane_` + `normalizeInboundEvent_` / media parse.
-3. **Core:** `compileTurn_` + intake package + canonical merge + Postgres draft store (replaces single-message-only finalize when authoritative).
-4. **Lifecycle / policy:** lifecycle engine + `property_policy` reads — **next questions** (e.g. scheduling) emerge here, not from hardcoded “ask window first” rules.
-5. **Outgate:** canonical intents → `sendTelegramMessage` / template rendering.
+1. **Router / orchestrator:** ~~precursor chain~~ done; ~~explicit route graph~~ **`routeInboundDecision.js`** + **ORCHESTRATOR_ROUTING.md**. **Remainder:** deeper `handleInboundRouter_` parity (vendor/amenity engines, weak-issue branches — **PARITY_LEDGER** §5).
+2. **Core:** `compileTurn` / `properaBuildIntakePackage` (**INTAKE_COMPILE_TURN=1**) + canonical merge gaps; **attach** — see ledger.
+3. **Lifecycle / policy:** explicit transition graph vs GAS **12_LIFECYCLE_ENGINE**; `property_policy` already feeds **`validateSchedPolicy_`**.
+4. **Outgate:** expand **MessageSpec** / template map vs **19_OUTGATE.gs**; optional Agent-2 refinement (flag — not implemented).
 
 ---
 
@@ -133,6 +135,7 @@ After meaningful changes to V2 behavior — or when **conversation direction / s
 | **PROPERA_V2_GAS_EXIT_PLAN.md** | Phase/todo status, scope, or migration strategy shifts. |
 | **OUTSIDE_CURSOR.md** | New SQL migrations operators must run, or new env vars for hosted setup. |
 | **STRUCTURED_LOGS.md** | New `log_kind` / `event` vocabulary, `event_log` shape, or observability parity vs GAS log sheet. |
+| **ORCHESTRATOR_ROUTING.md** | Inbound order, core blockers, or lane-stub behavior changes. |
 | **PORTING_FROM_GAS.md** | Which GAS file owns each behavior; **no parallel rewrites** of stage/parse/policy rules. |
 | **ADAPTER_ONBOARDING.md** | New channel implementation checklist (adapter/contract/tests/docs) with channel-agnostic core constraints. |
 | **TESTING_STRATEGY.md** | Scenario / integration tests; **staged implementation** (tests when the corresponding brain slice has a stable boundary). |

@@ -18,10 +18,10 @@ todos:
     content: Seed scripts + resolveActor(phone) + router lane parity; env kill-switches
     status: completed
   - id: gateway-router-telegram-first
-    content: "Remainder: full router (lane, staff, core entry) + Twilio when ready. Adapter + precursor port done — see Status table."
-    status: pending
+    content: "Twilio SMS/WA + Telegram share runInboundPipeline; precursors + lane + SMS opt-out (011) + routeInboundDecision (core guards, vendor/system stubs). Remainder: full handleInboundRouter_ depth — see PARITY_LEDGER §5, ORCHESTRATOR_ROUTING.md."
+    status: in_progress
   - id: telegram-adapter-v2
-    content: POST /webhooks/telegram, secret, dedupe, InboundSignal, telegram_chat_link upsert, optional outbound sendMessage
+    content: POST /webhooks/telegram, secret, dedupe, InboundSignal, telegram_chat_link upsert; outbound via outgate dispatchOutbound + TELEGRAM_OUTBOUND_ENABLED
     status: completed
   - id: brain-router-precursors
     content: Real GAS port — normMsg_, complianceIntent_, detectTenantCommand_, evaluateRouterPrecursor; buildRouterParameterFromTelegram; tests (npm test); docs/BRAIN_PORT_MAP.md
@@ -33,7 +33,7 @@ todos:
     content: Port OG_INTENT_TEMPLATE_MAP + render path; real tenant prompts
     status: pending
   - id: intake-canonical
-    content: "Postgres draft store + GAS recompute order (ISSUE→PROPERTY→UNIT→FINALIZE) in V2; full properaBuildIntakePackage_/compileTurn LLM path still pending."
+    content: "Postgres draft store + GAS recompute order (ISSUE→PROPERTY→UNIT→FINALIZE) in V2; deterministic attach-classify slice + issue_buf_json + ATTACH_CLARIFY latch on conversation_ctx landed; full properaBuildIntakePackage_/compileTurn graph + full ATTACH_CLARIFY resolution (GAS router re-entry) still pending."
     status: pending
   - id: finalize-ticket
     content: "Transactional ticket/work_item in V2: finalizeMaintenance.js + migration 006. Full GAS finalize + schedule policy + property_schedule parity still pending."

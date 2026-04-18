@@ -43,4 +43,26 @@ describe("parseMaintenanceDraft", () => {
     const d = parseMaintenanceDraft("heater issue at penn building unit 303", known, props);
     assert.equal(d.propertyCode, "PENN");
   });
+
+  test("ticket_prefix token resolves property code (GAS variant parity)", () => {
+    const known = new Set(["PENN", "MORRIS"]);
+    const props = [
+      { code: "PENN", display_name: "Property PENN", ticket_prefix: "PENN", short_name: "Penn", address: "702 Pennsylvania ave", aliases: [] },
+      { code: "MORRIS", display_name: "Property MORRIS", ticket_prefix: "MORR", short_name: "Morris", address: "540 Morris ave", aliases: [] },
+    ];
+    const d = parseMaintenanceDraft("water leak morr unit 402", known, props);
+    assert.equal(d.propertyCode, "MORRIS");
+  });
+
+  test("short_name/address token resolves property code (GAS variant parity)", () => {
+    const known = new Set(["PENN", "MORRIS"]);
+    const props = [
+      { code: "PENN", display_name: "Property PENN", ticket_prefix: "PENN", short_name: "Penn", address: "702 Pennsylvania ave", aliases: [] },
+      { code: "MORRIS", display_name: "Property MORRIS", ticket_prefix: "MORR", short_name: "Morris", address: "540 Morris ave", aliases: [] },
+    ];
+    const byShortName = parseMaintenanceDraft("heater issue at penn", known, props);
+    assert.equal(byShortName.propertyCode, "PENN");
+    const byAddressToken = parseMaintenanceDraft("ac issue at pennsylvania ave unit 1", known, props);
+    assert.equal(byAddressToken.propertyCode, "PENN");
+  });
 });

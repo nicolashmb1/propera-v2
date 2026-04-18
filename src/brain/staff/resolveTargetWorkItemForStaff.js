@@ -8,6 +8,7 @@ const {
   extractPropertyHintFromBody,
   extractWorkItemIdHintFromBody,
   buildSuggestedPromptsForCandidates,
+  scoreCandidatesByIssueHints,
 } = require("./lifecycleExtract");
 
 function normUnit(u) {
@@ -22,12 +23,16 @@ function normUnit(u) {
  * @param {string} opts.bodyTrim
  * @param {{ pending_work_item_id?: string, active_work_item_id?: string } | null} opts.ctx
  * @param {Set<string>} opts.knownPropertyCodesUpper
+ * @param {string} [opts.staffId] — for CTX fallback owner check when pending WI not in openWis
+ * @param {{ status?: string, owner_id?: string } | null} [opts.ctxPendingWi] — DB row when pending id missing from open list
  */
 function resolveTargetWorkItemForStaff(opts) {
   const openWis = opts.openWis || [];
   const body = String(opts.bodyTrim || "").trim();
   const ctx = opts.ctx || null;
   const known = opts.knownPropertyCodesUpper || new Set();
+  const staffId = String(opts.staffId || "").trim();
+  const ctxPendingWi = opts.ctxPendingWi || null;
 
   if (openWis.length === 0) {
     return { wiId: "", reason: "CLARIFICATION", suggestedPrompts: [] };
@@ -73,6 +78,13 @@ function resolveTargetWorkItemForStaff(opts) {
     };
   }
   if (candidates.length > 1) {
+    const scored = scoreCandidatesByIssueHints(candidates, body);
+    if (scored.best) {
+      return {
+        wiId: scored.best.workItemId,
+        reason: "ISSUE_HINT_MATCH",
+      };
+    }
     const prompts = buildSuggestedPromptsForCandidates(candidates, candidates);
     if (prompts.length === 1) {
       return { wiId: candidates[0].workItemId, reason: "SINGLE_PROMPT_AUTO_PICK" };
@@ -112,6 +124,16 @@ function resolveTargetWorkItemForStaff(opts) {
   if (pending) {
     const found = openWis.find((w) => w.workItemId === pending);
     if (found) return { wiId: pending, reason: "CTX" };
+    /** @see 25_STAFF_RESOLVER.gs workItemGetById_ + status !== COMPLETED */
+    if (ctxPendingWi) {
+      const st = String(ctxPendingWi.status || "").toUpperCase();
+      if (st !== "COMPLETED") {
+        const owner = String(ctxPendingWi.owner_id || "").trim();
+        if (!staffId || owner === staffId) {
+          return { wiId: pending, reason: "CTX" };
+        }
+      }
+    }
   }
 
   return { wiId: "", reason: "CLARIFICATION", suggestedPrompts: [] };

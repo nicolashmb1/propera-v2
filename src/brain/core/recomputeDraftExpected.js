@@ -1,9 +1,9 @@
 /**
- * Port of GAS `recomputeDraftExpected_` — **pre-ticket** slice only (`11_TICKET_FINALIZE_ENGINE.gs` ~147–171).
+ * Port of GAS `recomputeDraftExpected_` — **pre-ticket** slice (`11_TICKET_FINALIZE_ENGINE.gs` ~147–171)
+ * + expiry minutes (`~173–176`) + emergency guard **only** when `next === "SCHEDULE"` (`~161–171`, not `SCHEDULE_PRETICKET`).
  *
- * PARITY GAP: full GAS branch set not ported, but opener `SCHEDULE_PRETICKET`
- * and emergency override behavior are now aligned for the V2 maintenance slice.
- * Intake order: Issue → Property → Unit → (schedule post-ticket in full GAS) → FINALIZE_DRAFT.
+ * Active-ticket whitelist is enforced in `handleInboundCore` (GAS `pendingRow >= 2` guard ~178–191).
+ * Issue-count logging (`issueAlignOpt`) remains GAS-only; not returned here.
  *
  * @param {object} s
  * @param {boolean} s.hasIssue
@@ -15,6 +15,18 @@
  * @param {boolean} [s.isEmergencyContinuation]
  * @param {string} [s.openerNext] — compile opener hint (`SCHEDULE` => ask pre-ticket schedule)
  */
+
+/**
+ * GAS `expiryMins` — `11_TICKET_FINALIZE_ENGINE.gs` ~174 (30 for schedule asks, else 10).
+ * @param {string} next — stage after recompute
+ * @returns {number | null} minutes, or null when `next` is empty (no pending expiry)
+ */
+function expiryMinutesForExpectedStage(next) {
+  const n = String(next || "").trim().toUpperCase();
+  if (!n) return null;
+  return n === "SCHEDULE" || n === "SCHEDULE_PRETICKET" ? 30 : 10;
+}
+
 function recomputeDraftExpected(s) {
   const hasIssue = !!s.hasIssue;
   const hasProperty = !!s.hasProperty;
@@ -39,12 +51,15 @@ function recomputeDraftExpected(s) {
     next = "";
   }
 
-  if ((next === "SCHEDULE" || next === "SCHEDULE_PRETICKET") && (emerg || skipScheduling)) {
+  if (next === "SCHEDULE" && (emerg || skipScheduling)) {
     next = "EMERGENCY_DONE";
   }
 
+  const expiryMinutes = expiryMinutesForExpectedStage(next);
+
   return {
     next,
+    expiryMinutes,
     flags: {
       hasIssue,
       hasProperty,
@@ -55,4 +70,4 @@ function recomputeDraftExpected(s) {
   };
 }
 
-module.exports = { recomputeDraftExpected };
+module.exports = { recomputeDraftExpected, expiryMinutesForExpectedStage };

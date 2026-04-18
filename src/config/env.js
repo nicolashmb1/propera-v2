@@ -43,6 +43,29 @@ function telegramOutboundEnabled() {
   return env("TELEGRAM_OUTBOUND_ENABLED", "") === "1" && !!telegramBotToken();
 }
 
+/** Twilio REST API — SMS / WhatsApp outbound (`src/outbound/twilioSendMessage.js`) */
+function twilioAccountSid() {
+  return String(env("TWILIO_ACCOUNT_SID", "")).trim();
+}
+function twilioAuthToken() {
+  return String(env("TWILIO_AUTH_TOKEN", "")).trim();
+}
+/** E.164, e.g. +15551234567 */
+function twilioSmsFrom() {
+  return String(env("TWILIO_SMS_FROM", "")).trim();
+}
+/** WhatsApp sender, e.g. whatsapp:+14155238886 */
+function twilioWhatsappFrom() {
+  return String(env("TWILIO_WHATSAPP_FROM", "")).trim();
+}
+function twilioOutboundEnabled() {
+  return (
+    env("TWILIO_OUTBOUND_ENABLED", "") === "1" &&
+    !!twilioAccountSid() &&
+    !!twilioAuthToken()
+  );
+}
+
 /** Core intake + finalize (Postgres). Off if CORE_ENABLED=0 */
 function coreEnabled() {
   return env("CORE_ENABLED", "1") !== "0";
@@ -140,6 +163,11 @@ module.exports = {
   telegramWebhookSecret,
   telegramBotToken,
   telegramOutboundEnabled,
+  twilioAccountSid,
+  twilioAuthToken,
+  twilioSmsFrom,
+  twilioWhatsappFrom,
+  twilioOutboundEnabled,
   coreEnabled,
   properaTimezone,
   scheduleLatestHour,

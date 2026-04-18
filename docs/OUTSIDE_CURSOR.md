@@ -37,6 +37,8 @@ Do these in your **web browser** at [supabase.com](https://supabase.com):
 
 **If `/health` says `Could not find the table 'public.conversation_ctx'`:** the migration was not applied to this project. Run `001_core.sql` in the **same** project as `SUPABASE_URL` in `.env`. Then confirm **Table Editor** lists `conversation_ctx`.
 
+**`conversation_ctx.pending_expected` values:** beyond legacy GAS-style stage strings, V2 may set **`ATTACH_CLARIFY`** (ambiguous attach vs new issue) using the same `001_core.sql` `conversation_ctx` row — **no extra migration** for that latch; core clears it when the clarify path is fully ported.
+
 **Identity tables (staff / properties):** run `003_identity.sql` after `001` and `002`. Then test: `http://localhost:8080/api/dev/resolve-actor?phone=%2B19085550101` (dev mode — see README).
 
 **`legacy_property_id` on `properties`:** `008_properties_dal_columns.sql` (or `004`, which includes the same alters). Without one of these, **`getPropertyByCode`** / finalize can error on `column legacy_property_id does not exist` if you only ran `003`.
@@ -70,6 +72,8 @@ Read-only inspection of **`event_log`**. See **[HANDOFF_LOG.md](./HANDOFF_LOG.md
 | Point Twilio / Telegram test webhooks | Twilio Console, Telegram BotFather |
 
 Production **Twilio → GAS** stays as-is until you intentionally change it.
+
+**V2 webhook paths (in-repo, not browser-only):** `POST /webhooks/telegram`, `POST /webhooks/twilio`, `POST /webhooks/sms` — see **`README.md`** and **`docs/ORCHESTRATOR_ROUTING.md`** for behavior (SMS compliance DB requires migration **011**).
 
 ---
 

@@ -7,8 +7,6 @@ const {
   port,
   nodeEnv,
   identityApiEnabled,
-  telegramOutboundEnabled,
-  coreEnabled,
 } = require("./config/env");
 const { createTrace } = require("./trace/createTrace");
 const { isDbConfigured, pingDb } = require("./db/supabase");
@@ -18,45 +16,35 @@ const {
   buildTelegramInboundCtx,
   previewText,
   runWithInboundLogCtx,
+  buildTwilioInboundCtx,
 } = require("./logging/inboundLogContext");
 const { resolveActor } = require("./identity/resolveActor");
-const { resolveStaffContextFromRouterParameter } = require("./identity/resolveStaffContext");
 const { verifyTelegramWebhookSecret } = require("./adapters/telegram/verifyWebhookSecret");
 const { normalizeTelegramUpdate } = require("./adapters/telegram/normalizeTelegramUpdate");
 const { enrichTelegramMediaWithOcr } = require("./adapters/telegram/enrichTelegramMediaWithOcr");
 const { tryConsumeUpdateId } = require("./adapters/telegram/dedupeUpdateId");
-const { upsertTelegramChatLink } = require("./identity/upsertTelegramChatLink");
-const { sendTelegramMessage } = require("./outbound/telegramSendMessage");
-const { CHANNEL_TELEGRAM } = require("./signal/inboundSignal");
 const { buildRouterParameterFromTelegram } = require("./contracts/buildRouterParameterFromTelegram");
-const { evaluateRouterPrecursor } = require("./brain/router/evaluateRouterPrecursor");
-const { normalizeInboundEventFromRouterParameter } = require("./brain/router/normalizeInboundEvent");
-const {
-  parseMediaJson,
-  composeInboundTextWithMedia,
-} = require("./brain/shared/mediaPayload");
-const { decideLane } = require("./brain/router/decideLane");
-const { appendEventLog } = require("./dal/appendEventLog");
-const { handleStaffLifecycleCommand } = require("./brain/staff/handleStaffLifecycleCommand");
-const { handleInboundCore } = require("./brain/core/handleInboundCore");
+const { buildRouterParameterFromTwilio } = require("./contracts/buildRouterParameterFromTwilio");
+const { runInboundPipeline } = require("./inbound/runInboundPipeline");
 const { registerDashboardRoutes } = require("./dashboard/registerDashboard");
 
 const app = express();
 
 app.use(express.json({ limit: "2mb" }));
+const twilioForm = express.urlencoded({ extended: true });
 app.use(requestContext);
 
 registerDashboardRoutes(app);
 
 app.get("/", (_req, res) => {
   res.type("text/plain").send(
-    "Propera V2 — GET /health | POST /webhooks/telegram | GET /dashboard (ops log, DASHBOARD_ENABLED=1) | dev: GET /api/dev/resolve-actor?phone=+1..."
+    "Propera V2 — GET /health | POST /webhooks/telegram | POST /webhooks/twilio | POST /webhooks/sms | GET /dashboard (DASHBOARD_ENABLED=1) | dev: GET /api/dev/resolve-actor?phone=+1..."
   );
 });
 
 /**
  * Telegram adapter — RouterParameter → precursors → lane (GAS) → staff lifecycle (DB) or tenant path.
- * Core maintenance finalize (tickets/work_items) when CORE_ENABLED + DB; see docs/BRAIN_PORT_MAP.md.
+ * Compliance / SMS opt-out **do not** apply to Telegram — see `runInboundPipeline` + `transportCompliance.js`.
  */
 app.post("/webhooks/telegram", async (req, res) => {
   const traceId = req.traceId;
@@ -132,239 +120,109 @@ app.post("/webhooks/telegram", async (req, res) => {
   const inboundCtx = buildTelegramInboundCtx(signal, routerParameter);
 
   return runWithInboundLogCtx(inboundCtx, async () => {
-  emit({
-    level: "info",
-    trace_id: traceId,
-    trace_start_ms: req.traceStartMs,
-    log_kind: "telegram_webhook",
-    event: "INBOUND_THREAD_START",
-    data: {
-      crumb: "inbound_thread_start",
-      thread_start: true,
+    emit({
+      level: "info",
       trace_id: traceId,
-      actor_key: inboundCtx.actor_key,
-      chat_id: inboundCtx.chat_id,
-      update_id: inboundCtx.update_id,
-    },
-  });
-
-  emit({
-    level: "info",
-    trace_id: traceId,
-    trace_start_ms: req.traceStartMs,
-    log_kind: "telegram_adapter",
-    event: "normalized",
-    data: {
-      channel: signal.channel,
-      update_id: signal.transport && signal.transport.update_id,
-      chat_id: signal.transport && signal.transport.chat_id,
-      text_len: signal.body && signal.body.text ? String(signal.body.text).length : 0,
-      crumb: "signal_normalized",
-    },
-  });
-
-  if (signal.channel === CHANNEL_TELEGRAM) {
-    await upsertTelegramChatLink(signal, traceId);
-  }
-
-  const staffContext = await resolveStaffContextFromRouterParameter(routerParameter);
-  const precursor = evaluateRouterPrecursor({
-    parameter: routerParameter,
-    staffContext: {
-      isStaff: staffContext.isStaff,
-      staffActorKey: staffContext.staffActorKey,
-    },
-  });
-
-  emit({
-    level: "info",
-    trace_id: traceId,
-    trace_start_ms: req.traceStartMs,
-    log_kind: "router_precursor",
-    event: precursor.outcome || "unknown",
-    data: {
-      compliance: precursor.compliance,
-      tenant_command: precursor.tenantCommand,
-      staff_capture: precursor.staffCapture || null,
-      staff_is: staffContext.isStaff,
-      staff_actor_key: staffContext.staffActorKey,
-      staff_reason: staffContext.reason,
-      body_len: precursor.bodyTrim ? String(precursor.bodyTrim).length : 0,
-      crumb: "router_precursor",
-    },
-  });
-
-  const inbound = normalizeInboundEventFromRouterParameter(routerParameter);
-  /** GAS: # capture + staff intercept return before decideLane_. */
-  const laneDecision =
-    precursor.outcome === "STAFF_CAPTURE_HASH"
-      ? {
-          lane: "staffCapture",
-          reason: "hash_prefix",
-          mode: "MANAGER",
-          trace: "lane_v1",
-        }
-      : precursor.outcome === "STAFF_LIFECYCLE_GATE"
-        ? {
-            lane: "staffOperational",
-            reason: "staff_intercept_before_lane",
-            mode: "STAFF",
-            trace: "lane_v1",
-          }
-        : decideLane(inbound);
-  await appendEventLog({
-    traceId,
-    log_kind: "router",
-    event: "LANE_DECIDED",
-    payload: { lane: laneDecision.lane, reason: laneDecision.reason, mode: laneDecision.mode },
-  });
-
-  emit({
-    level: "info",
-    trace_id: traceId,
-    trace_start_ms: req.traceStartMs,
-    log_kind: "router_lane",
-    event: laneDecision.lane,
-    data: { reason: laneDecision.reason, mode: laneDecision.mode, crumb: "lane_decided" },
-  });
-
-  let staffRun = null;
-  if (precursor.outcome === "STAFF_LIFECYCLE_GATE" && staffContext.staff) {
-    staffRun = await handleStaffLifecycleCommand({
-      traceId,
-      staffActorKey: staffContext.staffActorKey,
-      staffRow: staffContext.staff,
-      routerParameter,
+      trace_start_ms: req.traceStartMs,
+      log_kind: "telegram_webhook",
+      event: "INBOUND_THREAD_START",
+      data: {
+        crumb: "inbound_thread_start",
+        thread_start: true,
+        trace_id: traceId,
+        actor_key: inboundCtx.actor_key,
+        chat_id: inboundCtx.chat_id,
+        update_id: inboundCtx.update_id,
+      },
     });
-  }
 
-  let coreRun = null;
-  const canEnterCore =
-    coreEnabled() &&
-    isDbConfigured() &&
-    !staffRun &&
-    !precursor.compliance &&
-    !precursor.tenantCommand &&
-    (precursor.outcome === "STAFF_CAPTURE_HASH" ||
-      precursor.outcome === "PRECURSOR_EVALUATED");
+    emit({
+      level: "info",
+      trace_id: traceId,
+      trace_start_ms: req.traceStartMs,
+      log_kind: "telegram_adapter",
+      event: "normalized",
+      data: {
+        channel: signal.channel,
+        update_id: signal.transport && signal.transport.update_id,
+        chat_id: signal.transport && signal.transport.chat_id,
+        text_len: signal.body && signal.body.text ? String(signal.body.text).length : 0,
+        crumb: "signal_normalized",
+      },
+    });
 
-  if (canEnterCore) {
-    const isStaffCapture = precursor.outcome === "STAFF_CAPTURE_HASH";
-    const bodyBase = isStaffCapture
-      ? String(
-          (precursor.staffCapture && precursor.staffCapture.stripped) || ""
-        ).trim()
-      : String(routerParameter.Body || "").trim();
-    const mediaForCore = parseMediaJson(routerParameter._mediaJson);
-    const bodyForCore = composeInboundTextWithMedia(bodyBase, mediaForCore, 1400);
-    coreRun = await handleInboundCore({
+    const result = await runInboundPipeline({
       traceId,
       traceStartMs: req.traceStartMs,
       routerParameter,
-      mode: isStaffCapture ? "MANAGER" : "TENANT",
-      bodyText: bodyForCore,
-      staffActorKey: staffContext.staffActorKey,
+      transportChannel: "telegram",
+      telegramSignal: signal,
+      logKind: "telegram_webhook",
     });
-  }
 
-  let outbound = null;
-  const canTgOut =
-    signal.channel === CHANNEL_TELEGRAM &&
-    telegramOutboundEnabled() &&
-    signal.transport &&
-    signal.transport.chat_id;
+    const replyForPreview =
+      (result.staffRun && result.staffRun.replyText) ||
+      (result.complianceRun && result.complianceRun.replyText) ||
+      (result.coreRun && result.coreRun.replyText) ||
+      "";
 
-  if (canTgOut && staffRun && staffRun.replyText) {
-    outbound = await sendTelegramMessage({
-      chatId: signal.transport.chat_id,
-      text: staffRun.replyText,
-      traceId,
-    });
-  } else if (canTgOut && coreRun && coreRun.replyText) {
-    outbound = await sendTelegramMessage({
-      chatId: signal.transport.chat_id,
-      text: coreRun.replyText,
-      traceId,
-    });
-  }
-
-  let brain = "tenant_path";
-  if (staffRun && staffRun.brain) {
-    brain = staffRun.brain;
-  } else if (coreRun && coreRun.brain) {
-    brain = coreRun.brain;
-  } else if (precursor.outcome === "STAFF_CAPTURE_HASH") {
-    brain = "staff_capture_pending_core";
-  } else if (precursor.outcome === "STAFF_LIFECYCLE_GATE") {
-    brain = staffContext.staff ? "staff_gate_no_handler" : "staff_gate_missing_staff_row";
-  }
-
-  const replyForPreview =
-    (staffRun && staffRun.replyText) ||
-    (coreRun && coreRun.replyText) ||
-    "";
-  emit({
-    level: "info",
-    trace_id: traceId,
-    trace_start_ms: req.traceStartMs,
-    log_kind: "telegram_webhook",
-    event: "request_complete",
-    data: {
-      crumb: "webhook_request_complete",
-      thread_end: true,
+    emit({
+      level: "info",
       trace_id: traceId,
-      actor_key: inboundCtx.actor_key,
-      chat_id: inboundCtx.chat_id,
-      update_id: inboundCtx.update_id,
-      brain,
-      lane: laneDecision.lane,
-      lane_mode: laneDecision.mode,
-      total_ms: Date.now() - req.traceStartMs,
-      inbound_preview: inboundCtx.inbound_text_preview,
-      reply_preview: replyForPreview ? previewText(replyForPreview, 120) : "",
-      outbound_sent: !!(outbound && outbound.ok),
-    },
-  });
-
-  return res.status(200).json({
-    ok: true,
-    brain,
-    lane: laneDecision,
-    core: coreRun
-      ? {
-          brain: coreRun.brain,
-          reply: coreRun.replyText || "",
-          draft: coreRun.draft || null,
-          finalize: coreRun.finalize || null,
-        }
-      : null,
-    precursor: {
-      outcome: precursor.outcome,
-      compliance: precursor.compliance,
-      tenantCommand: precursor.tenantCommand,
-      staffCapture: precursor.staffCapture || null,
-      staffGate: precursor.staffGate || null,
-      staffContext: {
-        isStaff: staffContext.isStaff,
-        staffActorKey: staffContext.staffActorKey,
-        reason: staffContext.reason,
+      trace_start_ms: req.traceStartMs,
+      log_kind: "telegram_webhook",
+      event: "request_complete",
+      data: {
+        crumb: "webhook_request_complete",
+        thread_end: true,
+        trace_id: traceId,
+        actor_key: inboundCtx.actor_key,
+        chat_id: inboundCtx.chat_id,
+        update_id: inboundCtx.update_id,
+        brain: result.brain,
+        lane: result.laneDecision.lane,
+        lane_mode: result.laneDecision.mode,
+        total_ms: Date.now() - req.traceStartMs,
+        inbound_preview: inboundCtx.inbound_text_preview,
+        reply_preview: replyForPreview ? previewText(replyForPreview, 120) : "",
+        outbound_sent: !!(result.outbound && result.outbound.ok),
       },
-    },
-    staff: staffRun
-      ? {
-          brain: staffRun.brain,
-          reply: staffRun.replyText,
-          resolution: staffRun.resolution || null,
-          outcome: staffRun.outcome != null ? staffRun.outcome : undefined,
-          db: staffRun.db || null,
-        }
-      : null,
-    outbound: outbound
-      ? { ok: outbound.ok, error: outbound.error || null }
-      : { skipped: true },
-  });
+    });
+
+    return res.status(200).json(result.json);
   });
 });
+
+/**
+ * Twilio SMS + WhatsApp (same inbound format; `From` is `whatsapp:+…` for WA).
+ * Compliance STOP/START/HELP + `sms_opt_out` **SMS only** — WhatsApp uses the same pipeline without compliance side effects.
+ */
+async function handleTwilioWebhook(req, res) {
+  const traceId = req.traceId;
+  const routerParameter = buildRouterParameterFromTwilio(req.body || {});
+  const from = String(routerParameter.From || "");
+  const isWa = from.toLowerCase().indexOf("whatsapp:") === 0;
+  const transportChannel = isWa ? "whatsapp" : "sms";
+  const inboundCtx = buildTwilioInboundCtx(routerParameter);
+
+  return runWithInboundLogCtx(inboundCtx, async () => {
+    const result = await runInboundPipeline({
+      traceId,
+      traceStartMs: req.traceStartMs,
+      routerParameter,
+      transportChannel,
+      logKind: isWa ? "whatsapp_webhook" : "sms_webhook",
+    });
+    return res.status(200).type("application/json").send(JSON.stringify(result.json));
+  });
+}
+
+app.get("/webhooks/twilio", (_req, res) => {
+  res.type("text/plain").send("ok");
+});
+
+app.post("/webhooks/twilio", twilioForm, handleTwilioWebhook);
+app.post("/webhooks/sms", twilioForm, handleTwilioWebhook);
 
 /**
  * Dev-only: resolve staff vs tenant from DB (same idea as GAS isStaff / router lane).

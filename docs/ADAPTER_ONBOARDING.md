@@ -34,7 +34,9 @@ Every adapter must produce:
 
 **Core invariant:** `index.js` should continue running the same pipeline:
 
-`normalize -> contract build -> router precursor/lane -> core -> outbound`
+`normalize → contract build → runInboundPipeline (precursors / lane / compliance / core) → outgate (renderOutboundIntent → dispatchOutbound)`
+
+**Outbound:** only **`src/outgate/dispatchOutbound.js`** calls `telegramSendMessage` / `twilioSendMessage` for user-facing replies. Adapters must not send directly.
 
 No channel-specific branching in lifecycle/policy/core logic.
 
@@ -95,6 +97,7 @@ Do not claim parity until `docs/PARITY_LEDGER.md` row is updated with status/ris
 - `docs/HANDOFF_LOG.md` (dated entry)
 - `README.md` (new route/env/start steps if needed)
 - `docs/OUTSIDE_CURSOR.md` (operator steps for webhooks/secrets)
+- `docs/ORCHESTRATOR_ROUTING.md` (if the shared pipeline’s order or core-entry rules change)
 
 Rule: stale docs are a bug.
 

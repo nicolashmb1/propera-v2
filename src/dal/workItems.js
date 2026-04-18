@@ -14,7 +14,9 @@ async function listOpenWorkItemsForOwner(staffOwnerId) {
 
   const { data, error } = await sb
     .from("work_items")
-    .select("work_item_id, unit_id, property_id, status, state, metadata_json")
+    .select(
+      "work_item_id, unit_id, property_id, ticket_key, status, state, metadata_json"
+    )
     .eq("owner_id", id);
 
   if (error || !data) return [];
@@ -33,7 +35,9 @@ async function getWorkItemByWorkItemId(workItemId) {
 
   const { data, error } = await sb
     .from("work_items")
-    .select("work_item_id, unit_id, property_id, status, state, substate, metadata_json")
+    .select(
+      "work_item_id, unit_id, property_id, ticket_key, owner_id, status, state, substate, metadata_json"
+    )
     .eq("work_item_id", wid)
     .maybeSingle();
 

@@ -24,51 +24,74 @@ const {
 } = require("../../config/env");
 const { emitTimed } = require("../../logging/structuredLog");
 const { appendEventLog } = require("../../dal/appendEventLog");
+const {
+  parseIssueDeterministic,
+} = require("../gas/issueParseDeterministic");
 
-function parseIssueDeterministicV2(tRaw, known, propertiesList) {
+/**
+ * GAS `properaFallbackStructuredSignalFromDeterministicParse_` — `07_PROPERA_INTAKE_PACKAGE.gs` ~1434–1501.
+ * Property: explicit code first, then menu/variant detection (V2 DB parity), then weak hint.
+ * @returns {{ sig: object, parsedIssueDeterministic: object }}
+ */
+function signalFromDeterministic(tRaw, phone, known, propertiesList) {
+  void phone;
+  const parsed = parseIssueDeterministic(tRaw, {});
+  const clauses = Array.isArray(parsed.clauses) ? parsed.clauses : [];
+  const issues = [];
+  for (let i = 0; i < clauses.length; i++) {
+    const c = clauses[i];
+    if (!c || String(c.type || "problem") !== "problem") continue;
+    const txt = String(c.text || "").trim();
+    const tit = String(c.title || txt || "").trim();
+    if (!tit && !txt) continue;
+    issues.push({
+      title: tit.slice(0, 280),
+      summary: tit.slice(0, 500),
+      tenantDescription: txt.slice(0, 900),
+      locationArea: "",
+      locationDetail: "",
+      locationType: "UNIT",
+      category: String(parsed.category || "").trim(),
+      urgency:
+        String(parsed.urgency || "normal").toLowerCase() === "urgent"
+          ? "urgent"
+          : "normal",
+    });
+  }
+  if (!issues.length) {
+    const one = String(parsed.title || parsed.bestClauseText || "").trim();
+    const oneFinal = one || String(tRaw).slice(0, 400);
+    if (oneFinal) {
+      issues.push({
+        title: oneFinal.slice(0, 280),
+        summary: oneFinal.slice(0, 500),
+        tenantDescription: String(tRaw).slice(0, 900),
+        locationArea: "",
+        locationDetail: "",
+        locationType: "UNIT",
+        category: String(parsed.category || "").trim(),
+        urgency: "normal",
+      });
+    }
+  }
+
+  const sig = properaStructuredSignalEmpty();
+  sig.extractionSource = "deterministic_v2";
+  sig.turnType = "OPERATIONAL_ONLY";
+  sig.intentType = "MAINTENANCE_REPORT";
+  sig.actorType = "TENANT";
+  sig.issues = issues;
+  sig.confidence = 0.35;
+
   const explicitCode = resolvePropertyExplicitOnly(tRaw, propertiesList || []);
   const propertyCode =
     explicitCode ||
     detectPropertyFromBody(tRaw, propertiesList || [], known) ||
     extractPropertyHintFromBody(tRaw, known);
-  const unit = extractUnitFromBody(tRaw);
-  let issue = tRaw;
-  if (propertyCode) {
-    issue = issue.replace(new RegExp("\\b" + propertyCode + "\\b", "gi"), " ");
-  }
-  if (unit) {
-    const esc = unit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    issue = issue.replace(new RegExp("\\b" + esc + "\\b", "gi"), " ");
-    issue = issue.replace(/\b(?:unit|apt|uni)\s*[:\s]*\s*/gi, " ");
-  }
-  issue = issue.replace(/\s+/g, " ").trim();
-  return { propertyCode: propertyCode || "", unit: unit || "", issue: issue || tRaw };
-}
+  sig.propertyCode = propertyCode || "";
+  sig.unit = String(extractUnitFromBody(tRaw) || "").trim();
 
-function signalFromDeterministic(tRaw, phone, known, propertiesList) {
-  const d = parseIssueDeterministicV2(tRaw, known, propertiesList);
-  const sig = properaStructuredSignalEmpty();
-  sig.extractionSource = "deterministic_v2";
-  sig.turnType = "OPERATIONAL_ONLY";
-  sig.intentType = "MAINTENANCE_REPORT";
-  sig.propertyCode = d.propertyCode;
-  sig.unit = d.unit;
-  if (d.issue) {
-    sig.issues = [
-      {
-        title: d.issue.slice(0, 280),
-        summary: d.issue.slice(0, 500),
-        tenantDescription: tRaw.slice(0, 900),
-        locationArea: "",
-        locationDetail: "",
-        locationType: "UNIT",
-        category: "",
-        urgency: "normal",
-      },
-    ];
-  }
-  sig.confidence = 0.45;
-  return sig;
+  return { sig, parsedIssueDeterministic: parsed };
 }
 
 function locationPackFromIssue(issueHead, bodyForText) {
@@ -114,6 +137,7 @@ async function properaBuildIntakePackage(opts) {
   const cigContext = opts.cigContext || null;
 
   let sig = null;
+  let parsedIssueDeterministic = null;
   let llmStructuredUsed = false;
   const apiKey = openaiApiKey();
   const llmOn = !!(apiKey && intakeLlmEnabled() && tRaw);
@@ -180,12 +204,14 @@ async function properaBuildIntakePackage(opts) {
   }
 
   if (!sig || !sig.issues || !sig.issues.length) {
-    sig = signalFromDeterministic(
+    const built = signalFromDeterministic(
       tRaw,
       phone,
       known,
       Array.isArray(opts.propertiesList) ? opts.propertiesList : []
     );
+    sig = built.sig;
+    parsedIssueDeterministic = built.parsedIssueDeterministic;
   }
 
   const em = evaluateEmergencySignal_(tRaw);
@@ -212,18 +238,33 @@ async function properaBuildIntakePackage(opts) {
 
   const locPack = locationPackFromIssue(issueHead, tRaw);
 
-  const issueMetaOut =
-    issueHead ?
-      {
-        title: issueHead,
-        bestClauseText: issueHead,
-        clauses: [{ text: issueHead, title: issueHead, type: "problem" }],
-        problemSpanCount: 1,
-        source: "package_v2",
-        category: "",
-        urgency: "normal",
-      }
-    : null;
+  let issueMetaOut = null;
+  if (parsedIssueDeterministic) {
+    const p = parsedIssueDeterministic;
+    issueMetaOut = {
+      title: String(p.title || issueHead || "").trim(),
+      details: String(p.details || "").trim(),
+      bestClauseText: String(p.bestClauseText || issueHead || "").trim(),
+      clauses: Array.isArray(p.clauses) ? p.clauses : [],
+      problemSpanCount:
+        p.problemSpanCount != null ? Number(p.problemSpanCount) : 0,
+      source: "issue_parse_deterministic",
+      category: String(p.category || "").trim(),
+      subcategory: String(p.subcategory || "").trim(),
+      urgency: String(p.urgency || "normal").trim(),
+      debug: String(p.debug || "").trim(),
+    };
+  } else if (issueHead) {
+    issueMetaOut = {
+      title: issueHead,
+      bestClauseText: issueHead,
+      clauses: [{ text: issueHead, title: issueHead, type: "problem" }],
+      problemSpanCount: 1,
+      source: "package_v2",
+      category: "",
+      urgency: "normal",
+    };
+  }
 
   emitTimed(traceStartMs, {
     level: "info",
@@ -320,5 +361,6 @@ async function properaBuildIntakePackage(opts) {
 
 module.exports = {
   properaBuildIntakePackage,
-  parseIssueDeterministicV2,
+  parseIssueDeterministic,
+  signalFromDeterministic,
 };
