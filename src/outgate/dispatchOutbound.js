@@ -33,7 +33,10 @@ async function dispatchOutbound(opts) {
   /** @type {{ ok: boolean, error?: string, skipped?: boolean, messageId?: number }} */
   let result;
 
-  if (transportChannel === "telegram") {
+  if (transportChannel === "portal") {
+    /** Replies return on HTTP JSON — no SMS/Telegram send. */
+    result = { ok: true, skipped: true, portal: true };
+  } else if (transportChannel === "telegram") {
     if (
       !signal ||
       signal.channel !== CHANNEL_TELEGRAM ||

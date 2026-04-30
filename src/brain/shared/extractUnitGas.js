@@ -1,8 +1,25 @@
 /**
  * Port of GAS `extractUnit_` — `17_PROPERTY_SCHEDULE_ENGINE.gs` ~2260–2318.
+ * `normalizeUnit_` — same file ~2247–2258 (structured signal / canonize).
  * `isBlockedAsAddress_` is the GAS port in `../gas/addressContext.js` (`16_ROUTER_ENGINE.gs` ~2449).
  */
 const { isBlockedAsAddress_ } = require("../gas/addressContext");
+
+/**
+ * GAS `normalizeUnit_` — `17_PROPERTY_SCHEDULE_ENGINE.gs` ~2247–2258.
+ * @param {string} u
+ * @returns {string}
+ */
+function normalizeUnit_(u) {
+  let s = String(u || "").trim();
+  if (!s) return "";
+  s = s.replace(
+    /^(apt|apartment|departmento|apartamento|suite|ste|rm|room)\.?\s*[:#-]?\s*/i,
+    ""
+  );
+  s = s.replace(/[.,;:]$/g, "");
+  return s.toUpperCase();
+}
 
 /**
  * @param {string} text
@@ -74,4 +91,4 @@ function extractUnit(text) {
   return "";
 }
 
-module.exports = { extractUnit, isBlockedAsAddress_ };
+module.exports = { extractUnit, normalizeUnit_, isBlockedAsAddress_ };

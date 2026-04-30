@@ -1,6 +1,7 @@
 /**
  * Staff lifecycle — GAS `staffHandleLifecycleCommand_` parity:
- * resolve WI → optional schedule window (no status keywords) → normalize outcome → DB.
+ * resolve WI → optional schedule window (no status keywords) → normalize outcome →
+ * `handleLifecycleSignal_` (STAFF_UPDATE / SCHEDULE_SET) → DB.
  *
  * @see 25_STAFF_RESOLVER.gs staffHandleLifecycleCommand_ ~1367–1550
  */
@@ -10,13 +11,9 @@ const { getConversationCtx } = require("../../dal/conversationCtx");
 const {
   listOpenWorkItemsForOwner,
   getWorkItemByWorkItemId,
-  applyStaffOutcomeUpdate,
 } = require("../../dal/workItems");
-const {
-  applyPreferredWindowByTicketKey,
-  schedulePolicyRejectMessage,
-  MIN_SCHEDULE_LEN,
-} = require("../../dal/ticketPreferredWindow");
+const { MIN_SCHEDULE_LEN } = require("../../dal/ticketPreferredWindow");
+const { handleLifecycleSignal } = require("../lifecycle/handleLifecycleSignal");
 const { parsePreferredWindowShared } = require("../gas/parsePreferredWindowShared");
 const { properaTimezone, scheduleLatestHour } = require("../../config/env");
 const { resolveTargetWorkItemForStaff } = require("./resolveTargetWorkItemForStaff");
@@ -51,6 +48,9 @@ function formatClarification(resolved) {
 
 function formatOutcomeReply(wiId, norm, update) {
   if (!update.ok) return "Could not save update for " + wiId + ". Try again.";
+  if (norm === "ACCESS_ISSUE") {
+    return "Noted: access issue logged for " + wiId + ".";
+  }
   if (norm === "COMPLETED") return "Saved: " + wiId + " marked completed.";
   if (norm === "IN_PROGRESS") return "Saved: " + wiId + " marked in progress.";
   if (typeof norm === "object" && norm.outcome === "WAITING_PARTS") {
@@ -63,6 +63,31 @@ function formatOutcomeReply(wiId, norm, update) {
   }
   if (typeof norm === "string") return "Saved: " + wiId + " — " + norm + ".";
   return "Updated " + wiId + ".";
+}
+
+function formatLifecycleHold(lc) {
+  const r = lc && lc.reason ? String(lc.reason) : "";
+  if (r === "LIFECYCLE_DISABLED") {
+    return "Lifecycle is disabled for this property. Set property_policy LIFECYCLE_ENABLED (GLOBAL or property code).";
+  }
+  if (r === "SCHEDULE_SET_BAD_STATE") {
+    return (
+      "Cannot set schedule from this work item state" +
+      (lc.stateNow ? " (" + lc.stateNow + ")." : ".") +
+      " Allowed: UNSCHEDULED, WAIT_STAFF_UPDATE, or ACTIVE_WORK."
+    );
+  }
+  if (r === "POLICY_KEY_MISSING" && lc.key) {
+    return (
+      "Lifecycle policy incomplete: missing " +
+      lc.key +
+      " in property_policy (GLOBAL or this property)."
+    );
+  }
+  if (r === "missing_wi_state_for_staff_update") {
+    return "Work item has no lifecycle state; cannot apply staff update.";
+  }
+  return "Update held by lifecycle policy (" + (r || "unknown") + ").";
 }
 
 /**
@@ -290,18 +315,29 @@ async function handleStaffLifecycleCommand(o) {
           currentScheduleEndAt &&
           isFinite(currentScheduleEndAt.getTime())
         );
-        const applyResult = await applyPreferredWindowByTicketKey({
-          ticketKey,
-          preferredWindow: scheduleRemainder,
-          traceId,
-          traceStartMs: traceStartMs != null ? traceStartMs : undefined,
-        });
 
-        if (applyResult.ok) {
+        const lcSchedule = await handleLifecycleSignal(
+          sb,
+          {
+            eventType: "SCHEDULE_SET",
+            wiId: resolved.wiId,
+            propertyId: propId,
+            scheduledEndAt: scheduleParsed.end,
+            scheduleLabel: String(scheduleParsed.label || "").trim(),
+            scheduleText: scheduleRemainder,
+            rawText: body.slice(0, 500),
+            actorType: "STAFF",
+            actorId: staffActorKey,
+          },
+          {
+            traceId,
+            traceStartMs: traceStartMs != null ? traceStartMs : undefined,
+          }
+        );
+
+        if (lcSchedule.code === "OK") {
           const label =
-            applyResult.parsed && applyResult.parsed.label
-              ? String(applyResult.parsed.label).trim()
-              : scheduleRemainder;
+            String(scheduleParsed.label || "").trim() || scheduleRemainder;
           await appendEventLog({
             traceId,
             event: "STAFF_SCHEDULE_APPLIED",
@@ -310,6 +346,7 @@ async function handleStaffLifecycleCommand(o) {
               ticket_key: ticketKey,
               schedule_label: label,
               status: hadSchedule ? "UPDATED" : "SET",
+              lifecycle: "gateway",
             },
           });
           return {
@@ -324,7 +361,25 @@ async function handleStaffLifecycleCommand(o) {
               label +
               ".",
             resolution: resolved,
-            schedule: applyResult.parsed || null,
+            schedule: scheduleParsed || null,
+          };
+        }
+
+        if (lcSchedule.code === "HOLD") {
+          await appendEventLog({
+            traceId,
+            event: "STAFF_SCHEDULE_LIFECYCLE_HOLD",
+            payload: {
+              wi_id: resolved.wiId,
+              reason: lcSchedule.reason,
+              key: lcSchedule.key || null,
+            },
+          });
+          return {
+            ok: true,
+            brain: "staff_lifecycle_hold",
+            replyText: formatLifecycleHold(lcSchedule),
+            resolution: resolved,
           };
         }
 
@@ -334,30 +389,19 @@ async function handleStaffLifecycleCommand(o) {
           payload: {
             wi_id: resolved.wiId,
             ticket_key: ticketKey,
-            error: applyResult.error || "unknown",
-            policy_key: applyResult.policyKey || null,
+            lifecycle: lcSchedule,
           },
         });
-
-        if (applyResult.error === "policy") {
-          return {
-            ok: true,
-            brain: "staff_schedule_policy_reject",
-            replyText: schedulePolicyRejectMessage(
-              applyResult.policyKey,
-              applyResult.policyVars
-            ),
-            resolution: resolved,
-          };
-        }
 
         return {
           ok: true,
           brain: "staff_schedule_failed",
           replyText:
-            "Could not save schedule for " +
+            "Could not apply schedule for " +
             resolved.wiId +
-            (applyResult.error ? " (" + applyResult.error + ")." : "."),
+            " (lifecycle " +
+            String(lcSchedule.code || "") +
+            "). Check schedule policy rows and logs.",
           resolution: resolved,
         };
       }
@@ -425,25 +469,105 @@ async function handleStaffLifecycleCommand(o) {
     };
   }
 
-  const update = await applyStaffOutcomeUpdate(resolved.wiId, norm, body);
+  const outcome =
+    typeof norm === "object" && norm && norm.outcome
+      ? String(norm.outcome).toUpperCase()
+      : String(norm).toUpperCase();
+
+  const wiRowForTenantPhone = await getWorkItemByWorkItemId(resolved.wiId);
+  const tenantPhoneForLifecycle =
+    wiRowForTenantPhone && wiRowForTenantPhone.phone_e164
+      ? String(wiRowForTenantPhone.phone_e164).trim()
+      : "";
+
+  const staffSignal = {
+    eventType: "STAFF_UPDATE",
+    wiId: resolved.wiId,
+    propertyId: propId,
+    outcome,
+    rawText: body.slice(0, 500),
+    phone: tenantPhoneForLifecycle,
+    actorType: "STAFF",
+    actorId: staffActorKey,
+    reasonCode: "STAFF_UPDATE",
+  };
+  if (typeof norm === "object" && norm && norm.partsEtaAt != null) {
+    const eta = norm.partsEtaAt;
+    staffSignal.partsEtaAt =
+      eta instanceof Date ? eta : new Date(eta);
+  }
+  if (typeof norm === "object" && norm && norm.partsEtaText != null) {
+    staffSignal.partsEtaText = String(norm.partsEtaText || "").trim();
+  }
+
+  const lcOut = await handleLifecycleSignal(sb, staffSignal, {
+    traceId,
+    traceStartMs: traceStartMs != null ? traceStartMs : undefined,
+  });
+
+  if (lcOut.code === "OK") {
+    const update = { ok: true };
+    await appendEventLog({
+      traceId,
+      event: "STAFF_OUTCOME_APPLIED",
+      payload: {
+        wi_id: resolved.wiId,
+        normalized: outcome,
+        db_ok: true,
+        lifecycle: "gateway",
+      },
+    });
+
+    return {
+      ok: true,
+      brain: "staff_update_applied",
+      replyText: formatOutcomeReply(
+        resolved.wiId,
+        typeof norm === "object" ? norm : outcome,
+        update
+      ),
+      resolution: resolved,
+      outcome: norm,
+      db: update,
+    };
+  }
+
+  if (lcOut.code === "HOLD") {
+    await appendEventLog({
+      traceId,
+      event: "STAFF_OUTCOME_LIFECYCLE_HOLD",
+      payload: {
+        wi_id: resolved.wiId,
+        reason: lcOut.reason,
+        key: lcOut.key || null,
+      },
+    });
+    return {
+      ok: true,
+      brain: "staff_lifecycle_hold",
+      replyText: formatLifecycleHold(lcOut),
+      resolution: resolved,
+      outcome: norm,
+    };
+  }
+
   await appendEventLog({
     traceId,
-    event: "STAFF_OUTCOME_APPLIED",
-    payload: {
-      wi_id: resolved.wiId,
-      normalized:
-        typeof norm === "object" ? norm.outcome || norm : norm,
-      db_ok: update.ok,
-    },
+    event: "STAFF_OUTCOME_REJECTED",
+    payload: { wi_id: resolved.wiId, lifecycle: lcOut },
   });
 
   return {
     ok: true,
-    brain: "staff_update_applied",
-    replyText: formatOutcomeReply(resolved.wiId, norm, update),
+    brain: "staff_update_failed",
+    replyText:
+      "Could not apply staff update for " +
+      resolved.wiId +
+      " (" +
+      String(lcOut.code || "") +
+      ").",
     resolution: resolved,
     outcome: norm,
-    db: update,
   };
 }
 

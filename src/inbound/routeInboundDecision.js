@@ -19,9 +19,10 @@ function getEffectiveCompliance(smsCompliance, precursor) {
  * Lane: staff # capture, staff operational gate, or `decideLane(inbound)`.
  * @param {{ outcome: string, staffCapture?: object }} precursor
  * @param {object} inbound — normalized inbound event
+ * @param {{ isStaff?: boolean }} [staffContext] — DB staff row match (not transport format)
  * @returns {{ lane: string, reason: string, mode: string, trace: string }}
  */
-function buildLaneDecision(precursor, inbound) {
+function buildLaneDecision(precursor, inbound, staffContext) {
   if (precursor.outcome === "STAFF_CAPTURE_HASH") {
     return {
       lane: "staffCapture",
@@ -35,6 +36,18 @@ function buildLaneDecision(precursor, inbound) {
       lane: "staffOperational",
       reason: "staff_intercept_before_lane",
       mode: "STAFF",
+      trace: "lane_v1",
+    };
+  }
+  if (
+    staffContext &&
+    staffContext.isStaff &&
+    precursor.outcome === "PRECURSOR_EVALUATED"
+  ) {
+    return {
+      lane: "managerLane",
+      reason: "staff_identity",
+      mode: "MANAGER",
       trace: "lane_v1",
     };
   }
@@ -126,6 +139,7 @@ function buildNonMaintenanceLaneStub(lane) {
  * @param {object | null} o.suppressedRun
  * @param {string | null | undefined} o.effectiveCompliance — blocks core when truthy (SMS keyword matched)
  * @param {{ outcome: string, tenantCommand?: string | null }} o.precursor
+ * @param {string} [o.transportChannel] — when `portal`, core (LLM intake) is off except `#` staff capture
  */
 function computeCanEnterCore(o) {
   const {
@@ -137,8 +151,16 @@ function computeCanEnterCore(o) {
     suppressedRun,
     effectiveCompliance,
     precursor,
-  } = o;
+    transportChannel,
+  } = o || {};
   if (!laneAllowsMaintenanceCore(laneDecision)) return false;
+
+  const transport = String(transportChannel || "").toLowerCase();
+  const outcome = String((precursor && precursor.outcome) || "");
+  if (transport === "portal" && outcome !== "STAFF_CAPTURE_HASH") {
+    return false;
+  }
+
   return (
     !!coreEnabledFlag &&
     !!dbConfigured &&

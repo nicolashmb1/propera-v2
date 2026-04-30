@@ -142,6 +142,16 @@
       );
       border-bottom: 1px solid var(--border);
     }
+    button.copy-thread-btn {
+      padding: 0.3rem 0.55rem;
+      font-size: 0.72rem;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    button.copy-thread-btn.copied {
+      border-color: var(--accent);
+      color: #fff;
+    }
     .request-hero .rs-grid {
       display: grid;
       gap: 0.55rem 1.25rem;
@@ -196,6 +206,18 @@
       font-family: var(--mono);
       color: #6b7c95;
       word-break: break-all;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem 1rem;
+    }
+    .request-hero .rs-meta .rs-meta-trace {
+      min-width: 0;
+      flex: 1 1 12rem;
+    }
+    .request-hero .rs-meta .copy-thread-btn {
+      font-family: var(--font);
     }
     .event-log-details {
       border: none;
@@ -336,6 +358,9 @@
     </aside>
     <main>
       <div id="status" class="status"></div>
+      <p class="hint" id="copy-hint" style="margin:0 0 0.9rem;max-width:40rem">
+        <strong>Copy</strong> next to the trace id copies the summary and full event log (plain text) for that thread.
+      </p>
       <div id="threads"></div>
     </main>
   </div>
@@ -363,6 +388,13 @@
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;");
+  }
+
+  function escAttr(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/</g, "&lt;");
   }
 
   function eventPayloadHtml(ev) {
@@ -404,9 +436,71 @@
     return m + "m " + s.toFixed(0) + "s";
   }
 
-  /**
-   * Derive outcome-focused summary from raw event rows (same data the API returns).
-   */
+  /** Plain text for clipboard: compiled summary + every event (chronological). */
+  function formatThreadForClipboard(th, s) {
+    const lines = [];
+    lines.push("=== Propera ops thread ===");
+    lines.push("trace_id: " + String(th.trace_id || ""));
+    if (th.started_at) lines.push("started_at: " + th.started_at);
+    if (th.ended_at) lines.push("ended_at: " + th.ended_at);
+    if (th.telegram_user_id != null)
+      lines.push("telegram_user_id: " + String(th.telegram_user_id));
+    if (th.actor_key) lines.push("actor_key: " + String(th.actor_key));
+    if (th.inbound_preview) lines.push("inbound_preview: " + String(th.inbound_preview));
+    lines.push("");
+    lines.push("--- Summary (compiled deck) ---");
+    lines.push("Tenant: " + String(s.tenant || ""));
+    lines.push("Message: " + String(s.preview || ""));
+    lines.push("Result: " + String(s.result || ""));
+    lines.push("Ticket: " + String(s.ticketId || ""));
+    lines.push("LLM structured: " + String(s.llm || ""));
+    lines.push("Duration: " + String(s.durationLabel || ""));
+    lines.push("Events: " + String(s.eventCount != null ? s.eventCount : ""));
+    lines.push("");
+    lines.push("--- Event log (all rows) ---");
+    const evs = Array.isArray(th.events) ? th.events.slice() : [];
+    evs.sort(
+      (a, b) =>
+        new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
+    );
+    evs.forEach((ev, i) => {
+      lines.push("");
+      lines.push("[" + (i + 1) + "] " + String(ev.created_at || ""));
+      lines.push("log_kind: " + String(ev.log_kind || ""));
+      lines.push("event: " + String(ev.event || ""));
+      try {
+        lines.push(
+          "payload:\n" + JSON.stringify(ev.payload != null ? ev.payload : {}, null, 2)
+        );
+      } catch (_) {
+        lines.push("payload: (unserializable)");
+      }
+    });
+    return lines.join("\n");
+  }
+
+  async function copyTextToClipboard(text) {
+    const t = String(text || "");
+    if (!t) return false;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(t);
+      return true;
+    }
+    const ta = document.createElement("textarea");
+    ta.value = t;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+      return true;
+    } finally {
+      document.body.removeChild(ta);
+    }
+  }
+
   function summarizeRequest(th) {
     const events = th.events || [];
     const firstWithCtx = events.find(
@@ -545,7 +639,10 @@
               <div class="rs-row rs-row--llm"><span class="rs-label">LLM</span><span class="rs-value">${esc(s.llm)}</span></div>
               <div class="rs-row rs-row--dur"><span class="rs-label">Duration</span><span class="rs-value">${esc(s.durationLabel)}</span></div>
             </div>
-            <div class="rs-meta">trace ${esc(th.trace_id)} · ${s.eventCount} events</div>
+            <div class="rs-meta">
+              <span class="rs-meta-trace">trace ${esc(th.trace_id)} · ${s.eventCount} events</span>
+              <button type="button" class="copy-thread-btn" data-copy-trace="${escAttr(th.trace_id)}" title="Copy summary + full event log">Copy</button>
+            </div>
           </div>
           <details class="event-log-details">
             <summary>Event log · ${s.eventCount} rows · expand for timestamps &amp; payloads</summary>
@@ -554,6 +651,32 @@
         </section>`;
       })
       .join("");
+    el.querySelectorAll(".copy-thread-btn").forEach((btn) => {
+      const tid = btn.getAttribute("data-copy-trace");
+      const th = threads.find((t) => String(t.trace_id || "") === tid);
+      if (!th) return;
+      btn.addEventListener("click", async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const s = summarizeRequest(th);
+        const text = formatThreadForClipboard(th, s);
+        const label = btn.textContent;
+        try {
+          await copyTextToClipboard(text);
+          btn.textContent = "Copied!";
+          btn.classList.add("copied");
+          setTimeout(() => {
+            btn.textContent = label;
+            btn.classList.remove("copied");
+          }, 2000);
+        } catch (err) {
+          btn.textContent = "Copy failed";
+          setTimeout(() => {
+            btn.textContent = label;
+          }, 2000);
+        }
+      });
+    });
   }
 
   async function load() {

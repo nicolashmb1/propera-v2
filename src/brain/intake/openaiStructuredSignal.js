@@ -6,6 +6,7 @@
 const {
   properaRawStructuredSignalIsValid,
 } = require("./structuredSignal");
+const { openaiChatCompletionsWithRetry } = require("../../integrations/openaiTransport");
 
 const DEFAULT_MODEL = "gpt-4o-mini";
 const MAX_INPUT = 3500;
@@ -73,6 +74,14 @@ function buildSystemPrompt() {
     "- propertyName: building name ONLY if directly stated, else \"\"\n" +
     "- unit: apartment/unit if stated, else \"\"\n" +
     "- issues: array of { title, summary, tenantDescription, locationArea, locationDetail, locationType, category, urgency }\n" +
+    "  HOW MANY issues[] entries (most important):\n" +
+    "  - Default: exactly ONE issue object that covers the whole request (best summary in summary/title).\n" +
+    "  - Use TWO OR MORE objects ONLY when the message clearly describes SEPARATE failures that ops would normally treat as SEPARATE work orders (different equipment or different trade), e.g. \"sink is clogged\" AND \"ice maker not working\" (plumbing vs appliance).\n" +
+    "  - Use ONE object when several phrases are really ONE root cause or one appliance/system, even if they sound like two complaints:\n" +
+    "    • \"Refrigerator not working\" and \"doesn't make any ice\" → ONE issue (same fridge / cooling).\n" +
+    "    • \"Sink clogged\" and \"water is draining slow\" / \"drains slowly\" → ONE issue (same drain / same plumbing symptom chain).\n" +
+    "  - Do NOT split just because the tenant used \"and\", a comma, or two sentences; only split when a reasonable maintainer would open two unrelated tickets.\n" +
+    "  - When in doubt, prefer ONE issue with a fuller summary.\n" +
     "- schedule: { \"raw\": string } or null\n" +
     "- actionSignals: object\n" +
     "- queryType: string\n" +
@@ -100,45 +109,39 @@ function buildSystemPrompt() {
  * @returns {Promise<{ ok: boolean, json: object|null, err: string }>}
  */
 async function openaiChatJson(o) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), o.timeoutMs || TIMEOUT_MS);
+  const r = await openaiChatCompletionsWithRetry({
+    apiKey: o.apiKey,
+    timeoutMs: o.timeoutMs || TIMEOUT_MS,
+    maxRetries: 2,
+    body: {
+      model: o.model,
+      messages: [
+        { role: "system", content: o.system },
+        { role: "user", content: o.user },
+      ],
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+    },
+  });
+
+  if (!r.ok || !r.data) {
+    return { ok: false, json: null, err: r.err || "api_fail" };
+  }
   try {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "Bearer " + o.apiKey,
-      },
-      body: JSON.stringify({
-        model: o.model,
-        messages: [
-          { role: "system", content: o.system },
-          { role: "user", content: o.user },
-        ],
-        temperature: 0.2,
-        response_format: { type: "json_object" },
-      }),
-      signal: ctrl.signal,
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok) {
-      const msg = data && data.error ? JSON.stringify(data.error) : String(res.status);
-      return { ok: false, json: null, err: msg };
-    }
     const content =
-      data &&
-      data.choices &&
-      data.choices[0] &&
-      data.choices[0].message &&
-      data.choices[0].message.content;
+      r.data.choices &&
+      r.data.choices[0] &&
+      r.data.choices[0].message &&
+      r.data.choices[0].message.content;
     if (!content) return { ok: false, json: null, err: "no_content" };
     const json = JSON.parse(String(content));
     return { ok: true, json, err: "" };
   } catch (e) {
-    const msg = e && e.name === "AbortError" ? "timeout" : String(e && e.message ? e.message : e);
-    return { ok: false, json: null, err: msg };
-  } finally {
-    clearTimeout(t);
+    return {
+      ok: false,
+      json: null,
+      err: String(e && e.message ? e.message : e),
+    };
   }
 }
 

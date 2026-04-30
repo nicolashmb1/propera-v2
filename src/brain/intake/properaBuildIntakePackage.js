@@ -27,6 +27,10 @@ const { appendEventLog } = require("../../dal/appendEventLog");
 const {
   parseIssueDeterministic,
 } = require("../gas/issueParseDeterministic");
+const {
+  inferLocationTypeFromText,
+  normalizeLocationType,
+} = require("../shared/commonArea");
 
 /**
  * GAS `properaFallbackStructuredSignalFromDeterministicParse_` — `07_PROPERA_INTAKE_PACKAGE.gs` ~1434–1501.
@@ -50,7 +54,7 @@ function signalFromDeterministic(tRaw, phone, known, propertiesList) {
       tenantDescription: txt.slice(0, 900),
       locationArea: "",
       locationDetail: "",
-      locationType: "UNIT",
+      locationType: inferLocationTypeFromText(txt),
       category: String(parsed.category || "").trim(),
       urgency:
         String(parsed.urgency || "normal").toLowerCase() === "urgent"
@@ -68,7 +72,7 @@ function signalFromDeterministic(tRaw, phone, known, propertiesList) {
         tenantDescription: String(tRaw).slice(0, 900),
         locationArea: "",
         locationDetail: "",
-        locationType: "UNIT",
+        locationType: inferLocationTypeFromText(oneFinal),
         category: String(parsed.category || "").trim(),
         urgency: "normal",
       });
@@ -94,14 +98,68 @@ function signalFromDeterministic(tRaw, phone, known, propertiesList) {
   return { sig, parsedIssueDeterministic: parsed };
 }
 
-function locationPackFromIssue(issueHead, bodyForText) {
+/**
+ * Collapse structured `issues[]` into one maintenance string for merge / draft display.
+ * Multiple LLM issues are joined with " and "; **finalize ticket count** comes from the same
+ * `structuredSignal.issues[]` via `finalizeTicketGroups.reconcileFinalizeTicketRows` (GAS parity),
+ * not from punctuation splitting.
+ */
+function issueHeadFromStructuredIssues(issuesArr) {
+  const arr = Array.isArray(issuesArr) ? issuesArr : [];
+  const heads = [];
+  const seen = new Set();
+  for (let i = 0; i < arr.length; i++) {
+    const it = arr[i];
+    if (!it || typeof it !== "object") continue;
+    const h = String(it.summary || it.title || "").trim();
+    if (!h) continue;
+    const k = h.toLowerCase().replace(/\s+/g, " ");
+    if (seen.has(k)) continue;
+    seen.add(k);
+    heads.push(h);
+  }
+  if (!heads.length) return "";
+  if (heads.length === 1) return heads[0];
+  return heads.join(" and ");
+}
+
+function issueClausePartsFromStructuredIssues(issuesArr) {
+  const arr = Array.isArray(issuesArr) ? issuesArr : [];
+  const heads = [];
+  const seen = new Set();
+  for (let i = 0; i < arr.length; i++) {
+    const it = arr[i];
+    if (!it || typeof it !== "object") continue;
+    const h = String(it.summary || it.title || "").trim();
+    if (!h) continue;
+    const k = h.toLowerCase().replace(/\s+/g, " ");
+    if (seen.has(k)) continue;
+    seen.add(k);
+    heads.push(h);
+  }
+  return heads;
+}
+
+function firstIssueLocationType(issuesArr, fallbackText) {
+  const arr = Array.isArray(issuesArr) ? issuesArr : [];
+  for (let i = 0; i < arr.length; i++) {
+    const it = arr[i];
+    if (!it || typeof it !== "object") continue;
+    const t = String(it.locationType || "").trim();
+    if (t) return normalizeLocationType(t);
+  }
+  return inferLocationTypeFromText(fallbackText);
+}
+
+function locationPackFromIssue(issueHead, bodyForText, issuesArr) {
   const locText = String(issueHead || bodyForText || "").trim();
+  const locType = firstIssueLocationType(issuesArr, locText);
   return {
-    locationType: "UNIT",
+    locationType: locType,
     locationArea: "",
     locationDetail: "",
-    locationScopeBroad: "UNIT",
-    locationScopeRefined: "UNIT",
+    locationScopeBroad: locType,
+    locationScopeRefined: locType,
     locationSource: "structured_signal",
     locationConfidence: 0.55,
     locationText: locText,
@@ -198,7 +256,13 @@ async function properaBuildIntakePackage(opts) {
       },
     });
     if (ex.ok && ex.signal) {
-      sig = properaCanonizeStructuredSignal(ex.signal, phone, "llm", tRaw);
+      sig = properaCanonizeStructuredSignal(
+        ex.signal,
+        phone,
+        "llm",
+        tRaw,
+        Array.isArray(opts.propertiesList) ? opts.propertiesList : []
+      );
       llmStructuredUsed = true;
     }
   }
@@ -223,10 +287,8 @@ async function properaBuildIntakePackage(opts) {
     sig.safety.requiresImmediateInstructions = !!em.requiresImmediateInstructions;
   }
 
-  const firstIss = sig.issues && sig.issues[0] ? sig.issues[0] : null;
-  const issueHead = firstIss
-    ? String(firstIss.summary || firstIss.title || "").trim()
-    : "";
+  const issueHead = issueHeadFromStructuredIssues(sig.issues);
+  const issuePartsForMeta = issueClausePartsFromStructuredIssues(sig.issues);
 
   let propObj = null;
   if (String(sig.propertyCode || "").trim()) {
@@ -236,7 +298,7 @@ async function properaBuildIntakePackage(opts) {
     };
   }
 
-  const locPack = locationPackFromIssue(issueHead, tRaw);
+  const locPack = locationPackFromIssue(issueHead, tRaw, sig.issues);
 
   let issueMetaOut = null;
   if (parsedIssueDeterministic) {
@@ -255,15 +317,34 @@ async function properaBuildIntakePackage(opts) {
       debug: String(p.debug || "").trim(),
     };
   } else if (issueHead) {
-    issueMetaOut = {
-      title: issueHead,
-      bestClauseText: issueHead,
-      clauses: [{ text: issueHead, title: issueHead, type: "problem" }],
-      problemSpanCount: 1,
-      source: "package_v2",
-      category: "",
-      urgency: "normal",
-    };
+    if (llmStructuredUsed && issuePartsForMeta.length > 1) {
+      issueMetaOut = {
+        title: String(issuePartsForMeta[0] || issueHead).trim(),
+        details: "",
+        bestClauseText: issueHead,
+        clauses: issuePartsForMeta.map((h) => ({
+          text: h,
+          title: h,
+          type: "problem",
+        })),
+        problemSpanCount: issuePartsForMeta.length,
+        source: "llm_structured_multi",
+        category: "",
+        subcategory: "",
+        urgency: "normal",
+        debug: "",
+      };
+    } else {
+      issueMetaOut = {
+        title: issueHead,
+        bestClauseText: issueHead,
+        clauses: [{ text: issueHead, title: issueHead, type: "problem" }],
+        problemSpanCount: 1,
+        source: "package_v2",
+        category: "",
+        urgency: "normal",
+      };
+    }
   }
 
   emitTimed(traceStartMs, {
@@ -363,4 +444,6 @@ module.exports = {
   properaBuildIntakePackage,
   parseIssueDeterministic,
   signalFromDeterministic,
+  issueHeadFromStructuredIssues,
+  issueClausePartsFromStructuredIssues,
 };

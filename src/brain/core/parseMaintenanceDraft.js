@@ -12,6 +12,10 @@ const {
   detectPropertyFromBody,
   extractPropertyHintFromBody,
 } = require("../staff/lifecycleExtract");
+const {
+  inferLocationTypeFromText,
+  isCommonAreaLocation,
+} = require("../shared/commonArea");
 const { intakeCompileTurnEnabled } = require("../../config/env");
 const { emitTimed } = require("../../logging/structuredLog");
 const { appendEventLog } = require("../../dal/appendEventLog");
@@ -20,7 +24,7 @@ const { appendEventLog } = require("../../dal/appendEventLog");
  * @param {string} bodyTrim
  * @param {Set<string>} knownPropertyCodesUpper
  * @param {Array<{ code: string, display_name: string }>} [propertiesList]
- * @returns {{ propertyCode: string, unitLabel: string, issueText: string, scheduleRaw: string, openerNext: string }}
+ * @returns {{ propertyCode: string, unitLabel: string, issueText: string, scheduleRaw: string, openerNext: string, locationType: string }}
  */
 function parseMaintenanceDraft(bodyTrim, knownPropertyCodesUpper, propertiesList) {
   const t = String(bodyTrim || "").trim();
@@ -31,6 +35,7 @@ function parseMaintenanceDraft(bodyTrim, knownPropertyCodesUpper, propertiesList
       issueText: "",
       scheduleRaw: "",
       openerNext: "",
+      locationType: "UNIT",
     };
   }
 
@@ -56,6 +61,7 @@ function parseMaintenanceDraft(bodyTrim, knownPropertyCodesUpper, propertiesList
     issueText: issue || t,
     scheduleRaw: "",
     openerNext: "",
+    locationType: inferLocationTypeFromText(issue || t),
   };
 }
 
@@ -63,7 +69,7 @@ function parseMaintenanceDraft(bodyTrim, knownPropertyCodesUpper, propertiesList
  * @param {string} bodyTrim
  * @param {Set<string>} knownPropertyCodesUpper
  * @param {{ traceId?: string, traceStartMs?: number, propertiesList?: Array<{ code: string, display_name: string }> }} [opts]
- * @returns {Promise<{ propertyCode: string, unitLabel: string, issueText: string, scheduleRaw: string, openerNext: string }>}
+ * @returns {Promise<{ propertyCode: string, unitLabel: string, issueText: string, scheduleRaw: string, openerNext: string, locationType: string }>}
  */
 async function parseMaintenanceDraftAsync(bodyTrim, knownPropertyCodesUpper, opts) {
   const traceId =
@@ -113,11 +119,12 @@ async function parseMaintenanceDraftAsync(bodyTrim, knownPropertyCodesUpper, opt
         },
       });
     }
-    return parseMaintenanceDraft(
+    const d = parseMaintenanceDraft(
       bodyTrim,
       knownPropertyCodesUpper,
       opts && Array.isArray(opts.propertiesList) ? opts.propertiesList : []
     );
+    return { ...d, structuredIssues: null };
   }
   const { compileTurn } = require("../intake/compileTurn");
   const tf = await compileTurn(
@@ -140,10 +147,15 @@ async function parseMaintenanceDraftAsync(bodyTrim, knownPropertyCodesUpper, opt
       : "";
   let issueText = String(tf.issue || "").trim();
   if (!issueText) issueText = String(bodyTrim || "").trim();
+  const structuredIssues =
+    tf.structuredSignal && Array.isArray(tf.structuredSignal.issues)
+      ? tf.structuredSignal.issues
+      : null;
   return {
     propertyCode: code,
     unitLabel: String(tf.unit || "").trim(),
     issueText,
+    structuredIssues,
     scheduleRaw:
       tf && tf.schedule && tf.schedule.raw ? String(tf.schedule.raw).trim() : "",
     openerNext:
@@ -152,16 +164,24 @@ async function parseMaintenanceDraftAsync(bodyTrim, knownPropertyCodesUpper, opt
       tf.missingSlots.scheduleMissing === true
         ? "SCHEDULE"
         : "",
+    locationType:
+      tf && tf.location && tf.location.locationType
+        ? String(tf.location.locationType).trim().toUpperCase()
+        : inferLocationTypeFromText(issueText || bodyTrim),
   };
 }
 
 /**
- * @param {{ propertyCode: string, unitLabel: string, issueText: string }} d
+ * @param {{ propertyCode: string, unitLabel: string, issueText: string, locationType?: string }} d
  */
 function isMaintenanceDraftComplete(d) {
   if (!d) return false;
   if (!String(d.propertyCode || "").trim()) return false;
-  if (!String(d.unitLabel || "").trim()) return false;
+  if (
+    !isCommonAreaLocation(d.locationType) &&
+    !String(d.unitLabel || "").trim()
+  )
+    return false;
   if (!String(d.issueText || "").trim() || String(d.issueText).trim().length < 2)
     return false;
   return true;

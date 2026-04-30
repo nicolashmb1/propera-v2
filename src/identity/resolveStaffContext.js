@@ -50,7 +50,7 @@ async function isStaffForLookupKey(sb, lookupRaw) {
 
   const { data: staff, error: sErr } = await sb
     .from("staff")
-    .select("id, staff_id, display_name, role, active")
+    .select("id, staff_id, display_name, role, active, contact_id")
     .eq("contact_id", contact.id)
     .maybeSingle();
 

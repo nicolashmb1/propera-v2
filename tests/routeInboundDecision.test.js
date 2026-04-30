@@ -54,8 +54,50 @@ test("computeCanEnterCore — happy path tenant", () => {
       suppressedRun: null,
       effectiveCompliance: null,
       precursor,
+      transportChannel: "sms",
     }),
     true
+  );
+});
+
+test("computeCanEnterCore — portal skips maintenance core (no LLM) except # staff capture", () => {
+  const staffCaptureLane = {
+    lane: "staffCapture",
+    reason: "hash_prefix",
+    mode: "MANAGER",
+    trace: "lane_v1",
+  };
+  assert.equal(
+    computeCanEnterCore({
+      laneDecision: staffCaptureLane,
+      coreEnabledFlag: true,
+      dbConfigured: true,
+      staffRun: null,
+      complianceRun: null,
+      suppressedRun: null,
+      effectiveCompliance: null,
+      precursor: {
+        outcome: "STAFF_CAPTURE_HASH",
+        staffCapture: { stripped: "penn 303 leak" },
+        tenantCommand: null,
+      },
+      transportChannel: "portal",
+    }),
+    true
+  );
+  assert.equal(
+    computeCanEnterCore({
+      laneDecision: tenantLane,
+      coreEnabledFlag: true,
+      dbConfigured: true,
+      staffRun: null,
+      complianceRun: null,
+      suppressedRun: null,
+      effectiveCompliance: null,
+      precursor: { outcome: "PRECURSOR_EVALUATED", tenantCommand: null },
+      transportChannel: "portal",
+    }),
+    false
   );
 });
 

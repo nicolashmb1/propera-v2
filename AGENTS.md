@@ -24,6 +24,7 @@ Optional: **`docs/GAS_ENGINE_PORT_PROGRAM.md`** (phased port for engines 10/12/1
 
 - **GAS + Sheets = production brain** until a deliberate cutover. V2 is the parallel Node runtime under `propera-v2/`.  
 - **Do not add new product paths or new brain surfaces** unless the user explicitly un-freezes that. Prior work item: **what is already wired must behave like GAS** (regression / parity), not scope expansion.  
+- **Exception (explicit):** **PM/Task V1** — template-driven `program_runs` / `program_lines` + `/api/portal/program-*` routes (**`docs/PM_PROGRAM_ENGINE_V1.md`**). **Not** tenant reactive intake; keep **`handleInboundCore`** out of program creation.  
 - **Any behavior change** → update **`docs/PARITY_LEDGER.md`** and pointer comments in code (`PARITY GAP:` where reduced vs GAS).
 
 ---

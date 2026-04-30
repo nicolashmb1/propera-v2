@@ -185,6 +185,30 @@ test("merge UNIT stage", () => {
   assert.equal(m.draft_unit, "401");
 });
 
+test("merge UNIT — meta LLM issueText does not append when draft issue exists", () => {
+  const m = mergeMaintenanceDraftTurn({
+    bodyText: "common area",
+    expected: "UNIT",
+    draft_issue: "Water leak on bathroom ceiling",
+    draft_property: "MORRIS",
+    draft_unit: "",
+    draft_schedule_raw: "",
+    draft_issue_buf_json: ["Water leak on bathroom ceiling"],
+    knownPropertyCodesUpper: known,
+    propertiesList: props,
+    parsedDraft: {
+      propertyCode: "MORRIS",
+      unitLabel: "",
+      issueText: "Request for information regarding the common area",
+    },
+  });
+  assert.ok(
+    !m.draft_issue_buf_json.some((x) =>
+      String(x).toLowerCase().includes("request for information")
+    )
+  );
+});
+
 test("ISSUE stage — do not treat 'not' as unit token", () => {
   const m = mergeMaintenanceDraftTurn({
     bodyText:

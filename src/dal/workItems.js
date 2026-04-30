@@ -21,7 +21,10 @@ async function listOpenWorkItemsForOwner(staffOwnerId) {
 
   if (error || !data) return [];
 
-  return data.filter((row) => String(row.status || "").toUpperCase() !== "COMPLETED");
+  return data.filter((row) => {
+    const s = String(row.status || "").toUpperCase();
+    return s !== "COMPLETED" && s !== "CANCELED" && s !== "DELETED";
+  });
 }
 
 /**
@@ -36,7 +39,7 @@ async function getWorkItemByWorkItemId(workItemId) {
   const { data, error } = await sb
     .from("work_items")
     .select(
-      "work_item_id, unit_id, property_id, ticket_key, owner_id, status, state, substate, metadata_json"
+      "work_item_id, unit_id, property_id, ticket_key, owner_id, phone_e164, status, state, substate, metadata_json"
     )
     .eq("work_item_id", wid)
     .maybeSingle();

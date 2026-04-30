@@ -153,6 +153,21 @@ function dashboardToken() {
   return String(env("DASHBOARD_TOKEN", "")).trim();
 }
 
+/** POST `/internal/cron/lifecycle-timers` — header `X-Propera-Cron-Secret` must match when set. */
+function lifecycleCronSecret() {
+  return String(env("LIFECYCLE_CRON_SECRET", "")).trim();
+}
+
+/**
+ * Portal read API + portal inbound (`/api/portal/*`, `/webhooks/portal`).
+ * Align with GAS `PORTAL_API_TOKEN_PM` / propera-app `PROPERA_PM_TOKEN` when set.
+ */
+function portalApiToken() {
+  return String(
+    env("PROPERA_PORTAL_TOKEN", env("PORTAL_API_TOKEN_PM", ""))
+  ).trim();
+}
+
 module.exports = {
   env,
   nodeEnv: env("NODE_ENV", "development"),
@@ -179,4 +194,6 @@ module.exports = {
   openaiModelVision,
   dashboardEnabled,
   dashboardToken,
+  lifecycleCronSecret,
+  portalApiToken,
 };

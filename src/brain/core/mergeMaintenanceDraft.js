@@ -15,6 +15,7 @@ const {
   canonicalInboundLooksScheduleOnly,
   intakeMaintenanceSymptomHeuristic,
 } = require("./intakeAttachClassify");
+const { hasProblemSignal } = require("./splitIssueGroups");
 
 /**
  * @param {string} bodyTrim
@@ -132,6 +133,10 @@ function mergeMaintenanceDraftTurn(o) {
     if (attachDec.suppressRawIssueForMerge) return;
     const candidate = parsed.issueText;
     if (!candidate) return;
+    // UNIT slot: LLM often restates "common area" as meta copy; do not stack that on a real issue.
+    if (exp === "UNIT" && issue && !hasProblemSignal(String(candidate).trim())) {
+      return;
+    }
     if (!issue) {
       issue = candidate;
       pushIssueBuffer(candidate);

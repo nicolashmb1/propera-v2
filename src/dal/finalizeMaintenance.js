@@ -4,6 +4,7 @@
 const crypto = require("crypto");
 const { getSupabase } = require("../db/supabase");
 const { getPropertyByCode } = require("./propertyLookup");
+const { lifecyclePolicyGet } = require("./lifecyclePolicyDal");
 const {
   formatHumanTicketId,
   inferEmergency,
@@ -11,6 +12,11 @@ const {
   buildThreadIdV2,
 } = require("./ticketDefaults");
 const { parseMediaJson } = require("../brain/shared/mediaPayload");
+const { getStaffDisplayNameByStaffId } = require("./staffPhoneByStaffId");
+const {
+  normalizeLocationType,
+  isCommonAreaLocation,
+} = require("../brain/shared/commonArea");
 
 function shortWiSuffix() {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase();
@@ -56,6 +62,11 @@ function buildTicketAttachmentsFromRouterParameter(routerParameter) {
  * @param {string} [o.staffActorKey]
  * @param {string} [o.telegramUpdateId]
  * @param {Record<string, string | undefined>} [o.routerParameter]
+ * @param {string} [o.tenantPhoneE164] — **MANAGER / staff #capture:** resident phone from `tenant_roster` lookup only; never staff phone
+ * @param {object} [o.tenantLookupMeta] — merged into `work_items.metadata_json` (GAS `enrichStaffCapTenantIdentity_` fields)
+ * @param {string} [o.locationType] — `UNIT|COMMON_AREA`
+ * @param {string} [o.reportSourceUnit] — report context only (not persisted as `unit_label` for common-area)
+ * @param {string} [o.reportSourcePhone] — report context only (not persisted as tenant phone for common-area)
  */
 async function finalizeMaintenanceDraft(o) {
   const sb = getSupabase();
@@ -70,8 +81,29 @@ async function finalizeMaintenanceDraft(o) {
   const uuidTicketKey = crypto.randomUUID();
   const workItemId = "WI_" + shortWiSuffix();
 
-  const tenantPhone =
-    o.mode === "MANAGER" ? "" : String(o.actorKey || "").trim();
+  const resolvedTenant = String(o.tenantPhoneE164 || "").trim();
+  const locationType = normalizeLocationType(o.locationType);
+  const commonArea = isCommonAreaLocation(locationType);
+  const tenantPhoneRaw =
+    o.mode === "MANAGER"
+      ? resolvedTenant
+      : String(o.actorKey || "").trim();
+  const tenantPhone = commonArea ? "" : tenantPhoneRaw;
+  const persistedUnit = commonArea ? "" : String(o.unitLabel || "").trim();
+
+  const sourceUnit = String(o.reportSourceUnit || o.unitLabel || "").trim();
+  const sourcePhone = String(o.reportSourcePhone || tenantPhoneRaw || "").trim();
+  const issueBase = String(o.issueText || "").trim();
+  let messageRaw = issueBase;
+  if (commonArea) {
+    const ctxParts = [];
+    if (sourceUnit) ctxParts.push("Report from apt " + sourceUnit);
+    if (sourcePhone) ctxParts.push("Phone: " + sourcePhone);
+    const ctxLine = ctxParts.join(" ");
+    if (ctxLine) {
+      messageRaw = ctxLine + (issueBase ? "\n" + issueBase : "");
+    }
+  }
 
   const p = o.routerParameter || {};
   const ticketAttachments = buildTicketAttachmentsFromRouterParameter(p);
@@ -84,6 +116,28 @@ async function finalizeMaintenanceDraft(o) {
   });
 
   const { emergency, emergencyType } = inferEmergency(o.issueText);
+  const propCodeUpper = String(o.propertyCode || "").trim().toUpperCase();
+  let ownerId = "";
+  try {
+    ownerId = String(
+      (await lifecyclePolicyGet(sb, propCodeUpper, "ASSIGN_DEFAULT_OWNER", "")) ||
+        ""
+    ).trim();
+  } catch (_) {}
+
+  let assignLabel = "";
+  if (ownerId) {
+    try {
+      assignLabel =
+        (await getStaffDisplayNameByStaffId(sb, ownerId)) || ownerId;
+    } catch (_) {
+      assignLabel = ownerId;
+    }
+  }
+
+  /** GAS lifecycle: unscheduled intake vs emergency (see `onWorkItemCreatedUnscheduled_`). */
+  const wiState = emergency ? "STAFF_TRIAGE" : "UNSCHEDULED";
+  const wiSubstate = emergency ? "EMERGENCY" : "";
   const categoryLabel = localCategoryFromText(o.issueText);
   const now = new Date();
   const nowIso = now.toISOString();
@@ -98,14 +152,17 @@ async function finalizeMaintenanceDraft(o) {
     media_count: mediaForMeta.length,
     media_ocr_present: mediaForMeta.some((m) => String((m && m.ocr_text) || "").trim().length > 0),
   };
+  if (o.tenantLookupMeta && typeof o.tenantLookupMeta === "object") {
+    Object.assign(meta, o.tenantLookupMeta);
+  }
 
   /** Full Sheet1 parity (requires supabase/migrations/006_tickets_sheet1_columns.sql). */
   const ticketRow = {
     ticket_id: humanTicketId,
     tenant_phone_e164: tenantPhone,
     property_code: o.propertyCode,
-    unit_label: o.unitLabel,
-    message_raw: o.issueText,
+    unit_label: persistedUnit,
+    message_raw: messageRaw,
     category: categoryLabel,
     status: "OPEN",
     ticket_key: uuidTicketKey,
@@ -123,7 +180,7 @@ async function finalizeMaintenanceDraft(o) {
     escalated_to_you: "No",
     thread_id: threadId,
 
-    assign_to: "",
+    assign_to: assignLabel,
     due_by: null,
     last_activity_at: nowIso,
     preferred_window: "",
@@ -144,17 +201,17 @@ async function finalizeMaintenanceDraft(o) {
 
     legacy_property_id: legacyPropId,
     legacy_unit_id: "",
-    location_type: "UNIT",
+    location_type: locationType,
     work_type: "MAINTENANCE",
     resident_id: "",
     unit_issue_count: "",
     target_property_id: "",
 
-    assigned_type: "",
-    assigned_id: "",
-    assigned_name: "",
-    assigned_at: null,
-    assigned_by: "",
+    assigned_type: ownerId ? "STAFF" : "",
+    assigned_id: ownerId,
+    assigned_name: assignLabel,
+    assigned_at: ownerId ? nowIso : null,
+    assigned_by: ownerId ? "POLICY:ASSIGN_DEFAULT_OWNER" : "",
     vendor_status: "",
     vendor_appt: "",
     vendor_notes: "",
@@ -183,31 +240,54 @@ async function finalizeMaintenanceDraft(o) {
     };
   }
 
+  const wiPhone =
+    o.mode === "MANAGER"
+      ? resolvedTenant
+      : String(o.actorKey || "").trim();
+
   const { error: wErr } = await sb.from("work_items").insert({
     work_item_id: workItemId,
     type: "MAINT",
     status: "OPEN",
-    state: "OPEN",
-    substate: "",
-    phone_e164: String(o.actorKey || "").trim(),
+    state: wiState,
+    substate: wiSubstate,
+    phone_e164: wiPhone,
     property_id: o.propertyCode,
-    unit_id: o.unitLabel,
+    unit_id: persistedUnit,
     ticket_key: uuidTicketKey,
+    owner_id: ownerId || "",
     metadata_json: meta,
   });
 
   if (wErr) return { ok: false, error: "work_item:" + wErr.message };
 
-  const actorForCtx = String(o.actorKey || "").trim();
-  if (actorForCtx) {
+  const ctxPhone =
+    o.mode === "MANAGER" ? resolvedTenant : String(o.actorKey || "").trim();
+  if (ctxPhone) {
     await sb.from("conversation_ctx").upsert(
       {
-        phone_e164: actorForCtx,
+        phone_e164: ctxPhone,
         active_work_item_id: workItemId,
         last_intent: "MAINT_INTAKE_FINALIZED",
         updated_at: nowIso,
       },
       { onConflict: "phone_e164" }
+    );
+  }
+
+  if (!emergency && ownerId) {
+    const { handleLifecycleSignal } = require("../brain/lifecycle/handleLifecycleSignal");
+    await handleLifecycleSignal(
+      sb,
+      {
+        eventType: "WI_CREATED_UNSCHEDULED",
+        wiId: workItemId,
+        propertyId: propCodeUpper,
+        actorType: "SYSTEM",
+        actorId: "TICKET_CREATE",
+        reasonCode: "NO_SCHEDULE_ON_CREATE",
+      },
+      { traceId: o.traceId }
     );
   }
 

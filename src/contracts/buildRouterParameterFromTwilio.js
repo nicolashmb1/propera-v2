@@ -18,12 +18,16 @@ function buildRouterParameterFromTwilio(body) {
   for (let i = 0; i < numMedia; i++) {
     const url = String(b["MediaUrl" + i] || "").trim();
     const contentType = String(b["MediaContentType" + i] || "").trim();
-    if (url)
+    if (url) {
+      const ct = contentType || "application/octet-stream";
+      const ctLower = String(ct).toLowerCase();
       media.push({
         url,
-        contentType: contentType || "application/octet-stream",
+        contentType: ct,
         source: "twilio",
+        kind: ctLower.startsWith("image/") ? "image" : "file",
       });
+    }
   }
 
   return {

@@ -5,14 +5,14 @@ const path = require("path");
 const fs = require("fs");
 const { dashboardEnabled, dashboardToken } = require("../config/env");
 const { fetchEventLogForDashboard } = require("./eventLogApi");
+const { fetchLifecycleTimersForDashboard } = require("./lifecycleTimersApi");
 
-let cachedHtml = null;
-
+/**
+ * Always read from disk (small file). Caching was hiding UI updates when NODE_ENV=production locally.
+ */
 function loadDashboardHtml() {
-  if (cachedHtml) return cachedHtml;
   const p = path.join(__dirname, "dashboardPage.html");
-  cachedHtml = fs.readFileSync(p, "utf8");
-  return cachedHtml;
+  return fs.readFileSync(p, "utf8");
 }
 
 function checkDashboardAuth(req) {
@@ -53,6 +53,8 @@ function registerDashboardRoutes(app) {
     try {
       const html = loadDashboardHtml();
       res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+      res.setHeader("Pragma", "no-cache");
       res.send(html);
     } catch (e) {
       res.status(500).send("Dashboard HTML missing.");
@@ -79,6 +81,24 @@ function registerDashboardRoutes(app) {
         traceId,
         chatId,
       });
+      res.json(out);
+    } catch (e) {
+      res.status(500).json({
+        ok: false,
+        error: e && e.message ? String(e.message) : "error",
+      });
+    }
+  });
+
+  app.get("/api/ops/lifecycle-timers", async (req, res) => {
+    const auth = checkDashboardAuth(req);
+    if (!auth.ok) {
+      return res.status(auth.status || 401).json({ ok: false, error: "unauthorized" });
+    }
+    const limit = req.query.limit;
+    const status = req.query.status;
+    try {
+      const out = await fetchLifecycleTimersForDashboard({ limit, status });
       res.json(out);
     } catch (e) {
       res.status(500).json({

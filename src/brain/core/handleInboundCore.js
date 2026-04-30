@@ -2,8 +2,9 @@
  * V2 core entry — GAS routeToCoreSafe_ → handleInboundCore_ (maintenance intake).
  * Draft progression: ISSUE → PROPERTY → UNIT → FINALIZE_DRAFT (GAS `recomputeDraftExpected_` order).
  *
- * PARITY: Post-finalize **schedule ask** = flow parity (prompt + session + `pending_expected`).
- * Schedule **parsing / policy / scheduled_end_at** = NOT semantic parity — see docs/PARITY_LEDGER.md §3.
+ * PARITY: Post-finalize **schedule ask** = flow parity for tenant (prompt + session + `pending_expected`).
+ * **`#` staff capture:** no schedule template after create; same-message `compileTurn` `scheduleRaw` + `Preferred:` are parsed and applied when present.
+ * Schedule **parsing / policy / scheduled_end_at** = NOT full GAS semantic parity — see docs/PARITY_LEDGER.md §3.
  */
 const { getSupabase } = require("../../db/supabase");
 const { appendEventLog } = require("../../dal/appendEventLog");
@@ -36,6 +37,11 @@ const {
   parseMaintenanceDraftAsync,
   isMaintenanceDraftComplete,
 } = require("./parseMaintenanceDraft");
+const {
+  normalizeLocationType,
+  inferLocationTypeFromText,
+  isCommonAreaLocation,
+} = require("../shared/commonArea");
 const { mergeMaintenanceDraftTurn } = require("./mergeMaintenanceDraft");
 const {
   recomputeDraftExpected,
@@ -46,7 +52,70 @@ const {
   maintenanceTemplateKeyForNext,
 } = require("./buildMaintenancePrompt");
 const { inferEmergency } = require("../../dal/ticketDefaults");
-const { buildIssueTicketGroups } = require("./splitIssueGroups");
+const { reconcileFinalizeTicketRows } = require("./finalizeTicketGroups");
+const { parseMediaJson, composeInboundTextWithMedia } = require("../shared/mediaPayload");
+const { resolveStaffCaptureTenantPhone } = require("../../dal/tenantRoster");
+const {
+  afterTenantScheduleApplied,
+} = require("../lifecycle/afterTenantScheduleApplied");
+const {
+  tryTenantVerifyResolutionReply,
+} = require("../lifecycle/tryTenantVerifyResolutionReply");
+const {
+  parseStaffCapDraftIdFromStripped,
+  resolveStaffCaptureDraftTurn,
+  updateDraftFields,
+  deleteDraft,
+  setScheduleWaitAfterFinalizeDraft,
+  allocateNewDraft,
+} = require("../../dal/staffCaptureDraft");
+
+/**
+ * GAS `enrichStaffCapTenantIdentity_` / `findTenantCandidates_` — resident phone for staff #capture only.
+ */
+async function resolveManagerTenantIfNeeded(
+  sb,
+  mode,
+  propertyCode,
+  unitLabel,
+  locationType,
+  bodyText,
+  routerParameter
+) {
+  if (isCommonAreaLocation(locationType)) {
+    return {
+      tenantPhoneE164: "",
+      tenantLookupMeta: { tenantLookupStatus: "SKIPPED_COMMON_AREA" },
+    };
+  }
+  if (mode !== "MANAGER") {
+    return { tenantPhoneE164: "", tenantLookupMeta: null };
+  }
+  const p = routerParameter || {};
+  const explicitTenant = String(p._tenantPhoneE164 || "").trim();
+  if (explicitTenant) {
+    return {
+      tenantPhoneE164: explicitTenant,
+      tenantLookupMeta: { portal_explicit_tenant: true },
+    };
+  }
+  const merged = composeInboundTextWithMedia(
+    bodyText,
+    parseMediaJson(p._mediaJson),
+    2400
+  );
+  const r = await resolveStaffCaptureTenantPhone({
+    sb,
+    propertyCode,
+    unitLabel,
+    bodyText: merged || bodyText,
+    _mediaJson: p._mediaJson,
+  });
+  return {
+    tenantPhoneE164: r.phoneE164 || "",
+    tenantLookupMeta: r.meta || null,
+  };
+}
 
 async function loadPropertyCodesUpper(sb) {
   const { data, error } = await sb.from("properties").select("code");
@@ -78,36 +147,116 @@ function computePendingExpiresAtIso(next) {
   return new Date(Date.now() + mins * 60 * 1000).toISOString();
 }
 
-function normalizeIssueForCompare(s) {
-  return String(s || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ");
-}
-
-function buildFinalizeGroups(issueText) {
-  const full = normalizeIssueForCompare(issueText);
-  const raw = buildIssueTicketGroups(issueText);
-  const cleaned = [];
-  const seen = new Set();
-  for (const g of raw) {
-    const txt = String(g && g.issueText ? g.issueText : "").trim();
-    if (!txt) continue;
-    const key = normalizeIssueForCompare(txt);
-    if (!key) continue;
-    // Regression guard: when split mode exists, never include the full combined issue as its own ticket.
-    if (raw.length >= 2 && key === full) continue;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    cleaned.push({ key: String(g && g.key ? g.key : ""), issueText: txt });
-  }
-  if (!cleaned.length) return [{ key: "single", issueText: String(issueText || "").trim() }];
-  return cleaned;
-}
-
 /** Outgate hints — templateKey is stable; text still built by brain until MessageSpec bind. */
 function outgateMeta(templateKey, extra) {
   return { outgate: { templateKey, ...(extra || {}) } };
+}
+
+function isPortalCreateTicketRouter(routerParameter) {
+  return (
+    String(routerParameter && routerParameter._portalAction ? routerParameter._portalAction : "")
+      .trim()
+      .toLowerCase() === "create_ticket"
+  );
+}
+
+/**
+ * `#` staff capture (same turn as report): `compileTurn` `scheduleRaw`, or `Preferred:` line
+ * (aligned with `extractScheduleHintPortalStaff` minus portal JSON).
+ */
+function extractScheduleHintStaffCapture(fastDraft, effectiveBody) {
+  const sr = String(fastDraft && fastDraft.scheduleRaw ? fastDraft.scheduleRaw : "").trim();
+  if (sr.length >= MIN_SCHEDULE_LEN) return sr;
+  const body = String(effectiveBody || "");
+  const m = body.match(/(?:^|\n)\s*Preferred:\s*(.+?)(?:\n|$)/im);
+  if (m && String(m[1]).trim().length >= MIN_SCHEDULE_LEN) return String(m[1]).trim();
+  return "";
+}
+
+function extractScheduleHintStaffCaptureFromTurn(merged, fastDraft, effectiveBody) {
+  const fromMerge = String(merged && merged.draft_schedule_raw ? merged.draft_schedule_raw : "")
+    .trim();
+  if (fromMerge.length >= MIN_SCHEDULE_LEN) return fromMerge;
+  return extractScheduleHintStaffCapture(fastDraft, effectiveBody);
+}
+
+/**
+ * Staff PM portal create: schedule from compile `scheduleRaw`, `Preferred:` line, or JSON `preferredWindow`.
+ */
+function extractScheduleHintPortalStaff(fastDraft, effectiveBody, routerParameter) {
+  const sr = String(fastDraft && fastDraft.scheduleRaw ? fastDraft.scheduleRaw : "").trim();
+  if (sr.length >= MIN_SCHEDULE_LEN) return sr;
+  const body = String(effectiveBody || "");
+  const m = body.match(/(?:^|\n)\s*Preferred:\s*(.+?)(?:\n|$)/im);
+  if (m && String(m[1]).trim().length >= MIN_SCHEDULE_LEN) return String(m[1]).trim();
+  try {
+    const j = JSON.parse(String(routerParameter._portalPayloadJson || "{}"));
+    const pw = String(j.preferredWindow || "").trim();
+    if (pw.length >= MIN_SCHEDULE_LEN) return pw;
+  } catch (_) {
+    /* ignore */
+  }
+  return "";
+}
+
+function extractScheduleHintPortalStaffMulti(merged, effectiveBody, routerParameter) {
+  const sched = String(merged && merged.draft_schedule_raw ? merged.draft_schedule_raw : "").trim();
+  if (sched.length >= MIN_SCHEDULE_LEN) return sched;
+  return extractScheduleHintPortalStaff(
+    { scheduleRaw: "" },
+    effectiveBody,
+    routerParameter
+  );
+}
+
+/**
+ * If staff portal (or `#` staff capture) provided a schedule hint, apply to ticket; append short note to receipt
+ * (no second prompt). Optional lifecycle follow-up when `scheduleOpts.afterLifecycle`.
+ */
+async function appendPortalStaffScheduleNote(
+  receiptBase,
+  scheduleHint,
+  ticketKey,
+  traceId,
+  traceStartMs,
+  scheduleOpts
+) {
+  if (!ticketKey || String(scheduleHint || "").trim().length < MIN_SCHEDULE_LEN) {
+    return receiptBase;
+  }
+  const applied = await applyPreferredWindowByTicketKey({
+    ticketKey,
+    preferredWindow: String(scheduleHint).trim(),
+    traceId,
+    traceStartMs,
+  });
+  if (applied.ok) {
+    if (scheduleOpts && scheduleOpts.afterLifecycle) {
+      const sb = getSupabase();
+      if (sb) {
+        await afterTenantScheduleApplied({
+          sb,
+          ticketKey: String(ticketKey).trim(),
+          parsed: applied.parsed || null,
+          propertyCodeHint: String(scheduleOpts.propertyCodeHint || "").trim(),
+          traceId,
+          traceStartMs: traceStartMs != null ? traceStartMs : undefined,
+        });
+      }
+    }
+    const label =
+      applied.parsed && applied.parsed.label
+        ? applied.parsed.label
+        : String(scheduleHint).trim();
+    return `${receiptBase}\n\nPreferred time noted: ${label}.`;
+  }
+  if (applied.policyKey) {
+    return `${receiptBase}\n\n${schedulePolicyRejectMessage(
+      applied.policyKey,
+      applied.policyVars
+    )}`;
+  }
+  return `${receiptBase}\n\n(Preferred time could not be saved; add it from the ticket when ready.)`;
 }
 
 function issueTextForFinalize(draftIssue, issueBuf) {
@@ -133,7 +282,11 @@ function issueTextForFinalize(draftIssue, issueBuf) {
  * @param {number} [o.traceStartMs] — `Date.now()` at HTTP entry; adds `elapsed_ms` on structured logs
  * @param {Record<string, string | undefined>} o.routerParameter
  * @param {'TENANT'|'MANAGER'} o.mode
- * @param {string} o.bodyText — already stripped for staff capture
+ * @param {string} o.bodyText — already stripped for staff capture (media composed in pipeline)
+ * @param {boolean} [o.isStaffCapture] — `#` staff capture lane; uses per-draft `staff_capture_drafts` (GAS D###)
+ * @param {{ draftSeq: number | null, rest: string }} [o.staffDraftParsed] — from `parseStaffCapDraftIdFromStripped(bodyBase)`
+ * @param {{ contact_id?: string, staff_id?: string } | null} [o.staffRow] — from `resolveStaffContextFromRouterParameter` (identity only; draft owner = canonical)
+ * @param {string} [o.canonicalBrainActorKey] — signal-layer canonical actor; required for `#` staff capture (same as `routerParameter._canonicalBrainActorKey`)
  */
 async function handleInboundCore(o) {
   const traceId = o.traceId || "";
@@ -142,10 +295,22 @@ async function handleInboundCore(o) {
       ? Number(o.traceStartMs)
       : null;
   const mode = o.mode === "MANAGER" ? "MANAGER" : "TENANT";
+  const isStaffCapture = o.isStaffCapture === true;
   const p = o.routerParameter || {};
-  const actorKey =
+  const transportActorKey =
     String(p._phoneE164 || "").trim() || String(p.From || "").trim();
-  const bodyText = String(o.bodyText != null ? o.bodyText : p.Body || "").trim();
+  const explicitCanonical = String(
+    o.canonicalBrainActorKey != null && o.canonicalBrainActorKey !== ""
+      ? o.canonicalBrainActorKey
+      : p._canonicalBrainActorKey || ""
+  ).trim();
+  /** Tenant / non–staff-capture: may fall back to transport. Staff `#` capture: never use transport here — see checks below. */
+  const canonicalBrainActorKey = isStaffCapture
+    ? explicitCanonical
+    : explicitCanonical || transportActorKey;
+  let bodyText = String(o.bodyText != null ? o.bodyText : p.Body || "").trim();
+  /** Populated after staff draft resolve — `staffDraftSeq` on core results for D### tagging in pipeline. */
+  let staffMeta = () => ({});
   const staffActorKey = String(o.staffActorKey || "").trim();
   const telegramUpdateId = String(p._telegramUpdateId || "").trim();
 
@@ -160,16 +325,25 @@ async function handleInboundCore(o) {
       ok: false,
       brain: "core_skip",
       replyText: "Database is not configured; cannot create tickets in V2.",
-      ...outgateMeta("MAINTENANCE_ERROR_DB"),
+      ...staffMeta(), ...outgateMeta("MAINTENANCE_ERROR_DB"),
     };
   }
 
-  if (!actorKey) {
+  if (isStaffCapture && !explicitCanonical) {
+    return {
+      ok: false,
+      brain: "core_skip",
+      replyText: "Missing canonical brain actor key for staff capture.",
+      ...staffMeta(), ...outgateMeta("MAINTENANCE_ERROR_NO_ACTOR"),
+    };
+  }
+
+  if (!canonicalBrainActorKey) {
     return {
       ok: false,
       brain: "core_skip",
       replyText: "Missing actor (From / _phoneE164).",
-      ...outgateMeta("MAINTENANCE_ERROR_NO_ACTOR"),
+      ...staffMeta(), ...outgateMeta("MAINTENANCE_ERROR_NO_ACTOR"),
     };
   }
 
@@ -186,7 +360,7 @@ async function handleInboundCore(o) {
       ok: true,
       brain: "core_empty_body",
       replyText: "",
-      ...outgateMeta("OUTBOUND_SKIP_EMPTY"),
+      ...staffMeta(), ...outgateMeta("OUTBOUND_SKIP_EMPTY"),
     };
   }
 
@@ -205,11 +379,118 @@ async function handleInboundCore(o) {
 
   const known = await loadPropertyCodesUpper(sb);
   const propertiesList = await listPropertiesForMenu();
-  const sessionAtStart = await getIntakeSession(actorKey);
+
+  /** Staff # drafts: owner key = signal-layer `canonicalBrainActorKey` only (never raw transport). */
+  const draftOwnerKey = isStaffCapture ? explicitCanonical : canonicalBrainActorKey;
+
+  if (isStaffCapture) {
+    if (draftOwnerKey !== explicitCanonical) {
+      emitTimed(traceStartMs, {
+        level: "error",
+        trace_id: traceId,
+        log_kind: "brain",
+        event: "STAFF_CAPTURE_CANONICAL_INVARIANT_VIOLATION",
+        data: {
+          crumb: "staff_capture_canonical_invariant",
+          draftOwnerKey,
+          explicitCanonical,
+          transportActorKey,
+          mode,
+        },
+      });
+      return {
+        ok: false,
+        brain: "core_invariant_canonical_mismatch",
+        replyText: "Internal error: staff capture canonical identity mismatch.",
+        ...staffMeta(),
+        ...outgateMeta("MAINTENANCE_ERROR_NO_ACTOR"),
+      };
+    }
+    emitTimed(traceStartMs, {
+      level: "info",
+      trace_id: traceId,
+      log_kind: "brain",
+      event: "STAFF_CAPTURE_CANONICAL_OK",
+      data: {
+        crumb: "staff_capture_canonical_ok",
+        draft_owner_key: draftOwnerKey,
+        transport_actor_key: transportActorKey,
+        staff_id: o.staffRow && o.staffRow.staff_id ? String(o.staffRow.staff_id) : "",
+      },
+    });
+  }
+
+  let draftSeqActive = null;
+  let sessionAtStart;
+  if (isStaffCapture) {
+    const parsed =
+      o.staffDraftParsed && typeof o.staffDraftParsed === "object"
+        ? o.staffDraftParsed
+        : parseStaffCapDraftIdFromStripped("");
+    const resolved = await resolveStaffCaptureDraftTurn(
+      sb,
+      draftOwnerKey,
+      parsed,
+      bodyText
+    );
+    if (!resolved.ok) {
+      return {
+        ok: false,
+        brain: "staff_capture_draft_resolve_failed",
+        replyText: resolved.error,
+        ...staffMeta(), ...outgateMeta("MAINTENANCE_ERROR_STAFF_DRAFT"),
+      };
+    }
+    draftSeqActive = resolved.draftSeq;
+    sessionAtStart = resolved.session;
+    bodyText = resolved.effectiveBody;
+  } else {
+    sessionAtStart = await getIntakeSession(canonicalBrainActorKey);
+  }
+
+  staffMeta = () =>
+    isStaffCapture && draftSeqActive != null
+      ? { staffDraftSeq: draftSeqActive }
+      : {};
+
+  async function clearIntakeLike() {
+    if (isStaffCapture) {
+      return deleteDraft(sb, draftOwnerKey, draftSeqActive);
+    }
+    return clearIntakeSessionDraft(canonicalBrainActorKey);
+  }
+
+  async function saveIntakeLike(row) {
+    if (isStaffCapture) {
+      const { phone_e164: _p, lane: _l, ...rest } = row;
+      return updateDraftFields(sb, draftOwnerKey, draftSeqActive, rest);
+    }
+    return upsertIntakeSession(row);
+  }
+
+  async function setScheduleWaitLike(opts) {
+    if (isStaffCapture) {
+      return setScheduleWaitAfterFinalizeDraft(sb, draftOwnerKey, draftSeqActive, opts);
+    }
+    return setScheduleWaitAfterFinalize(canonicalBrainActorKey, opts);
+  }
+
+  if (mode === "TENANT") {
+    const verifyEarly = await tryTenantVerifyResolutionReply({
+      sb,
+      actorKey: canonicalBrainActorKey,
+      bodyText,
+      traceId,
+      traceStartMs,
+    });
+    if (verifyEarly && verifyEarly.handled) {
+      return verifyEarly.result;
+    }
+  }
 
   let effectiveBody = bodyText;
   let attachClarifyOutcomePass = "";
-  const ctxAttach = await getConversationCtxAttach(actorKey);
+  const ctxAttach = await getConversationCtxAttach(canonicalBrainActorKey);
   if (
     ctxAttach &&
     String(ctxAttach.pending_expected || "").trim().toUpperCase() === "ATTACH_CLARIFY"
@@ -225,10 +506,10 @@ async function handleInboundCore(o) {
         ok: true,
         brain: "attach_clarify_repeat",
         replyText: buildMaintenancePrompt("ATTACH_CLARIFY", propertiesList),
-        ...outgateMeta(maintenanceTemplateKeyForNext("ATTACH_CLARIFY")),
+        ...staffMeta(), ...outgateMeta(maintenanceTemplateKeyForNext("ATTACH_CLARIFY")),
       };
     }
-    await clearAttachClarifyLatch(actorKey);
+    await clearAttachClarifyLatch(canonicalBrainActorKey);
     await appendEventLog({
       traceId,
       event: "ATTACH_CLARIFY_RESOLVED",
@@ -242,7 +523,22 @@ async function handleInboundCore(o) {
       data: { outcome: pr.outcome, crumb: "attach_clarify_resolved" },
     });
     if (pr.outcome === "start_new") {
-      await clearIntakeSessionDraft(actorKey);
+      if (isStaffCapture) {
+        await deleteDraft(sb, draftOwnerKey, draftSeqActive);
+        const allocSn = await allocateNewDraft(sb, draftOwnerKey);
+        if (!allocSn.ok) {
+          return {
+            ok: false,
+            brain: "staff_capture_new_draft_failed",
+            replyText:
+              "Could not start a new capture draft: " + (allocSn.error || "error"),
+            ...staffMeta(), ...outgateMeta("MAINTENANCE_ERROR_STAFF_DRAFT"),
+          };
+        }
+        draftSeqActive = allocSn.draftSeq;
+      } else {
+        await clearIntakeLike();
+      }
       const restartBody =
         pr.stripped && pr.stripped.length >= 4 ? pr.stripped : "";
       const fastRestart = await parseMaintenanceDraftAsync(restartBody, known, {
@@ -276,8 +572,8 @@ async function handleInboundCore(o) {
       });
       const nextNew = recNew.next;
       const pendingExpiresNew = computePendingExpiresAtIso(nextNew);
-      await upsertIntakeSession({
-        phone_e164: actorKey,
+      await saveIntakeLike({
+        phone_e164: canonicalBrainActorKey,
         stage: nextNew,
         expected: nextNew,
         lane: "MAINTENANCE",
@@ -295,7 +591,7 @@ async function handleInboundCore(o) {
         draft: restarted,
         expected: nextNew,
         replyText: buildMaintenancePrompt(nextNew, propertiesList),
-        ...outgateMeta(maintenanceTemplateKeyForNext(nextNew)),
+        ...staffMeta(), ...outgateMeta(maintenanceTemplateKeyForNext(nextNew)),
       };
     }
     attachClarifyOutcomePass = "attach";
@@ -315,13 +611,13 @@ async function handleInboundCore(o) {
   if (artifactKey && expStart === "SCHEDULE") {
     // Same intake branch + flight recorder as fast / multi-turn path (parseMaintenanceDraft.js);
     // merge still owns schedule slot text — result not used for policy/apply.
-    await parseMaintenanceDraftAsync(bodyText, known, {
+    await parseMaintenanceDraftAsync(effectiveBody, known, {
       traceId,
       traceStartMs,
       propertiesList,
     });
     const mergedSched = mergeMaintenanceDraftTurn({
-      bodyText,
+      bodyText: effectiveBody,
       expected: "SCHEDULE",
       draft_issue: sessionAtStart ? sessionAtStart.draft_issue : "",
       draft_property: sessionAtStart ? sessionAtStart.draft_property : "",
@@ -348,7 +644,7 @@ async function handleInboundCore(o) {
               applied.policyKey,
               applied.policyVars
             ),
-            ...outgateMeta("MAINTENANCE_SCHEDULE_POLICY_REJECT", {
+            ...staffMeta(), ...outgateMeta("MAINTENANCE_SCHEDULE_POLICY_REJECT", {
               policyKey: applied.policyKey || "",
             }),
           };
@@ -362,11 +658,21 @@ async function handleInboundCore(o) {
           ok: false,
           brain: "core_schedule_apply_failed",
           replyText: "Could not save your preferred time. Please try again in a moment.",
-          ...outgateMeta("MAINTENANCE_ERROR_SCHEDULE_SAVE"),
+          ...staffMeta(), ...outgateMeta("MAINTENANCE_ERROR_SCHEDULE_SAVE"),
         };
       }
-      await clearIntakeSessionDraft(actorKey);
-      await clearPendingExpected(actorKey);
+      await afterTenantScheduleApplied({
+        sb,
+        ticketKey: artifactKey,
+        parsed: applied.parsed || null,
+        propertyCodeHint: sessionAtStart
+          ? String(sessionAtStart.draft_property || "").trim()
+          : "",
+        traceId,
+        traceStartMs: traceStartMs != null ? traceStartMs : undefined,
+      });
+      await clearIntakeLike();
+      await clearPendingExpected(canonicalBrainActorKey);
       const displayWindow =
         applied.parsed && applied.parsed.label
           ? applied.parsed.label
@@ -399,16 +705,27 @@ async function handleInboundCore(o) {
           "Thanks — we noted your preferred time: " +
           displayWindow +
           ". We'll follow up if we need to adjust.",
-        ...outgateMeta("MAINTENANCE_SCHEDULE_CONFIRMED", {
+        ...staffMeta(), ...outgateMeta("MAINTENANCE_SCHEDULE_CONFIRMED", {
           displayWindow: String(displayWindow || "").slice(0, 200),
         }),
+      };
+    }
+    if (isStaffCapture) {
+      await clearIntakeLike();
+      await clearPendingExpected(canonicalBrainActorKey);
+      return {
+        ok: true,
+        brain: "core_staff_schedule_unparsed",
+        replyText:
+          "No time of day in that message. To add a preferred time, send a line like: Preferred: tomorrow 9am",
+        ...staffMeta(), ...outgateMeta("MAINTENANCE_STAFF_NO_SCHEDULE_TEMPLATE", {}),
       };
     }
     return {
       ok: true,
       brain: "core_schedule_prompt_repeat",
       replyText: buildMaintenancePrompt("SCHEDULE", propertiesList),
-      ...outgateMeta(maintenanceTemplateKeyForNext("SCHEDULE")),
+      ...staffMeta(), ...outgateMeta(maintenanceTemplateKeyForNext("SCHEDULE")),
     };
   }
 
@@ -436,21 +753,56 @@ async function handleInboundCore(o) {
     });
 
     const emFast = inferEmergency(fastDraft.issueText);
-    const skipSchedulingFast = emFast.emergency === "Yes";
+    const fastLocationType = normalizeLocationType(
+      fastDraft.locationType ||
+        inferLocationTypeFromText(fastDraft.issueText || effectiveBody)
+    );
+    const commonAreaFast = isCommonAreaLocation(fastLocationType);
+    const scheduleHintPortalFast =
+      mode === "MANAGER" && isPortalCreateTicketRouter(p)
+        ? extractScheduleHintPortalStaff(fastDraft, effectiveBody, p)
+        : "";
+    const skipSchedulingFast =
+      emFast.emergency === "Yes" ||
+      commonAreaFast ||
+      (mode === "MANAGER" && isPortalCreateTicketRouter(p));
 
-    const groupsFast = buildFinalizeGroups(fastDraft.issueText);
+    const trFast = await resolveManagerTenantIfNeeded(
+      sb,
+      mode,
+      fastDraft.propertyCode,
+      fastDraft.unitLabel,
+      fastLocationType,
+      effectiveBody,
+      p
+    );
+
+    const mergedFast =
+      String(fastDraft.issueText || "").trim() || String(effectiveBody || "").trim();
+    const { rows: groupsFast } = reconcileFinalizeTicketRows({
+      structuredIssues: fastDraft.structuredIssues,
+      mergedIssueText: mergedFast,
+      issueBufferLines: [],
+      effectiveBody,
+    });
     const finsFast = [];
     for (const g of groupsFast) {
       const f = await finalizeMaintenanceDraft({
         traceId,
         propertyCode: fastDraft.propertyCode,
-        unitLabel: fastDraft.unitLabel,
+        unitLabel: commonAreaFast ? "" : fastDraft.unitLabel,
         issueText: g.issueText,
-        actorKey,
+        actorKey: canonicalBrainActorKey,
         mode,
-        staffActorKey: mode === "MANAGER" ? staffActorKey || actorKey : undefined,
+        locationType: fastLocationType,
+        reportSourceUnit: fastDraft.unitLabel,
+        reportSourcePhone:
+          mode === "TENANT" ? String(canonicalBrainActorKey || "").trim() : "",
+        staffActorKey: mode === "MANAGER" ? staffActorKey || canonicalBrainActorKey : undefined,
         telegramUpdateId,
         routerParameter: p,
+        tenantPhoneE164: trFast.tenantPhoneE164,
+        tenantLookupMeta: trFast.tenantLookupMeta,
       });
       if (!f.ok) {
         return {
@@ -458,7 +810,7 @@ async function handleInboundCore(o) {
           brain: "core_finalize_failed",
           draft: fastDraft,
           replyText: "Could not save ticket: " + (f.error || "error"),
-          ...outgateMeta("MAINTENANCE_ERROR_FINALIZE", {
+          ...staffMeta(), ...outgateMeta("MAINTENANCE_ERROR_FINALIZE", {
             path: "fast",
           }),
         };
@@ -473,8 +825,11 @@ async function handleInboundCore(o) {
       payload: fin.ok
         ? {
             ticket_id: fin.ticketId,
+            ticket_ids: finsFast.map((x) => x.ticketId),
             work_item_id: fin.workItemId,
+            work_item_ids: finsFast.map((x) => x.workItemId),
             ticket_key: fin.ticketKey,
+            ticket_keys: finsFast.map((x) => x.ticketKey),
             path: "fast",
           }
         : { error: fin.error },
@@ -487,6 +842,7 @@ async function handleInboundCore(o) {
       data: fin.ok
         ? {
             ticket_id: fin.ticketId,
+            ticket_ids: finsFast.map((x) => x.ticketId),
             work_item_id: fin.workItemId,
             path: "fast",
             crumb: "core_finalized_fast",
@@ -500,17 +856,26 @@ async function handleInboundCore(o) {
         brain: "core_finalize_failed",
         draft: fastDraft,
         replyText: "Could not save ticket: " + (fin.error || "error"),
-        ...outgateMeta("MAINTENANCE_ERROR_FINALIZE", { path: "fast" }),
+        ...staffMeta(), ...outgateMeta("MAINTENANCE_ERROR_FINALIZE", { path: "fast" }),
       };
     }
 
-    const receiptFast =
+    let receiptFast =
       finsFast.length > 1
-        ? `Tickets logged: ${finsFast.map((x) => x.ticketId).join(", ")} (${fastDraft.propertyCode} ${fastDraft.unitLabel}).`
-        : `Ticket logged: ${fin.ticketId} (${fastDraft.propertyCode} ${fastDraft.unitLabel}).`;
+        ? `Tickets logged: ${finsFast.map((x) => x.ticketId).join(", ")} (${fastDraft.propertyCode} ${commonAreaFast ? "COMMON AREA" : fastDraft.unitLabel}).`
+        : `Ticket logged: ${fin.ticketId} (${fastDraft.propertyCode} ${commonAreaFast ? "COMMON AREA" : fastDraft.unitLabel}).`;
 
     if (skipSchedulingFast) {
-      await clearIntakeSessionDraft(actorKey);
+      if (scheduleHintPortalFast) {
+        receiptFast = await appendPortalStaffScheduleNote(
+          receiptFast,
+          scheduleHintPortalFast,
+          fin.ticketKey,
+          traceId,
+          traceStartMs
+        );
+      }
+      await clearIntakeLike();
       return {
         ok: true,
         brain: "core_finalized",
@@ -518,20 +883,77 @@ async function handleInboundCore(o) {
         finalize: fin,
         path: "fast",
         replyText: receiptFast,
-        ...outgateMeta("MAINTENANCE_RECEIPT_ONLY", {
+        ...staffMeta(), ...outgateMeta("MAINTENANCE_RECEIPT_ONLY", {
           path: "fast",
-          emergency: true,
+          emergency: emFast.emergency === "Yes",
+          portalStaffCreate:
+            mode === "MANAGER" && isPortalCreateTicketRouter(p) ? true : undefined,
         }),
       };
     }
 
-    await setScheduleWaitAfterFinalize(actorKey, {
+    // # staff capture: parse schedule from the same message when present; never send schedule template if absent.
+    if (isStaffCapture) {
+      const staffSchedHint = extractScheduleHintStaffCapture(fastDraft, effectiveBody);
+      if (String(staffSchedHint).trim().length >= MIN_SCHEDULE_LEN) {
+        let r = receiptFast;
+        r = await appendPortalStaffScheduleNote(
+          r,
+          staffSchedHint,
+          fin.ticketKey,
+          traceId,
+          traceStartMs,
+          {
+            afterLifecycle: true,
+            propertyCodeHint: String(fastDraft.propertyCode || "").trim(),
+          }
+        );
+        await clearIntakeLike();
+        await appendEventLog({
+          traceId,
+          event: "STAFF_CAPTURE_INLINE_SCHEDULE",
+          payload: { ticket_key: fin.ticketKey, path: "fast" },
+        });
+        return {
+          ok: true,
+          brain: "core_finalized",
+          draft: fastDraft,
+          finalize: fin,
+          path: "fast",
+          replyText: r,
+          ...staffMeta(), ...outgateMeta("MAINTENANCE_RECEIPT_ONLY", {
+            path: "fast",
+            staff_inline_schedule: true,
+          }),
+        };
+      }
+      await clearIntakeLike();
+      await appendEventLog({
+        traceId,
+        event: "STAFF_CAPTURE_NO_SCHEDULE_PROMPT",
+        payload: { ticket_key: fin.ticketKey, path: "fast" },
+      });
+      return {
+        ok: true,
+        brain: "core_finalized",
+        draft: fastDraft,
+        finalize: fin,
+        path: "fast",
+        replyText: receiptFast,
+        ...staffMeta(), ...outgateMeta("MAINTENANCE_RECEIPT_ONLY", {
+          path: "fast",
+          staff_capture_no_schedule_ask: true,
+        }),
+      };
+    }
+
+    await setScheduleWaitLike({
       ticketKey: fin.ticketKey,
       draft_issue: fastDraft.issueText,
       draft_property: fastDraft.propertyCode,
       draft_unit: fastDraft.unitLabel,
     });
-    await setPendingExpectedSchedule(actorKey, fin.workItemId);
+    await setPendingExpectedSchedule(canonicalBrainActorKey, fin.workItemId);
     await setWorkItemSubstate(fin.workItemId, "SCHEDULE");
 
     await appendEventLog({
@@ -558,7 +980,7 @@ async function handleInboundCore(o) {
       finalize: fin,
       path: "fast",
       replyText: receiptFast + "\n\n" + buildMaintenancePrompt("SCHEDULE", propertiesList),
-      ...outgateMeta(maintenanceTemplateKeyForNext("SCHEDULE"), {
+      ...staffMeta(), ...outgateMeta(maintenanceTemplateKeyForNext("SCHEDULE"), {
         promptComposite: "after_receipt",
         path: "fast",
       }),
@@ -585,7 +1007,7 @@ async function handleInboundCore(o) {
   });
 
   if (merged.attachDecision === "clarify_attach_vs_new") {
-    await setPendingAttachClarify(actorKey);
+    await setPendingAttachClarify(canonicalBrainActorKey);
     await appendEventLog({
       traceId,
       event: "ATTACH_CLARIFY_REQUIRED",
@@ -599,12 +1021,28 @@ async function handleInboundCore(o) {
       brain: "attach_clarify",
       draft: merged,
       replyText: buildMaintenancePrompt("ATTACH_CLARIFY", propertiesList),
-      ...outgateMeta(maintenanceTemplateKeyForNext("ATTACH_CLARIFY")),
+      ...staffMeta(), ...outgateMeta(maintenanceTemplateKeyForNext("ATTACH_CLARIFY")),
     };
   }
 
   if (merged.attachDecision === "start_new_intake") {
-    await clearIntakeSessionDraft(actorKey);
+    if (isStaffCapture) {
+      await deleteDraft(sb, draftOwnerKey, draftSeqActive);
+      const allocSn = await allocateNewDraft(sb, draftOwnerKey);
+      if (!allocSn.ok) {
+        return {
+          ok: false,
+          brain: "staff_capture_new_draft_failed",
+          replyText:
+            "Could not start a new capture draft: " + (allocSn.error || "error"),
+          ...staffMeta(),
+          ...outgateMeta("MAINTENANCE_ERROR_STAFF_DRAFT"),
+        };
+      }
+      draftSeqActive = allocSn.draftSeq;
+    } else {
+      await clearIntakeLike();
+    }
     await appendEventLog({
       traceId,
       event: "INTAKE_START_NEW",
@@ -635,8 +1073,8 @@ async function handleInboundCore(o) {
     });
     let nextNew = recNew.next;
     const pendingExpiresNew = computePendingExpiresAtIso(nextNew);
-    await upsertIntakeSession({
-      phone_e164: actorKey,
+    await saveIntakeLike({
+      phone_e164: canonicalBrainActorKey,
       stage: nextNew,
       expected: nextNew,
       lane: "MAINTENANCE",
@@ -654,7 +1092,7 @@ async function handleInboundCore(o) {
       draft: restarted,
       expected: nextNew,
       replyText: buildMaintenancePrompt(nextNew, propertiesList),
-      ...outgateMeta(maintenanceTemplateKeyForNext(nextNew)),
+      ...staffMeta(), ...outgateMeta(maintenanceTemplateKeyForNext(nextNew)),
     };
   }
 
@@ -663,8 +1101,12 @@ async function handleInboundCore(o) {
     merged.draft_issue,
     merged.draft_issue_buf_json
   );
+  const draftLocationType = isCommonAreaLocation(fastDraft.locationType)
+    ? "COMMON_AREA"
+    : inferLocationTypeFromText(issueForFinalize || merged.draft_issue || effectiveBody);
+  const commonAreaDraft = isCommonAreaLocation(draftLocationType);
   const em = inferEmergency(issueForFinalize || merged.draft_issue);
-  const skipScheduling = em.emergency === "Yes";
+  const skipScheduling = em.emergency === "Yes" || commonAreaDraft;
 
   const pendingTicketRow =
     session && String(session.active_artifact_key || "").trim() ? 1 : 0;
@@ -672,12 +1114,15 @@ async function handleInboundCore(o) {
   const rec = recomputeDraftExpected({
     hasIssue: flags.hasIssue,
     hasProperty: flags.hasProperty,
-    hasUnit: flags.hasUnit,
+    hasUnit: commonAreaDraft ? true : flags.hasUnit,
     hasSchedule: flags.hasSchedule,
     pendingTicketRow,
     skipScheduling,
     isEmergencyContinuation: false,
-    openerNext: fastDraft && fastDraft.openerNext ? fastDraft.openerNext : "",
+    openerNext:
+      !commonAreaDraft && fastDraft && fastDraft.openerNext
+        ? fastDraft.openerNext
+        : "",
   });
 
   let next = rec.next;
@@ -733,8 +1178,8 @@ async function handleInboundCore(o) {
     },
   });
 
-  await upsertIntakeSession({
-    phone_e164: actorKey,
+  await saveIntakeLike({
+    phone_e164: canonicalBrainActorKey,
     stage: next,
     expected: next,
     lane: "MAINTENANCE",
@@ -774,19 +1219,45 @@ async function handleInboundCore(o) {
   });
 
   if (next === "FINALIZE_DRAFT") {
-    const groupsMt = buildFinalizeGroups(issueForFinalize || merged.draft_issue);
+    const trMt = await resolveManagerTenantIfNeeded(
+      sb,
+      mode,
+      merged.draft_property,
+      merged.draft_unit,
+      draftLocationType,
+      effectiveBody,
+      p
+    );
+
+    const mergedMt = String(
+      issueForFinalize || merged.draft_issue || ""
+    ).trim();
+    const { rows: groupsMt } = reconcileFinalizeTicketRows({
+      structuredIssues: fastDraft.structuredIssues,
+      mergedIssueText: mergedMt || String(effectiveBody || "").trim(),
+      issueBufferLines: Array.isArray(merged.draft_issue_buf_json)
+        ? merged.draft_issue_buf_json
+        : [],
+      effectiveBody,
+    });
     const finsMt = [];
     for (const g of groupsMt) {
       const f = await finalizeMaintenanceDraft({
         traceId,
         propertyCode: merged.draft_property,
-        unitLabel: merged.draft_unit,
+        unitLabel: commonAreaDraft ? "" : merged.draft_unit,
         issueText: g.issueText,
-        actorKey,
+        actorKey: canonicalBrainActorKey,
         mode,
-        staffActorKey: mode === "MANAGER" ? staffActorKey || actorKey : undefined,
+        locationType: draftLocationType,
+        reportSourceUnit: merged.draft_unit,
+        reportSourcePhone:
+          mode === "TENANT" ? String(canonicalBrainActorKey || "").trim() : "",
+        staffActorKey: mode === "MANAGER" ? staffActorKey || canonicalBrainActorKey : undefined,
         telegramUpdateId,
         routerParameter: p,
+        tenantPhoneE164: trMt.tenantPhoneE164,
+        tenantLookupMeta: trMt.tenantLookupMeta,
       });
       if (!f.ok) {
         return {
@@ -794,7 +1265,7 @@ async function handleInboundCore(o) {
           brain: "core_finalize_failed",
           draft: merged,
           replyText: "Could not save ticket: " + (f.error || "error"),
-          ...outgateMeta("MAINTENANCE_ERROR_FINALIZE", { path: "multi_turn" }),
+          ...staffMeta(), ...outgateMeta("MAINTENANCE_ERROR_FINALIZE", { path: "multi_turn" }),
         };
       }
       finsMt.push(f);
@@ -807,8 +1278,11 @@ async function handleInboundCore(o) {
       payload: fin.ok
         ? {
             ticket_id: fin.ticketId,
+            ticket_ids: finsMt.map((x) => x.ticketId),
             work_item_id: fin.workItemId,
+            work_item_ids: finsMt.map((x) => x.workItemId),
             ticket_key: fin.ticketKey,
+            ticket_keys: finsMt.map((x) => x.ticketKey),
             path: "multi_turn",
           }
         : { error: fin.error },
@@ -821,6 +1295,7 @@ async function handleInboundCore(o) {
       data: fin.ok
         ? {
             ticket_id: fin.ticketId,
+            ticket_ids: finsMt.map((x) => x.ticketId),
             work_item_id: fin.workItemId,
             path: "multi_turn",
             crumb: "core_finalized_multi",
@@ -834,17 +1309,33 @@ async function handleInboundCore(o) {
         brain: "core_finalize_failed",
         draft: merged,
         replyText: "Could not save ticket: " + (fin.error || "error"),
-        ...outgateMeta("MAINTENANCE_ERROR_FINALIZE", { path: "multi_turn" }),
+        ...staffMeta(), ...outgateMeta("MAINTENANCE_ERROR_FINALIZE", { path: "multi_turn" }),
       };
     }
 
-    const receiptMt =
+    let receiptMt =
       finsMt.length > 1
-        ? `Tickets logged: ${finsMt.map((x) => x.ticketId).join(", ")} (${merged.draft_property} ${merged.draft_unit}).`
-        : `Ticket logged: ${fin.ticketId} (${merged.draft_property} ${merged.draft_unit}).`;
+        ? `Tickets logged: ${finsMt.map((x) => x.ticketId).join(", ")} (${merged.draft_property} ${commonAreaDraft ? "COMMON AREA" : merged.draft_unit}).`
+        : `Ticket logged: ${fin.ticketId} (${merged.draft_property} ${commonAreaDraft ? "COMMON AREA" : merged.draft_unit}).`;
 
-    if (skipScheduling) {
-      await clearIntakeSessionDraft(actorKey);
+    const scheduleHintPortalMt =
+      mode === "MANAGER" && isPortalCreateTicketRouter(p)
+        ? extractScheduleHintPortalStaffMulti(merged, effectiveBody, p)
+        : "";
+    const skipSchedulingAfterFinalize =
+      skipScheduling || (mode === "MANAGER" && isPortalCreateTicketRouter(p));
+
+    if (skipSchedulingAfterFinalize) {
+      if (scheduleHintPortalMt) {
+        receiptMt = await appendPortalStaffScheduleNote(
+          receiptMt,
+          scheduleHintPortalMt,
+          fin.ticketKey,
+          traceId,
+          traceStartMs
+        );
+      }
+      await clearIntakeLike();
       return {
         ok: true,
         brain: "core_finalized",
@@ -852,21 +1343,77 @@ async function handleInboundCore(o) {
         finalize: fin,
         path: "multi_turn",
         replyText: receiptMt,
-        ...outgateMeta("MAINTENANCE_RECEIPT_ONLY", {
+        ...staffMeta(), ...outgateMeta("MAINTENANCE_RECEIPT_ONLY", {
           path: "multi_turn",
-          emergency: true,
+          emergency: em.emergency === "Yes",
+          portalStaffCreate:
+            mode === "MANAGER" && isPortalCreateTicketRouter(p) ? true : undefined,
         }),
       };
     }
 
-    await setScheduleWaitAfterFinalize(actorKey, {
+    if (isStaffCapture) {
+      const staffSchedHint = extractScheduleHintStaffCaptureFromTurn(merged, fastDraft, effectiveBody);
+      if (String(staffSchedHint).trim().length >= MIN_SCHEDULE_LEN) {
+        let r = receiptMt;
+        r = await appendPortalStaffScheduleNote(
+          r,
+          staffSchedHint,
+          fin.ticketKey,
+          traceId,
+          traceStartMs,
+          {
+            afterLifecycle: true,
+            propertyCodeHint: String(merged.draft_property || "").trim(),
+          }
+        );
+        await clearIntakeLike();
+        await appendEventLog({
+          traceId,
+          event: "STAFF_CAPTURE_INLINE_SCHEDULE",
+          payload: { ticket_key: fin.ticketKey, path: "multi_turn" },
+        });
+        return {
+          ok: true,
+          brain: "core_finalized",
+          draft: merged,
+          finalize: fin,
+          path: "multi_turn",
+          replyText: r,
+          ...staffMeta(), ...outgateMeta("MAINTENANCE_RECEIPT_ONLY", {
+            path: "multi_turn",
+            staff_inline_schedule: true,
+          }),
+        };
+      }
+      await clearIntakeLike();
+      await appendEventLog({
+        traceId,
+        event: "STAFF_CAPTURE_NO_SCHEDULE_PROMPT",
+        payload: { ticket_key: fin.ticketKey, path: "multi_turn" },
+      });
+      return {
+        ok: true,
+        brain: "core_finalized",
+        draft: merged,
+        finalize: fin,
+        path: "multi_turn",
+        replyText: receiptMt,
+        ...staffMeta(), ...outgateMeta("MAINTENANCE_RECEIPT_ONLY", {
+          path: "multi_turn",
+          staff_capture_no_schedule_ask: true,
+        }),
+      };
+    }
+
+    await setScheduleWaitLike({
       ticketKey: fin.ticketKey,
       draft_issue: merged.draft_issue,
       issue_buf_json: merged.draft_issue_buf_json,
       draft_property: merged.draft_property,
       draft_unit: merged.draft_unit,
     });
-    await setPendingExpectedSchedule(actorKey, fin.workItemId);
+    await setPendingExpectedSchedule(canonicalBrainActorKey, fin.workItemId);
     await setWorkItemSubstate(fin.workItemId, "SCHEDULE");
 
     await appendEventLog({
@@ -893,7 +1440,7 @@ async function handleInboundCore(o) {
       finalize: fin,
       path: "multi_turn",
       replyText: receiptMt + "\n\n" + buildMaintenancePrompt("SCHEDULE", propertiesList),
-      ...outgateMeta(maintenanceTemplateKeyForNext("SCHEDULE"), {
+      ...staffMeta(), ...outgateMeta(maintenanceTemplateKeyForNext("SCHEDULE"), {
         promptComposite: "after_receipt",
         path: "multi_turn",
       }),
@@ -907,7 +1454,7 @@ async function handleInboundCore(o) {
     draft: merged,
     expected: next,
     replyText,
-    ...outgateMeta(maintenanceTemplateKeyForNext(next)),
+    ...staffMeta(), ...outgateMeta(maintenanceTemplateKeyForNext(next)),
   };
 }
 

@@ -1,0 +1,49 @@
+/**
+ * GAS `LIFECYCLE_ALLOWED_TRANSITIONS_` — `12_LIFECYCLE_ENGINE.gs`
+ */
+
+const LIFECYCLE_ALLOWED_TRANSITIONS = {
+  "STAFF_TRIAGE->WAIT_STAFF_UPDATE": true,
+  "STAFF_TRIAGE->UNSCHEDULED": true,
+  "STAFF_TRIAGE->DONE": true,
+  "STAFF_TRIAGE->VERIFYING_RESOLUTION": true,
+  "STAFF_TRIAGE->INHOUSE_WORK": true,
+  "STAFF_TRIAGE->WAIT_PARTS": true,
+  "STAFF_TRIAGE->VENDOR_DISPATCH": true,
+  "WAIT_STAFF_UPDATE->INHOUSE_WORK": true,
+  "WAIT_STAFF_UPDATE->WAIT_PARTS": true,
+  "WAIT_STAFF_UPDATE->VENDOR_DISPATCH": true,
+  "WAIT_STAFF_UPDATE->WAIT_STAFF_UPDATE": true,
+  "INHOUSE_WORK->VERIFYING_RESOLUTION": true,
+  "INHOUSE_WORK->WAIT_STAFF_UPDATE": true,
+  "INHOUSE_WORK->DONE": true,
+  "WAIT_PARTS->INHOUSE_WORK": true,
+  "VERIFYING_RESOLUTION->DONE": true,
+  "VERIFYING_RESOLUTION->INHOUSE_WORK": true,
+  "ACTIVE_WORK->WAIT_STAFF_UPDATE": true,
+  "ACTIVE_WORK->VERIFYING_RESOLUTION": true,
+  "ACTIVE_WORK->DONE": true,
+  "VENDOR_DISPATCH->INHOUSE_WORK": true,
+  "VENDOR_DISPATCH->WAIT_STAFF_UPDATE": true,
+  "UNSCHEDULED->WAIT_STAFF_UPDATE": true,
+  "UNSCHEDULED->INHOUSE_WORK": true,
+  "UNSCHEDULED->VERIFYING_RESOLUTION": true,
+  "UNSCHEDULED->DONE": true,
+  "UNSCHEDULED->VENDOR_DISPATCH": true,
+  "UNSCHEDULED->WAIT_PARTS": true,
+  "UNSCHEDULED->UNSCHEDULED": true,
+};
+
+function isTransitionAllowed(fromState, toState) {
+  const from = String(fromState || "").trim().toUpperCase();
+  const to = String(toState || "").trim().toUpperCase();
+  if (!to) return false;
+  const key = from + "->" + to;
+  if (!from && LIFECYCLE_ALLOWED_TRANSITIONS["->" + to]) return true;
+  return !!LIFECYCLE_ALLOWED_TRANSITIONS[key];
+}
+
+module.exports = {
+  LIFECYCLE_ALLOWED_TRANSITIONS,
+  isTransitionAllowed,
+};

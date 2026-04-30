@@ -65,4 +65,20 @@ describe("parseMaintenanceDraft", () => {
     const byAddressToken = parseMaintenanceDraft("ac issue at pennsylvania ave unit 1", known, props);
     assert.equal(byAddressToken.propertyCode, "PENN");
   });
+
+  test("common area text sets locationType COMMON_AREA", () => {
+    const known = new Set(["PENN"]);
+    const d = parseMaintenanceDraft("hallway light out at penn", known);
+    assert.equal(d.locationType, "COMMON_AREA");
+  });
+
+  test("common area draft can finalize without unit", () => {
+    const d = {
+      propertyCode: "PENN",
+      unitLabel: "",
+      issueText: "hallway light out",
+      locationType: "COMMON_AREA",
+    };
+    assert.equal(isMaintenanceDraftComplete(d), true);
+  });
 });

@@ -11,10 +11,16 @@ const {
   parseMediaJson,
   composeInboundTextWithMedia,
 } = require("../brain/shared/mediaPayload");
+const { enrichTwilioMediaWithOcr } = require("../adapters/twilio/enrichTwilioMediaWithOcr");
 const { appendEventLog } = require("../dal/appendEventLog");
-const { isDbConfigured } = require("../db/supabase");
+const { isDbConfigured, getSupabase } = require("../db/supabase");
+const {
+  resolveCanonicalBrainActorKey,
+  canonicalForNonStaff,
+} = require("../signal/resolveCanonicalBrainActorKey");
 const { setSmsOptOut, isSmsOptedOut } = require("../dal/smsOptOut");
 const { handleStaffLifecycleCommand } = require("../brain/staff/handleStaffLifecycleCommand");
+const { tryPortalPmTicketMutation } = require("../dal/portalTicketMutations");
 const { handleInboundCore } = require("../brain/core/handleInboundCore");
 const {
   buildOutboundIntent,
@@ -39,6 +45,10 @@ const {
 } = require("./routeInboundDecision");
 const { previewText } = require("../logging/inboundLogContext");
 const { emit } = require("../logging/structuredLog");
+const {
+  parseStaffCapDraftIdFromStripped,
+  tagStaffCaptureReply,
+} = require("../dal/staffCaptureDraft");
 
 /**
  * @param {{ staffRun?: object | null, complianceRun?: object | null, stubRun?: object | null, coreRun?: object | null }} o
@@ -71,7 +81,7 @@ function resolveOutboundIntentType(o) {
  * @param {string} o.traceId
  * @param {number} [o.traceStartMs]
  * @param {Record<string, string>} o.routerParameter
- * @param {'sms' | 'whatsapp' | 'telegram'} o.transportChannel
+ * @param {'sms' | 'whatsapp' | 'telegram' | 'portal'} o.transportChannel
  * @param {object} [o.telegramSignal] — required for Telegram outbound + chat link
  * @param {string} [o.logKind] — structured log kind prefix
  */
@@ -83,6 +93,14 @@ async function runInboundPipeline(o) {
   const signal = o.telegramSignal || null;
   const logKind = String(o.logKind || "inbound").trim() || "inbound";
 
+  if (transportChannel === "sms" || transportChannel === "whatsapp") {
+    const mediaArr = parseMediaJson(routerParameter._mediaJson);
+    if (mediaArr.length) {
+      const enriched = await enrichTwilioMediaWithOcr(mediaArr);
+      routerParameter._mediaJson = JSON.stringify(enriched);
+    }
+  }
+
   const smsCompliance = complianceSmsOnly(transportChannel);
 
   if (signal && signal.channel === CHANNEL_TELEGRAM) {
@@ -90,6 +108,28 @@ async function runInboundPipeline(o) {
   }
 
   const staffContext = await resolveStaffContextFromRouterParameter(routerParameter);
+  const transportActorKey =
+    String(routerParameter._phoneE164 || "").trim() ||
+    String(routerParameter.From || "").trim();
+  if (isDbConfigured()) {
+    const sbCanon = getSupabase();
+    if (sbCanon) {
+      routerParameter._canonicalBrainActorKey = await resolveCanonicalBrainActorKey({
+        sb: sbCanon,
+        routerParameter,
+        staffRow: staffContext.staff || null,
+        transportActorKey,
+        isStaff: staffContext.isStaff === true,
+      });
+    } else {
+      routerParameter._canonicalBrainActorKey = transportActorKey;
+    }
+  } else {
+    routerParameter._canonicalBrainActorKey = staffContext.isStaff
+      ? transportActorKey
+      : canonicalForNonStaff(transportActorKey);
+  }
+
   const precursor = evaluateRouterPrecursor({
     parameter: routerParameter,
     staffContext: {
@@ -116,10 +156,35 @@ async function runInboundPipeline(o) {
     },
   });
 
+  if (
+    precursor.outcome === "STAFF_CAPTURE_HASH" &&
+    staffContext.isStaff
+  ) {
+    const canon = String(routerParameter._canonicalBrainActorKey || "").trim();
+    emit({
+      level: "info",
+      trace_id: traceId,
+      trace_start_ms: traceStartMs,
+      log_kind: logKind,
+      event: "STAFF_CAPTURE_IDENTITY_DIAG",
+      data: {
+        crumb: "staff_capture_identity_diag",
+        transport_channel: transportChannel,
+        transport_actor_key: transportActorKey,
+        canonical_brain_actor_key: canon,
+        staff_id:
+          staffContext.staff && staffContext.staff.staff_id
+            ? String(staffContext.staff.staff_id)
+            : "",
+        draft_owner_key_expected: canon,
+      },
+    });
+  }
+
   const effectiveCompliance = getEffectiveCompliance(smsCompliance, precursor);
 
   const inbound = normalizeInboundEventFromRouterParameter(routerParameter);
-  const laneDecision = buildLaneDecision(precursor, inbound);
+  const laneDecision = buildLaneDecision(precursor, inbound, staffContext);
 
   await appendEventLog({
     traceId,
@@ -138,7 +203,15 @@ async function runInboundPipeline(o) {
   });
 
   let staffRun = null;
-  if (shouldInvokeStaffLifecycle(precursor, staffContext)) {
+  // Portal webhook is token-gated in `index.js`; PM saves must persist even when the
+  // actor phone is not linked in `staff` (common for portal-only PM logins).
+  if (transportChannel === "portal" && isDbConfigured()) {
+    staffRun = await tryPortalPmTicketMutation({
+      traceId,
+      routerParameter,
+    });
+  }
+  if (!staffRun && shouldInvokeStaffLifecycle(precursor, staffContext)) {
     staffRun = await handleStaffLifecycleCommand({
       traceId,
       staffActorKey: staffContext.staffActorKey,
@@ -255,6 +328,7 @@ async function runInboundPipeline(o) {
     suppressedRun,
     effectiveCompliance,
     precursor,
+    transportChannel,
   });
 
   if (canEnterCore) {
@@ -265,7 +339,19 @@ async function runInboundPipeline(o) {
         ).trim()
       : String(routerParameter.Body || "").trim();
     const mediaForCore = parseMediaJson(routerParameter._mediaJson);
-    const bodyForCore = composeInboundTextWithMedia(bodyBase, mediaForCore, 1400);
+    const staffDraftParsed = isStaffCapture
+      ? parseStaffCapDraftIdFromStripped(bodyBase)
+      : null;
+    const textForMediaCompose = isStaffCapture
+      ? staffDraftParsed && staffDraftParsed.draftSeq != null
+        ? staffDraftParsed.rest
+        : bodyBase
+      : bodyBase;
+    const bodyForCore = composeInboundTextWithMedia(
+      textForMediaCompose,
+      mediaForCore,
+      1400
+    );
     coreRun = await handleInboundCore({
       traceId,
       traceStartMs,
@@ -273,7 +359,22 @@ async function runInboundPipeline(o) {
       mode: isStaffCapture ? "MANAGER" : "TENANT",
       bodyText: bodyForCore,
       staffActorKey: staffContext.staffActorKey,
+      staffRow: staffContext.staff || null,
+      isStaffCapture,
+      staffDraftParsed: staffDraftParsed || undefined,
+      canonicalBrainActorKey: String(routerParameter._canonicalBrainActorKey || "").trim(),
     });
+    if (
+      coreRun &&
+      coreRun.staffDraftSeq != null &&
+      coreRun.replyText &&
+      String(coreRun.replyText).trim()
+    ) {
+      coreRun.replyText = tagStaffCaptureReply(
+        coreRun.staffDraftSeq,
+        coreRun.replyText
+      );
+    }
   }
 
   const replyText =

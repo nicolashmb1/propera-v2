@@ -7,7 +7,7 @@
  * @param {string} lang
  * @param {object|null} baseVars
  * @param {object|null} cigContext
- * @param {{ knownPropertyCodesUpper: Set, traceId?: string, traceStartMs?: number }} buildOpts
+ * @param {{ knownPropertyCodesUpper: Set, propertiesList?: Array<{ code: string, display_name?: string }>, traceId?: string, traceStartMs?: number }} buildOpts
  */
 const { properaBuildIntakePackage } = require("./properaBuildIntakePackage");
 
@@ -29,6 +29,10 @@ async function compileTurn(bodyTrim, phone, lang, baseVars, cigContext, buildOpt
       cigContext: cigContext || null,
       knownPropertyCodesUpper:
         (buildOpts && buildOpts.knownPropertyCodesUpper) || new Set(),
+      propertiesList:
+        buildOpts && Array.isArray(buildOpts.propertiesList)
+          ? buildOpts.propertiesList
+          : [],
       traceId: (buildOpts && buildOpts.traceId) || "",
       traceStartMs: (buildOpts && buildOpts.traceStartMs) ?? null,
     });

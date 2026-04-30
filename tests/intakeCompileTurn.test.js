@@ -62,4 +62,14 @@ describe("compileTurn + properaBuildIntakePackage (deterministic)", () => {
     assert.equal(d.propertyCode, "");
     assert.equal(d.openerNext, "SCHEDULE");
   });
+
+  test("compile path marks common area location from issue text", async () => {
+    const { parseMaintenanceDraftAsync } = require("../src/brain/core/parseMaintenanceDraft");
+    const known = new Set(["PENN"]);
+    const d = await parseMaintenanceDraftAsync(
+      "hallway leak at penn by unit 101",
+      known
+    );
+    assert.equal(d.locationType, "COMMON_AREA");
+  });
 });

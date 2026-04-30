@@ -7,9 +7,11 @@ const {
   port,
   nodeEnv,
   identityApiEnabled,
+  lifecycleCronSecret,
 } = require("./config/env");
 const { createTrace } = require("./trace/createTrace");
-const { isDbConfigured, pingDb } = require("./db/supabase");
+const { isDbConfigured, pingDb, getSupabase } = require("./db/supabase");
+const { processDueLifecycleTimers } = require("./jobs/processLifecycleTimers");
 const { requestContext } = require("./middleware/requestContext");
 const { boot, emit } = require("./logging/structuredLog");
 const {
@@ -25,8 +27,11 @@ const { enrichTelegramMediaWithOcr } = require("./adapters/telegram/enrichTelegr
 const { tryConsumeUpdateId } = require("./adapters/telegram/dedupeUpdateId");
 const { buildRouterParameterFromTelegram } = require("./contracts/buildRouterParameterFromTelegram");
 const { buildRouterParameterFromTwilio } = require("./contracts/buildRouterParameterFromTwilio");
+const { buildRouterParameterFromPortal } = require("./contracts/buildRouterParameterFromPortal");
+const { verifyPortalRequest } = require("./portal/portalAuth");
 const { runInboundPipeline } = require("./inbound/runInboundPipeline");
 const { registerDashboardRoutes } = require("./dashboard/registerDashboard");
+const { registerPortalReadRoutes } = require("./portal/registerPortalRoutes");
 
 const app = express();
 
@@ -35,10 +40,30 @@ const twilioForm = express.urlencoded({ extended: true });
 app.use(requestContext);
 
 registerDashboardRoutes(app);
+registerPortalReadRoutes(app);
+
+app.post("/internal/cron/lifecycle-timers", async (req, res) => {
+  const secret = lifecycleCronSecret();
+  const hdr = String(req.headers["x-propera-cron-secret"] || "").trim();
+  if (!secret || hdr !== secret) {
+    return res.status(401).json({ ok: false, error: "unauthorized" });
+  }
+  const sb = getSupabase();
+  if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+  try {
+    const out = await processDueLifecycleTimers(sb, { traceId: req.traceId });
+    return res.json({ ok: true, ...out });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: String(err && err.message ? err.message : err),
+    });
+  }
+});
 
 app.get("/", (_req, res) => {
   res.type("text/plain").send(
-    "Propera V2 — GET /health | POST /webhooks/telegram | POST /webhooks/twilio | POST /webhooks/sms | GET /dashboard (DASHBOARD_ENABLED=1) | dev: GET /api/dev/resolve-actor?phone=+1..."
+    "Propera V2 — GET /health | POST /webhooks/telegram | POST /webhooks/twilio | POST /webhooks/sms | POST /webhooks/portal | POST /internal/cron/lifecycle-timers | GET /api/portal/gas-compat?path=tickets|properties|tenants | GET /api/portal/tenants (+ POST PATCH DELETE roster) | GET /api/portal/program-templates program-runs POST program-runs PATCH program-lines/:id/complete|reopen | GET /dashboard + GET /api/ops/event-log + GET /api/ops/lifecycle-timers | dev: GET /api/dev/resolve-actor?phone=+1..."
   );
 });
 
@@ -223,6 +248,39 @@ app.get("/webhooks/twilio", (_req, res) => {
 
 app.post("/webhooks/twilio", twilioForm, handleTwilioWebhook);
 app.post("/webhooks/sms", twilioForm, handleTwilioWebhook);
+
+/**
+ * Portal / PM structured ingress — same brain as messaging; replies in JSON (no SMS/TG send).
+ */
+app.post("/webhooks/portal", async (req, res) => {
+  if (!verifyPortalRequest(req)) {
+    return res.status(401).json({ ok: false, error: "unauthorized" });
+  }
+  try {
+    const routerParameter = buildRouterParameterFromPortal(req.body || {});
+    const result = await runInboundPipeline({
+      traceId: req.traceId,
+      traceStartMs: req.traceStartMs,
+      routerParameter,
+      transportChannel: "portal",
+      telegramSignal: null,
+      logKind: "portal_webhook",
+    });
+    return res.status(200).json(result.json);
+  } catch (err) {
+    emit({
+      level: "error",
+      trace_id: req.traceId,
+      log_kind: "portal_webhook",
+      event: "portal_inbound_failed",
+      data: { error: String(err && err.message ? err.message : err) },
+    });
+    return res.status(400).json({
+      ok: false,
+      error: String(err && err.message ? err.message : err),
+    });
+  }
+});
 
 /**
  * Dev-only: resolve staff vs tenant from DB (same idea as GAS isStaff / router lane).

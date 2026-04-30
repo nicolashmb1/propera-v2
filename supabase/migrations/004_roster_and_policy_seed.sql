@@ -111,7 +111,6 @@ on conflict (staff_id, property_code, role) do nothing;
 
 -- ---------------------------------------------------------------------------
 -- PropertyPolicy (ppGet_ keys). TOKEN: set in dashboard — placeholder here.
--- Fix typo PEEN -> PENN for dry-run row.
 -- ---------------------------------------------------------------------------
 insert into public.property_policy (property_code, policy_key, value, value_type)
 values

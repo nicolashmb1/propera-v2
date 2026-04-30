@@ -15,6 +15,9 @@ Run SQL files in **numeric order** in the Supabase SQL Editor (same project as `
 | **009_property_aliases.sql** | `property_aliases` (config-driven per-property aliases) | Intake property detection (`listPropertiesForMenu` → `detectPropertyFromBody`) uses this when present; safe fallback if absent |
 | **010_property_aliases_seed_from_properties.sql** | Optional seed helper for `property_aliases` from `properties.short_name` / `display_name` / controlled address token | Optional convenience after 009; safe idempotent seed (`ON CONFLICT DO NOTHING`) |
 | **011_sms_opt_out.sql** | `sms_opt_out` — compliance STOP/START persistence | **`src/dal/smsOptOut.js`**, **`src/inbound/runInboundPipeline.js`** (SMS-only branch) |
+| **012_tenant_roster.sql** | `tenant_roster` — GAS **Tenants** sheet (property + unit + resident phone + name) | **`src/dal/tenantRoster.js`** — staff **`#capture`** resolves **resident** phone for `tickets` / `work_items` (never staff phone) |
+| **013_tenant_roster_rls.sql** | **RLS enabled** on `tenant_roster` (no anon policies — PII safe for Supabase API) | Run after **012** if Supabase warns about missing RLS; server uses **service role** (bypasses RLS) |
+| **018_program_engine_v1.sql** | `program_templates`, `program_runs`, `program_lines` (PM/Task V1) + seed templates | **`programRuns.js`**, portal routes `/api/portal/program-*` — see **`docs/PM_PROGRAM_ENGINE_V1.md`** |
 
 ### Minimum paths
 

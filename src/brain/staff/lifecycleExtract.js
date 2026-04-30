@@ -62,6 +62,52 @@ function buildPropertyVariantSet(prop) {
  * @param {Array<{ code: string, display_name?: string, ticket_prefix?: string, short_name?: string, address?: string, aliases?: string[] }>} propertiesList
  * @returns {string}
  */
+/**
+ * GAS `phraseInText_(tNorm, keyNorm)` — `17_PROPERTY_SCHEDULE_ENGINE.gs` ~1985–1990.
+ * Both inputs are normalizePropText-style (lowercase, spaces).
+ */
+function phraseInNormalizedText(tNorm, keyNorm) {
+  const t = " " + String(tNorm || "").trim() + " ";
+  const k = " " + String(keyNorm || "").trim() + " ";
+  return t.includes(k);
+}
+
+/**
+ * GAS `resolvePropertyFromText_(text, { strict: true })` — first pass only (exact + phrase boundary).
+ * No Levenshtein / token-fuzzy tail — matches strict branch of `17_PROPERTY_SCHEDULE_ENGINE.gs` ~1880–1914.
+ *
+ * @returns {{ code: string, name: string } | null}
+ */
+function resolvePropertyFromTextStrict(text, propertiesList) {
+  const props = Array.isArray(propertiesList) ? propertiesList : [];
+  const t = normalizePropText(text);
+  if (!t) return null;
+  for (const p of props) {
+    const code = String(p && p.code ? p.code : "")
+      .trim()
+      .toUpperCase();
+    if (!code) continue;
+    const displayName = String(p && p.display_name ? p.display_name : "").trim();
+    const variants = Array.from(
+      buildPropertyVariantSet({
+        code,
+        display_name: p.display_name,
+        ticket_prefix: p.ticket_prefix,
+        short_name: p.short_name,
+        address: p.address,
+        aliases: Array.isArray(p.aliases) ? p.aliases : [],
+      })
+    );
+    for (const rawKey of variants) {
+      const key = normalizePropText(String(rawKey || ""));
+      if (!key) continue;
+      if (t === key) return { code, name: displayName };
+      if (phraseInNormalizedText(t, key)) return { code, name: displayName };
+    }
+  }
+  return null;
+}
+
 function resolvePropertyExplicitOnly(text, propertiesList) {
   const t = normalizePropText(text);
   if (!t) return "";
@@ -403,6 +449,8 @@ function buildSuggestedPromptsForCandidates(candidates, fullRows) {
 module.exports = {
   extractUnit,
   extractUnitFromBody,
+  phraseInNormalizedText,
+  resolvePropertyFromTextStrict,
   resolvePropertyExplicitOnly,
   detectPropertyFromBody,
   extractPropertyHintFromBody,

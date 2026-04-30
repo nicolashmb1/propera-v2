@@ -7,6 +7,130 @@
 
 ---
 
+## 2026-04-29 — PM / Tasks V1 spec + backend slice
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`docs/PM_PROGRAM_ENGINE_V1.md`** | Locked **V1** definition (program runs + lines, templates, boundary vs reactive intake). |
+| **`018_program_engine_v1.sql`** | `program_templates`, `program_runs`, `program_lines` + seed (`HVAC_PM`, `WATER_HEATER_PM`, `COMMON_AREA_PAINT`), RLS enabled. |
+| **`src/pm/expandProgramLines.js`** | Pure expansion by `expansion_type`. |
+| **`src/dal/programRuns.js`** | `createProgramRun`, list/detail, complete/reopen line + `event_log` (`PROGRAM_RUN_CREATED`, etc.). |
+| **`registerPortalRoutes.js`** | `GET /api/portal/program-templates`, `GET/POST /api/portal/program-runs`, `GET .../program-runs/:id`, `PATCH .../program-lines/:id/complete`, `PATCH .../program-lines/:id/reopen`. |
+| **`tests/expandProgramLines.test.js`** | Unit tests for expansion helpers. |
+
+### Ops
+
+Apply **`018_program_engine_v1.sql`** in Supabase (see **`docs/OUTSIDE_CURSOR.md`**) before using portal PM routes.
+
+### Next
+
+**propera-app:** `/preventive` page + `/api/program-*` proxy routes (see repo `propera-app/`).
+
+---
+
+## 2026-04-28 — Tenant roster portal API + propera-app `/tenants`
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`014_tenant_roster_email.sql`** | Optional `email` on `tenant_roster`; index on `phone_e164`. |
+| **`portalTenants.js`** | List/create/update/deactivate (`tenant_roster`); property resolved from display/short/code. |
+| **`registerPortalRoutes.js`** | `GET/POST/PATCH/DELETE /api/portal/tenants`, `gas-compat?path=tenants`. |
+| **propera-app** | `/tenants` owner-only UI + `/api/tenants` proxy to V2; Contact Picker button when supported; staff redirected off `/tenants`. |
+
+### Commands
+
+```bash
+cd propera-v2 && npm test
+cd ../propera-app && npm run build
+```
+
+---
+
+## 2026-04-19 — Staff #capture: tenant roster phone (GAS Tenants sheet)
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **Migration `012_tenant_roster.sql`** | `tenant_roster` — `property_code`, `unit_label`, `phone_e164`, `resident_name`, `active` (GAS sheet parity). |
+| **`tenantRoster.js`** | `findTenantCandidates`, `resolveStaffCaptureTenantPhone`, `pickResolvedTenantPhone` — same match rules as GAS (`score >= 85` when name hint, single row, etc.). |
+| **`extractStaffTenantNameHintFromText.js`** | GAS tail hint + **leading** hint (`Maria report from…`). |
+| **`finalizeMaintenance.js`** | MANAGER: `tenant_phone_e164` / `work_items.phone_e164` from resolved tenant only; **`conversation_ctx`** upserts tenant phone when matched (not staff). |
+| **`handleInboundCore.js`** | Before finalize (fast + multi-turn): `resolveManagerTenantIfNeeded` + merged body/OCR for hints. |
+| **Docs / tests** | **`PARITY_LEDGER.md`** §6, **`PORTING_FROM_GAS.md`**, **`OUTSIDE_CURSOR.md`**, **`supabase/migrations/README.md`**; **`tests/staffCaptureTenantLookup.test.js`**. |
+
+### Commands
+
+```bash
+cd propera-v2
+npm test
+```
+
+---
+
+## 2026-04-19 — `normalizeUnit_` in canonize (GAS `17` ~2247–2258)
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`extractUnitGas.js`** | Exported **`normalizeUnit_`** — same logic as GAS (strip apt/suite prefixes, trailing punct, uppercase). |
+| **`canonizeStructuredSignal.js`** | Applies **`normalizeUnit_`** to structured `unit` after copy from raw (matches **`properaCanonizeStructuredSignal_`** ~1299–1301). |
+| **Tests** | `canonizeStructuredSignal.test.js` — `apt 402b` → `402B`. |
+| **Docs** | **`PARITY_LEDGER.md`** §1 / §7; **`PORTING_FROM_GAS.md`** unit row. |
+
+### Commands
+
+```bash
+cd propera-v2
+npm test
+```
+
+---
+
+## 2026-04-19 — Intake: GAS `properaCanonizeStructuredSignal_` property grounding + `compileTurn` propertiesList
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`lifecycleExtract.js`** | **`phraseInNormalizedText`**, **`resolvePropertyFromTextStrict`** — GAS `phraseInText_` + strict branch of `resolvePropertyFromText_` (`17_PROPERTY_SCHEDULE_ENGINE.gs`). |
+| **`canonizeStructuredSignal.js`** | When **`propertiesList`** is non-empty, property fields follow GAS `07` ~1399–1426 (explicit-only then strict phrase); **`queryType`**, **`ambiguity`**, **`access_notes` → `schedule.raw`** aligned with GAS. |
+| **`compileTurn.js`** | Forwards **`propertiesList`** into **`properaBuildIntakePackage`** (was dropped before — LLM canonize could not ground). |
+| **`properaBuildIntakePackage.js`** | Passes **`propertiesList`** into **`properaCanonizeStructuredSignal`** on LLM path. |
+| **Tests** | `tests/canonizeStructuredSignal.test.js`. |
+| **Docs** | **`PARITY_LEDGER.md`** §1 + §7; **`PORTING_FROM_GAS.md`** compile row. |
+
+### Commands
+
+```bash
+cd propera-v2
+npm test
+```
+
+---
+
+## 2026-04-19 — PARITY_LEDGER GAS inventory completeness
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`docs/PARITY_LEDGER.md`** | **§ GAS V1 engine file → V2 coverage map** now lists **`27_DEV_TOOLS_HARNESS.gs`** and **`apps-script/ProperaPortalAPI.gs`**, plus an explicit **inventory** paragraph: every numbered `01`–`27` root engine is accounted for; “accounted for” ≠ “fully PORTED”. **§7** scope note points agents at closing PARTIAL rows, not hunting orphan files. |
+
+### Commands
+
+```bash
+cd propera-v2
+npm test
+```
+
+---
+
 ## 2026-04-18 — Documentation sync (orchestrator + outgate + README reality)
 
 ### Done

@@ -6,8 +6,29 @@ const { createClient } = require("@supabase/supabase-js");
 const { supabaseUrl, supabaseServiceRoleKey } = require("../config/env");
 
 let _client = null;
+/** @type {import("@supabase/supabase-js").SupabaseClient | null | undefined} */
+let _injectedClient = undefined;
+
+/**
+ * Integration tests only: inject a mock client before any `getSupabase()` call.
+ * Requires `PROPERA_TEST_INJECT_SB=1` (set in `staffCaptureCrossChannel.integration.test.js` only).
+ * @param {import("@supabase/supabase-js").SupabaseClient | null} client
+ */
+function setSupabaseClientForTests(client) {
+  if (process.env.PROPERA_TEST_INJECT_SB !== "1") {
+    throw new Error("setSupabaseClientForTests: set PROPERA_TEST_INJECT_SB=1");
+  }
+  _injectedClient = client;
+}
+
+function clearSupabaseClientForTests() {
+  _injectedClient = undefined;
+}
 
 function getSupabase() {
+  if (process.env.PROPERA_TEST_INJECT_SB === "1" && _injectedClient !== undefined) {
+    return _injectedClient;
+  }
   if (!supabaseUrl || !supabaseServiceRoleKey) return null;
   if (!_client) {
     _client = createClient(supabaseUrl, supabaseServiceRoleKey, {
@@ -18,6 +39,9 @@ function getSupabase() {
 }
 
 function isDbConfigured() {
+  if (process.env.PROPERA_TEST_INJECT_SB === "1" && _injectedClient != null) {
+    return true;
+  }
   return !!(supabaseUrl && supabaseServiceRoleKey);
 }
 
@@ -32,4 +56,10 @@ async function pingDb() {
   return { ok: true };
 }
 
-module.exports = { getSupabase, isDbConfigured, pingDb };
+module.exports = {
+  getSupabase,
+  isDbConfigured,
+  pingDb,
+  setSupabaseClientForTests,
+  clearSupabaseClientForTests,
+};

@@ -46,4 +46,29 @@ describe("normalizeInboundEvent media pass-through", () => {
     assert.equal(ev.media.length, 1);
     assert.equal(ev.meta.numMedia, "1");
   });
+
+  test("PORTAL channel sets source and channel to portal", () => {
+    const ev = normalizeInboundEventFromRouterParameter({
+      From: "+15551234567",
+      Body: "# PENN apt 303 Plumbing: test",
+      _channel: "PORTAL",
+      _phoneE164: "+15551234567",
+    });
+    assert.equal(ev.source, "portal");
+    assert.equal(ev.channel, "portal");
+    assert.equal(ev.meta.portal, "1");
+  });
+
+  test("canonicalBrainActorKey on signal — actorId follows canonical, meta keeps transport", () => {
+    const ev = normalizeInboundEventFromRouterParameter({
+      From: "TG:305305305",
+      Body: "# ice maker",
+      _channel: "TELEGRAM",
+      _canonicalBrainActorKey: "+15550001112",
+    });
+    assert.equal(ev.canonicalBrainActorKey, "+15550001112");
+    assert.equal(ev.actorId, "+15550001112");
+    assert.equal(ev.meta.transportActorKey, "TG:305305305");
+    assert.equal(ev.meta.canonicalBrainActorKey, "+15550001112");
+  });
 });

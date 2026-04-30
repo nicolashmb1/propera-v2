@@ -16,12 +16,19 @@ function normalizeInboundEventFromRouterParameter(parameter, extra) {
   const isWa = fromRaw.toLowerCase().indexOf("whatsapp:") === 0;
   const chHint = String(p._channel || "").trim().toUpperCase();
   const isTgActor = /^TG:/i.test(fromRaw) || chHint === "TELEGRAM";
+  const isPortal = chHint === "PORTAL";
 
   let phone = String(p._phoneE164 || "").trim();
   if (!phone) phone = fromRaw;
 
+  /** Transport-side actor string (adapter). Brain uses `canonicalBrainActorKey` when set. */
+  const transportActorKey = phone;
+  const canonicalBrainActorKey = String(p._canonicalBrainActorKey || "").trim();
+  const actorForBrain = canonicalBrainActorKey || phone;
+
   let channelNorm = "sms";
-  if (isWa) channelNorm = "whatsapp";
+  if (isPortal) channelNorm = "portal";
+  else if (isWa) channelNorm = "whatsapp";
   else if (isTgActor) channelNorm = "telegram";
 
   const bodyTrim = body.trim();
@@ -36,6 +43,9 @@ function normalizeInboundEventFromRouterParameter(parameter, extra) {
     {
       channel: channelNorm,
       numMedia: String(media.length),
+      portal: isPortal ? "1" : "",
+      transportActorKey,
+      canonicalBrainActorKey: canonicalBrainActorKey || "",
     },
     (extra && extra.meta) || {}
   );
@@ -45,7 +55,9 @@ function normalizeInboundEventFromRouterParameter(parameter, extra) {
     source: channelNorm,
     channel: channelNorm,
     actorType: "unknown",
-    actorId: phone,
+    /** Brain / lane: canonical identity when resolved at signal layer; else same as transport. */
+    canonicalBrainActorKey: canonicalBrainActorKey || "",
+    actorId: actorForBrain,
     body,
     bodyTrim,
     bodyLower: bodyTrim.toLowerCase(),
