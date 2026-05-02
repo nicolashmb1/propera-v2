@@ -78,14 +78,30 @@ describe("pickResolvedTenantPhone (GAS enrich rules)", () => {
     assert.equal(r.status, "MATCHED");
   });
 
-  test("no hint: two occupants → AMBIGUOUS", () => {
+  test("no hint: two occupants → deterministic MATCHED_MULTI_FALLBACK", () => {
     const r = pickResolvedTenantPhone(
       [
-        { phone: "+1a", name: "A", score: 100 },
         { phone: "+1b", name: "B", score: 100 },
+        { phone: "+1a", name: "A", score: 100 },
       ],
       ""
     );
-    assert.equal(r.status, "AMBIGUOUS");
+    assert.equal(r.status, "MATCHED_MULTI_FALLBACK");
+    assert.equal(r.phoneE164, "+1a");
+    assert.equal(r.matchedName, "A");
+    assert.equal(r.multiCandidateCount, 2);
+  });
+
+  test("no hint: tie-break by phone when same name", () => {
+    const r = pickResolvedTenantPhone(
+      [
+        { phone: "+15550000002", name: "Dup", score: 100 },
+        { phone: "+15550000001", name: "Dup", score: 100 },
+      ],
+      ""
+    );
+    assert.equal(r.status, "MATCHED_MULTI_FALLBACK");
+    assert.equal(r.phoneE164, "+15550000001");
+    assert.equal(r.multiCandidateCount, 2);
   });
 });

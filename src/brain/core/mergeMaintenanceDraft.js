@@ -150,8 +150,12 @@ function mergeMaintenanceDraftTurn(o) {
   if (!attachDec.suppressRawIssueForMerge && !issue && parsed.issueText)
     issue = parsed.issueText;
   if (!prop && parsed.propertyCode) prop = parsed.propertyCode;
-  // Do not copy parsed.unitLabel here — issue/property turns use noisy free text; unit is only
-  // set on UNIT stage (or fast path in handleInboundCore before merge).
+  // Hydrate unit from the same parse as property/issue (compile turn / regex). Matches fast-path
+  // behavior where unitLabel is already applied — avoids "what unit?" when the message included it.
+
+  if (!unit && parsed.unitLabel && String(parsed.unitLabel).trim()) {
+    unit = String(parsed.unitLabel).trim();
+  }
 
   if (exp === "ISSUE" || exp === "") {
     if (!attachDec.suppressRawIssueForMerge) {

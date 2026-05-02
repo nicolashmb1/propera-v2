@@ -1,6 +1,7 @@
 /**
  * GAS **Tenants** sheet + `findTenantCandidates_` — `14_DIRECTORY_SESSION_DAL.gs` ~2031–2091.
- * Staff #capture tickets must use **resident** phone from roster when uniquely resolvable; never staff phone.
+ * Staff #capture tickets use **resident** phone from roster; never staff phone.
+ * With **no** name hint and multiple active occupants for the unit, picks one **deterministically** (name, then phone) and records `MATCHED_MULTI_FALLBACK` for audit.
  *
  * Requires migration **`012_tenant_roster.sql`**.
  */
@@ -54,8 +55,20 @@ async function findTenantCandidates(sb, propertyCode, unitLabel, queryName) {
   return Object.values(best).sort((a, b) => (b.score || 0) - (a.score || 0));
 }
 
+/** @param {Array<{ phone: string, name: string, score: number }>} candidates */
+function stablePickFirstOccupantNoHint_(candidates) {
+  const arr = [...candidates].sort((a, b) => {
+    const na = String(a.name || "").toLowerCase();
+    const nb = String(b.name || "").toLowerCase();
+    if (na !== nb) return na.localeCompare(nb);
+    return String(a.phone || "").localeCompare(String(b.phone || ""));
+  });
+  return arr[0];
+}
+
 /**
- * GAS `enrichStaffCapTenantIdentity_` decision core — single match rules.
+ * GAS `enrichStaffCapTenantIdentity_` decision core — single match rules when a name hint is present;
+ * no-hint path may resolve multiple occupants via {@link stablePickFirstOccupantNoHint_}.
  */
 function pickResolvedTenantPhone(candidates, queryName) {
   const hasHint = String(queryName || "").trim().length > 0;
@@ -95,10 +108,12 @@ function pickResolvedTenantPhone(candidates, queryName) {
     };
   }
   if (candidates.length > 1) {
+    const chosen = stablePickFirstOccupantNoHint_(candidates);
     return {
-      phoneE164: "",
-      status: "AMBIGUOUS",
-      matchedName: null,
+      phoneE164: chosen.phone,
+      status: "MATCHED_MULTI_FALLBACK",
+      matchedName: chosen.name || null,
+      multiCandidateCount: candidates.length,
     };
   }
   return {
@@ -146,14 +161,19 @@ async function resolveStaffCaptureTenantPhone(o) {
   );
   const picked = pickResolvedTenantPhone(candidates, finalHint);
 
+  const meta = {
+    tenantNameHint: finalHint,
+    tenantNameTrusted: !!mediaNameHint,
+    tenantLookupStatus: picked.status,
+    tenantLookupMatchedName: picked.matchedName,
+  };
+  if (picked.multiCandidateCount != null && picked.multiCandidateCount > 1) {
+    meta.tenantLookupMultiCandidateCount = picked.multiCandidateCount;
+  }
+
   return {
     phoneE164: picked.phoneE164,
-    meta: {
-      tenantNameHint: finalHint,
-      tenantNameTrusted: !!mediaNameHint,
-      tenantLookupStatus: picked.status,
-      tenantLookupMatchedName: picked.matchedName,
-    },
+    meta,
   };
 }
 
