@@ -1,6 +1,6 @@
 # Propera V2 (parallel runtime)
 
-This folder is the **new** Propera server. **Production today** is still Google Apps Script + Sheets — nothing here replaces that until you deliberately cut over.
+This folder is the **Propera V2** server (Node + Supabase). **Staff portal and PM ticket flows default here** when `propera-app` is pointed at V2 (`/webhooks/portal`, gas-compat reads). **Google Apps Script + Sheets** remains **legacy backup** for slices you have not retired — not the default for new portal PM behavior.
 
 **Agents / Cursor:** start with **[AGENTS.md](./AGENTS.md)** — mandatory doc order, freeze stance, parity ledger pointer, commands. **Do not “continue V2” without reading it.**
 

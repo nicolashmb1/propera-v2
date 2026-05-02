@@ -7,6 +7,33 @@
 
 ---
 
+## 2026-05-02 — WI_CREATED_UNSCHEDULED without default owner (`PING_UNSCHEDULED`)
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`finalizeMaintenance.js`** | After WI insert, **`handleLifecycleSignal(WI_CREATED_UNSCHEDULED)`** runs for **`wiState === "UNSCHEDULED"`** (non-emergency). Removed incorrect gate on **`ownerId`** / `ASSIGN_DEFAULT_OWNER` — unscheduled open-service WIs now arm **`PING_UNSCHEDULED`** the same as assigned ones. |
+| **Tests** | **`tests/lifecycleWiCreatedUnscheduled.test.js`** — mock Supabase: one **`PING_UNSCHEDULED`**, duplicate create cancels prior, **`ACTIVE_WORK_ENTERED`** leaves only **`PING_STAFF_UPDATE`**, emergency **`STAFF_TRIAGE`** holds with no timer. |
+
+---
+
+## 2026-05-02 — V2-first portal PM + propera-app route reconciliation
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **propera-app** | New **`/api/pm/{update-ticket,complete-ticket,delete-ticket,add-attachment,upload-attachment,create-property}`** routes; V2 via **`pmRouteHelpers`** + **`pmGasForward`** for GAS legacy; **`pmV2Proxy`** infers logical failure from `staff.resolution.error` and HTTP **422** from V2 on failed portal mutations |
+| **propera-v2** | Portal **`attachments` / `attachmentUrls`** in JSON → **`portalTicketMutations`** merges into `tickets.attachments`; **`buildRouterParameterFromPortal`** treats attachments as PM-save hint; **`runInboundPipeline`** sets **`json.ok`** false when **`staffRun.ok === false`**; structured **`emit`** on **`/webhooks/portal`** (received / complete / failed) |
+| **Tests** | **`tests/portalWebhookContract.test.js`** — noop body + parse for attachment append |
+
+### Docs
+
+**`AGENTS.md`**, **`README.md`** (v2 + app): operator stance **V2-first**, GAS legacy backup.
+
+---
+
 ## 2026-05-02 — `portal_auth_allowlist` migration (021)
 
 ### Done

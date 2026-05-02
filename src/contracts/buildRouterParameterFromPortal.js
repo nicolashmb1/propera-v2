@@ -69,6 +69,9 @@ function portalPostImpliesPmTicketSave(p) {
     "preferredWindow",
     "preferred_window",
     "schedule",
+    /** PM app add-photo: array of URLs merged in `portalTicketMutations` */
+    "attachments",
+    "attachmentUrls",
   ];
   return fieldKeys.some((k) => Object.prototype.hasOwnProperty.call(flat, k));
 }

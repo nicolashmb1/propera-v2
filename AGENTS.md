@@ -22,7 +22,8 @@ Optional: **`docs/GAS_ENGINE_PORT_PROGRAM.md`** (phased port for engines 10/12/1
 
 ## Current stance (explicit)
 
-- **GAS + Sheets = production brain** until a deliberate cutover. V2 is the parallel Node runtime under `propera-v2/`.  
+- **Operator default: V2-first** for the **staff portal stack** (`propera-app` → `/webhooks/portal`, Supabase reads). **GAS + Sheets** is **legacy backup** for slices not retired (escape hatch / old ticket rows), not the default target for new portal PM features.  
+- **Semantic reference:** **`docs/PARITY_LEDGER.md`** still tracks **GAS-class behavior** where it matters for maintenance intake and regressions — that is **correctness reference**, not “ship every change to GAS first.”  
 - **Do not add new product paths or new brain surfaces** unless the user explicitly un-freezes that. Prior work item: **what is already wired must behave like GAS** (regression / parity), not scope expansion.  
 - **Exception (explicit):** **PM/Task V1** — template-driven `program_runs` / `program_lines` + `/api/portal/program-*` routes (**`docs/PM_PROGRAM_ENGINE_V1.md`**). **Not** tenant reactive intake; keep **`handleInboundCore`** out of program creation.  
 - **Any behavior change** → update **`docs/PARITY_LEDGER.md`** and pointer comments in code (`PARITY GAP:` where reduced vs GAS).
@@ -35,7 +36,7 @@ Use this order when choosing what to build next. It matches **`docs/PARITY_LEDGE
 
 | # | Priority | What “done” means | Primary refs |
 |---|----------|---------------------|----------------|
-| **1** | **Maintenance semantic parity (first)** | Property grounding, single-turn draft parse, pre-ticket slot/stage, merge/recompute aligned with GAS; drift removed vs **`08_INTAKE_RUNTIME.gs` / `11_TICKET_FINALIZE_ENGINE.gs`** class behavior. | `PARITY_LEDGER.md` §§1–2; `handleInboundCore.js`, `compileTurn.js`, `properaBuildIntakePackage.js`, `parseMaintenanceDraft.js`, `mergeMaintenanceDraft.js`, `recomputeDraftExpected.js` |
+| **1** | **Maintenance semantic parity (first)** | Property grounding, single-turn draft parse, pre-ticket slot/stage, merge/recompute aligned with GAS **where intake semantics still apply**; drift removed vs **`08_INTAKE_RUNTIME.gs` / `11_TICKET_FINALIZE_ENGINE.gs`** class behavior. Portal PM writes are **V2-canonical**; use PARITY for gaps vs old GAS, not as a GAS-first gate. | `PARITY_LEDGER.md` §§1–2; `handleInboundCore.js`, `compileTurn.js`, `properaBuildIntakePackage.js`, `parseMaintenanceDraft.js`, `mergeMaintenanceDraft.js`, `recomputeDraftExpected.js` |
 | **2** | **Router + lane as the single front door** | **`runInboundPipeline.js`** + **`routeInboundDecision.js`** — precursors, lane, SMS compliance, core guards, vendor/system stubs; **`src/index.js`** wires Telegram + Twilio to the same pipeline. | `PARITY_LEDGER.md` §5; **`docs/ORCHESTRATOR_ROUTING.md`**; `evaluateRouterPrecursor.js`, `decideLane.js`, `normalizeInboundEvent.js` |
 | **3** | **`compileTurn` / intake as structured truth** | Maintenance structured state comes from the primary intake path (`INTAKE_COMPILE_TURN` / package); merge/recompute consume the same truth; lighter fallbacks are not the main semantic path. | `compileTurn.js`, `properaBuildIntakePackage.js`, `mergeMaintenanceDraft.js` |
 | **4** | **Test harness before more porting** | Default **`npm test`** runs every `tests/*.test.js` file (flat layout today); add **golden / replay** scenarios for maintenance intake and stage transitions per **`docs/TESTING_STRATEGY.md`** as contracts stabilize. | `package.json` `test` script; `docs/TESTING_STRATEGY.md` |

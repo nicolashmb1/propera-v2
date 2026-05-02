@@ -141,6 +141,7 @@ function hasUpdatableTicketFields(f) {
   if (Object.prototype.hasOwnProperty.call(f, "serviceNotes")) return true;
   if (Object.prototype.hasOwnProperty.call(f, "preferredWindow")) return true;
   if (Object.prototype.hasOwnProperty.call(f, "urgency")) return true;
+  if (f.attachmentsAdd && Array.isArray(f.attachmentsAdd) && f.attachmentsAdd.length) return true;
   return false;
 }
 
@@ -281,6 +282,14 @@ function extractPortalPayloadTicketFields(routerParameter) {
     fields.preferredWindow = v == null ? "" : String(v).trim();
   }
 
+  const rawAttach = Array.isArray(j.attachments)
+    ? j.attachments
+    : Array.isArray(j.attachmentUrls)
+      ? j.attachmentUrls
+      : [];
+  const urls = rawAttach.map((x) => String(x || "").trim()).filter(Boolean);
+  if (urls.length) fields.attachmentsAdd = urls;
+
   return { humanTicketId: idOk ? humanTicketId : "", fields };
 }
 
@@ -373,7 +382,7 @@ async function fetchTicketByHumanId(sb, humanTicketId) {
   if (!id) return null;
   const { data, error } = await sb
     .from("tickets")
-    .select("ticket_id, ticket_key, status, message_raw")
+    .select("ticket_id, ticket_key, status, message_raw, attachments")
     .eq("ticket_id", id)
     .maybeSingle();
   if (error || !data) return null;
@@ -390,7 +399,7 @@ async function fetchTicketForPortalMutation(sb, lookupHint) {
   if (TICKET_ROW_UUID_RE.test(hint)) {
     const { data, error } = await sb
       .from("tickets")
-      .select("ticket_id, ticket_key, status, message_raw")
+      .select("ticket_id, ticket_key, status, message_raw, attachments")
       .eq("id", hint)
       .maybeSingle();
     if (error || !data) return null;
@@ -534,6 +543,29 @@ async function tryPortalPmTicketMutation(o) {
     ticketPatch.priority = u ? normalizePortalPriority(u) : "normal";
   }
 
+  if (f.attachmentsAdd && Array.isArray(f.attachmentsAdd) && f.attachmentsAdd.length) {
+    const existing = String((ticket && ticket.attachments) || "").trim();
+    const seen = new Set(
+      existing
+        ? existing
+            .split("\n")
+            .map((s) => s.trim().toLowerCase())
+            .filter(Boolean)
+        : []
+    );
+    const lines = existing ? existing.split("\n").map((s) => s.trim()).filter(Boolean) : [];
+    for (const u of f.attachmentsAdd) {
+      const t = String(u || "").trim();
+      if (!t) continue;
+      const k = t.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      lines.push(t);
+    }
+    const joined = lines.join("\n");
+    ticketPatch.attachments = joined.length > 3800 ? joined.slice(0, 3800) : joined;
+  }
+
   const { error: tErr2 } = await sb
     .from("tickets")
     .update(ticketPatch)
@@ -601,6 +633,8 @@ async function tryPortalPmTicketMutation(o) {
       ticket_key: ticketKey,
       fields: f,
       canonical_status: canonicalStatus || undefined,
+      attachments_added:
+        f.attachmentsAdd && Array.isArray(f.attachmentsAdd) ? f.attachmentsAdd.length : 0,
     },
   });
 
@@ -611,6 +645,7 @@ async function tryPortalPmTicketMutation(o) {
   if (Object.prototype.hasOwnProperty.call(f, "urgency")) bits.push("urgency");
   if (Object.prototype.hasOwnProperty.call(f, "serviceNotes")) bits.push("service notes");
   if (Object.prototype.hasOwnProperty.call(f, "preferredWindow")) bits.push("schedule");
+  if (f.attachmentsAdd && f.attachmentsAdd.length) bits.push("attachments +" + f.attachmentsAdd.length);
   return {
     ok: true,
     brain: "portal_ticket_mutation",

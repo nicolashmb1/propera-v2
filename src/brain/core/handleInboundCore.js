@@ -53,6 +53,9 @@ const {
   maintenanceTemplateKeyForNext,
 } = require("./buildMaintenancePrompt");
 const { inferEmergency } = require("../../dal/ticketDefaults");
+const {
+  buildStructuredPortalCreateDraft,
+} = require("./portalStructuredCreateDraft");
 const { reconcileFinalizeTicketRows } = require("./finalizeTicketGroups");
 const { parseMediaJson, composeInboundTextWithMedia } = require("../shared/mediaPayload");
 const { resolveStaffCaptureTenantPhone } = require("../../dal/tenantRoster");
@@ -731,11 +734,39 @@ async function handleInboundCore(o) {
     };
   }
 
-  const fastDraft = await parseMaintenanceDraftAsync(effectiveBody, known, {
-    traceId,
-    traceStartMs,
-    propertiesList,
-  });
+  let fastDraft;
+  if (mode === "MANAGER" && isPortalCreateTicketRouter(p)) {
+    const structured = buildStructuredPortalCreateDraft(p, known, propertiesList);
+    if (!structured) {
+      await appendEventLog({
+        traceId,
+        event: "PORTAL_CREATE_VALIDATION_FAILED",
+        payload: { mode },
+      });
+      emitTimed(traceStartMs, {
+        level: "warn",
+        trace_id: traceId,
+        log_kind: "brain",
+        event: "PORTAL_CREATE_VALIDATION_FAILED",
+        data: { crumb: "portal_create_validation_failed" },
+      });
+      return {
+        ok: false,
+        brain: "portal_create_invalid",
+        replyText:
+          "Portal create_ticket failed validation: unknown property, or missing unit/message.",
+        ...staffMeta(),
+        ...outgateMeta("MAINTENANCE_ERROR_PORTAL_VALIDATION", {}),
+      };
+    }
+    fastDraft = structured;
+  } else {
+    fastDraft = await parseMaintenanceDraftAsync(effectiveBody, known, {
+      traceId,
+      traceStartMs,
+      propertiesList,
+    });
+  }
   if (isMaintenanceDraftComplete(fastDraft)) {
     await appendEventLog({
       traceId,
@@ -743,7 +774,10 @@ async function handleInboundCore(o) {
       payload: {
         propertyCode: fastDraft.propertyCode,
         unitLabel: fastDraft.unitLabel,
-        reason: "single_message_parse",
+        reason:
+          mode === "MANAGER" && isPortalCreateTicketRouter(p)
+            ? "portal_structured_create"
+            : "single_message_parse",
       },
     });
     emitTimed(traceStartMs, {
@@ -754,7 +788,10 @@ async function handleInboundCore(o) {
       data: { reason: "single_message_parse", crumb: "core_fast_path_complete" },
     });
 
-    const emFast = inferEmergency(fastDraft.issueText);
+    const emFast =
+      mode === "MANAGER" && isPortalCreateTicketRouter(p)
+        ? { emergency: "No", emergencyType: "" }
+        : inferEmergency(fastDraft.issueText);
     const fastLocationType = normalizeLocationType(
       fastDraft.locationType ||
         inferLocationTypeFromText(fastDraft.issueText || effectiveBody)
@@ -1108,7 +1145,10 @@ async function handleInboundCore(o) {
     ? "COMMON_AREA"
     : inferLocationTypeFromText(issueForFinalize || merged.draft_issue || effectiveBody);
   const commonAreaDraft = isCommonAreaLocation(draftLocationType);
-  const em = inferEmergency(issueForFinalize || merged.draft_issue);
+  const em =
+    mode === "MANAGER" && isPortalCreateTicketRouter(p)
+      ? { emergency: "No", emergencyType: "" }
+      : inferEmergency(issueForFinalize || merged.draft_issue);
   const skipScheduling = em.emergency === "Yes" || commonAreaDraft;
 
   const pendingTicketRow =

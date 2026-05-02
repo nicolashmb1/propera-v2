@@ -59,7 +59,7 @@ Use this to see **what exists in GAS** and whether **V2 has a row** in §§1–6
 | `03_ALEXA_ADAPTER.gs` | Alexa | **Not in V2** |
 | `04_SENSOR_GATEWAY.gs` | IoT | **Not in V2** |
 | `27_DEV_TOOLS_HARNESS.gs` | GAS dev/test harness | **Not in V2** — Node uses `npm test`, local scripts, optional dashboard |
-| `apps-script/ProperaPortalAPI.gs` | Portal HTTP API (Sheets-backed) | **PARTIAL** — V2 adds `GET /api/portal/gas-compat?path=tickets|properties` (Supabase read) + `POST /webhooks/portal` (structured `RouterParameter` → `runInboundPipeline`, `transportChannel: portal`). **propera-app** can merge GAS + V2 reads; PM mutations route by `source` / `v2:` ticket id. Full GAS `path=pm.*` parity still evolving. |
+| `apps-script/ProperaPortalAPI.gs` | Portal HTTP API (Sheets-backed) | **PARTIAL** — V2 adds `GET /api/portal/gas-compat?path=tickets|properties` (Supabase read) + `POST /webhooks/portal` (structured `RouterParameter` → `runInboundPipeline`, `transportChannel: portal`). **propera-app** `/api/pm/*` is **V2-first** for V2-shaped ticket ids; GAS remains legacy for non-V2 rows and **upload / create-property** until ported. **`portalTicketMutations`** merges **`attachments` / `attachmentUrls`** from `_portalPayloadJson` into `tickets.attachments`. Full GAS `path=pm.*` parity still evolving. |
 | `PROPERA_MAIN_BACKUP.gs` | Monolith backup / `detectPropertyFromBody_` | §1 — property detect ported in `lifecycleExtract.js` |
 | `sms-consent-handler.gs` (if present) | SMS consent | Superseded by V2 **`sms_opt_out`** + SMS-only compliance in `runInboundPipeline` |
 
@@ -70,6 +70,8 @@ Use this to see **what exists in GAS** and whether **V2 has a row** in §§1–6
 | `POST /webhooks/telegram` | Telegram Bot API | `telegram` | **No** |
 | `POST /webhooks/twilio`, `POST /webhooks/sms` | Twilio `application/x-www-form-urlencoded` | `sms` if `From` is not `whatsapp:`; **`whatsapp`** if `From` starts with `whatsapp:` | **Yes, SMS only** — `sms` runs TCPA compliance + DB opt-out; **`whatsapp` does not** |
 | `POST /webhooks/portal` | JSON (`buildRouterParameterFromPortal`) | **`portal`** | **No** — structured PM/staff ingress; outbound reply returned on HTTP JSON only |
+
+**Portal `action: create_ticket` (V2 policy):** Validated structured signal — `buildStructuredPortalCreateDraft` + `finalizeMaintenance.readPortalCreateTicketPresentation`. Does **not** run `compileTurn` / regex intake on synthetic `Body`; **no** emergency inference or `localCategoryFromText` on issue text; **category / urgency / status / serviceNote** come from `_portalPayloadJson`; only **preferredWindow** is parsed for lifecycle schedule (`applyPreferredWindowByTicketKey`). PARITY GAP vs GAS portal pipeline (intentional).
 
 Requires migration **`011_sms_opt_out.sql`** for opt-out persistence. See [PROPERTY_POLICY_PARITY.md](./PROPERTY_POLICY_PARITY.md) for policy rows.
 

@@ -437,6 +437,9 @@ async function runInboundPipeline(o) {
     staffContext,
   });
 
+  /** Portal PM DB mutations set `staffRun.ok === false` — surface as top-level `ok` for HTTP clients. */
+  const pipelineHttpOk = !(staffRun && staffRun.ok === false);
+
   emit({
     level: "info",
     trace_id: traceId,
@@ -466,7 +469,7 @@ async function runInboundPipeline(o) {
     staffContext,
     outbound,
     json: {
-      ok: true,
+      ok: pipelineHttpOk,
       brain,
       transport: transportChannel,
       lane: laneDecision,

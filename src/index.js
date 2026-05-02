@@ -1,6 +1,6 @@
 /**
  * Propera V2 — minimal HTTP shell (Phase 0).
- * GAS + Sheets remain production until explicit cutover.
+ * Staff portal PM defaults here; GAS + Sheets remain legacy where not cut over.
  */
 const express = require("express");
 const {
@@ -275,8 +275,26 @@ app.post("/webhooks/portal", async (req, res) => {
   if (!verifyPortalRequest(req)) {
     return res.status(401).json({ ok: false, error: "unauthorized" });
   }
+  const body = req.body || {};
+  const action = String(body.action || "staff_command").trim().toLowerCase();
+  emit({
+    level: "info",
+    trace_id: req.traceId,
+    trace_start_ms: req.traceStartMs,
+    log_kind: "portal_webhook",
+    event: "portal_request_received",
+    data: {
+      action,
+      has_ticket_hint: !!(
+        body.ticketId ||
+        body.ticket_id ||
+        body.humanTicketId ||
+        (body.ticket && typeof body.ticket === "object")
+      ),
+    },
+  });
   try {
-    const routerParameter = buildRouterParameterFromPortal(req.body || {});
+    const routerParameter = buildRouterParameterFromPortal(body);
     const result = await runInboundPipeline({
       traceId: req.traceId,
       traceStartMs: req.traceStartMs,
@@ -285,7 +303,24 @@ app.post("/webhooks/portal", async (req, res) => {
       telegramSignal: null,
       logKind: "portal_webhook",
     });
-    return res.status(200).json(result.json);
+    const logicalOk = result.json && result.json.ok !== false;
+    emit({
+      level: logicalOk ? "info" : "warn",
+      trace_id: req.traceId,
+      trace_start_ms: req.traceStartMs,
+      log_kind: "portal_webhook",
+      event: logicalOk ? "portal_request_complete" : "portal_request_failed",
+      data: {
+        action,
+        ok: logicalOk,
+        brain: result.json ? result.json.brain : null,
+        staff_error:
+          result.json && result.json.staff && result.json.staff.resolution
+            ? result.json.staff.resolution.error || null
+            : null,
+      },
+    });
+    return res.status(logicalOk ? 200 : 422).json(result.json);
   } catch (err) {
     emit({
       level: "error",
