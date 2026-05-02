@@ -3,7 +3,7 @@
  * Draft progression: ISSUE → PROPERTY → UNIT → FINALIZE_DRAFT (GAS `recomputeDraftExpected_` order).
  *
  * PARITY: Post-finalize **schedule ask** = flow parity for tenant (prompt + session + `pending_expected`).
- * **`#` staff capture:** no schedule template after create; same-message `compileTurn` `scheduleRaw` + `Preferred:` are parsed and applied when present.
+ * **`#` staff capture:** never tenant schedule prompts (`SCHEDULE_PRETICKET`); same-message `compileTurn` `scheduleRaw` + `Preferred:` are parsed and applied when present (`staffCaptureNoScheduleAsk` in recompute).
  * Schedule **parsing / policy / scheduled_end_at** = NOT full GAS semantic parity — see docs/PARITY_LEDGER.md §3.
  */
 const { getSupabase } = require("../../db/supabase");
@@ -32,6 +32,7 @@ const {
   clearAttachClarifyLatch,
 } = require("../../dal/conversationCtxAttach");
 const { parseAttachClarifyReply } = require("../gas/parseAttachClarifyReply");
+const { normalizeIssueForCompare } = require("../gas/issueParseDeterministic");
 const { setWorkItemSubstate } = require("../../dal/workItemSubstate");
 const {
   parseMaintenanceDraftAsync,
@@ -569,6 +570,7 @@ async function handleInboundCore(o) {
         isEmergencyContinuation: false,
         openerNext:
           fastRestart && fastRestart.openerNext ? fastRestart.openerNext : "",
+        staffCaptureNoScheduleAsk: isStaffCapture,
       });
       const nextNew = recNew.next;
       const pendingExpiresNew = computePendingExpiresAtIso(nextNew);
@@ -1070,6 +1072,7 @@ async function handleInboundCore(o) {
       skipScheduling: false,
       isEmergencyContinuation: false,
       openerNext: fastDraft && fastDraft.openerNext ? fastDraft.openerNext : "",
+      staffCaptureNoScheduleAsk: isStaffCapture,
     });
     let nextNew = recNew.next;
     const pendingExpiresNew = computePendingExpiresAtIso(nextNew);
@@ -1123,9 +1126,13 @@ async function handleInboundCore(o) {
       !commonAreaDraft && fastDraft && fastDraft.openerNext
         ? fastDraft.openerNext
         : "",
+    staffCaptureNoScheduleAsk: isStaffCapture,
   });
 
   let next = rec.next;
+  if (isStaffCapture && next === "SCHEDULE_PRETICKET") {
+    next = "FINALIZE_DRAFT";
+  }
   const currentStage = String(
     session && session.expected != null ? session.expected : session && session.stage != null ? session.stage : ""
   )

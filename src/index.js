@@ -116,106 +116,125 @@ app.post("/webhooks/telegram", async (req, res) => {
     return res.status(200).json({ ok: true, deduped: true });
   }
 
-  const signal = normalizeTelegramUpdate(payload);
-  if (!signal) {
-    return res.status(200).json({ ok: true, ignored: true });
-  }
-  if (signal.body && Array.isArray(signal.body.media) && signal.body.media.length > 0) {
-    signal.body.media = await enrichTelegramMediaWithOcr(signal.body.media);
-  }
-
-  let routerParameter;
   try {
-    routerParameter = buildRouterParameterFromTelegram(signal, payload);
+    const signal = normalizeTelegramUpdate(payload);
+    if (!signal) {
+      return res.status(200).json({ ok: true, ignored: true });
+    }
+    if (signal.body && Array.isArray(signal.body.media) && signal.body.media.length > 0) {
+      signal.body.media = await enrichTelegramMediaWithOcr(signal.body.media);
+    }
+
+    let routerParameter;
+    try {
+      routerParameter = buildRouterParameterFromTelegram(signal, payload);
+    } catch (err) {
+      emit({
+        level: "error",
+        trace_id: traceId,
+        trace_start_ms: req.traceStartMs,
+        log_kind: "router_contract",
+        event: "build_parameter_failed",
+        data: {
+          error: String(err && err.message ? err.message : err),
+          crumb: "router_parameter_build_failed",
+        },
+      });
+      return res.status(200).json({ ok: true, error: "router_parameter_build_failed" });
+    }
+
+    const inboundCtx = buildTelegramInboundCtx(signal, routerParameter);
+
+    await runWithInboundLogCtx(inboundCtx, async () => {
+      emit({
+        level: "info",
+        trace_id: traceId,
+        trace_start_ms: req.traceStartMs,
+        log_kind: "telegram_webhook",
+        event: "INBOUND_THREAD_START",
+        data: {
+          crumb: "inbound_thread_start",
+          thread_start: true,
+          trace_id: traceId,
+          actor_key: inboundCtx.actor_key,
+          chat_id: inboundCtx.chat_id,
+          update_id: inboundCtx.update_id,
+        },
+      });
+
+      emit({
+        level: "info",
+        trace_id: traceId,
+        trace_start_ms: req.traceStartMs,
+        log_kind: "telegram_adapter",
+        event: "normalized",
+        data: {
+          channel: signal.channel,
+          update_id: signal.transport && signal.transport.update_id,
+          chat_id: signal.transport && signal.transport.chat_id,
+          text_len: signal.body && signal.body.text ? String(signal.body.text).length : 0,
+          crumb: "signal_normalized",
+        },
+      });
+
+      const result = await runInboundPipeline({
+        traceId,
+        traceStartMs: req.traceStartMs,
+        routerParameter,
+        transportChannel: "telegram",
+        telegramSignal: signal,
+        logKind: "telegram_webhook",
+      });
+
+      const replyForPreview =
+        (result.staffRun && result.staffRun.replyText) ||
+        (result.complianceRun && result.complianceRun.replyText) ||
+        (result.coreRun && result.coreRun.replyText) ||
+        "";
+
+      emit({
+        level: "info",
+        trace_id: traceId,
+        trace_start_ms: req.traceStartMs,
+        log_kind: "telegram_webhook",
+        event: "request_complete",
+        data: {
+          crumb: "webhook_request_complete",
+          thread_end: true,
+          trace_id: traceId,
+          actor_key: inboundCtx.actor_key,
+          chat_id: inboundCtx.chat_id,
+          update_id: inboundCtx.update_id,
+          brain: result.brain,
+          lane: result.laneDecision.lane,
+          lane_mode: result.laneDecision.mode,
+          total_ms: Date.now() - req.traceStartMs,
+          inbound_preview: inboundCtx.inbound_text_preview,
+          reply_preview: replyForPreview ? previewText(replyForPreview, 120) : "",
+          outbound_sent: !!(result.outbound && result.outbound.ok),
+        },
+      });
+
+      res.status(200).json(result.json);
+    });
   } catch (err) {
+    const message = err && err.message ? String(err.message) : String(err);
     emit({
       level: "error",
       trace_id: traceId,
       trace_start_ms: req.traceStartMs,
-      log_kind: "router_contract",
-      event: "build_parameter_failed",
-      data: {
-        error: String(err && err.message ? err.message : err),
-        crumb: "router_parameter_build_failed",
-      },
+      log_kind: "telegram_webhook",
+      event: "unhandled_exception",
+      data: { error: message, crumb: "telegram_webhook_unhandled" },
     });
-    return res.status(200).json({ ok: true, error: "router_parameter_build_failed" });
+    if (!res.headersSent) {
+      res.status(500).json({
+        ok: false,
+        error: "telegram_webhook_failed",
+        message,
+      });
+    }
   }
-
-  const inboundCtx = buildTelegramInboundCtx(signal, routerParameter);
-
-  return runWithInboundLogCtx(inboundCtx, async () => {
-    emit({
-      level: "info",
-      trace_id: traceId,
-      trace_start_ms: req.traceStartMs,
-      log_kind: "telegram_webhook",
-      event: "INBOUND_THREAD_START",
-      data: {
-        crumb: "inbound_thread_start",
-        thread_start: true,
-        trace_id: traceId,
-        actor_key: inboundCtx.actor_key,
-        chat_id: inboundCtx.chat_id,
-        update_id: inboundCtx.update_id,
-      },
-    });
-
-    emit({
-      level: "info",
-      trace_id: traceId,
-      trace_start_ms: req.traceStartMs,
-      log_kind: "telegram_adapter",
-      event: "normalized",
-      data: {
-        channel: signal.channel,
-        update_id: signal.transport && signal.transport.update_id,
-        chat_id: signal.transport && signal.transport.chat_id,
-        text_len: signal.body && signal.body.text ? String(signal.body.text).length : 0,
-        crumb: "signal_normalized",
-      },
-    });
-
-    const result = await runInboundPipeline({
-      traceId,
-      traceStartMs: req.traceStartMs,
-      routerParameter,
-      transportChannel: "telegram",
-      telegramSignal: signal,
-      logKind: "telegram_webhook",
-    });
-
-    const replyForPreview =
-      (result.staffRun && result.staffRun.replyText) ||
-      (result.complianceRun && result.complianceRun.replyText) ||
-      (result.coreRun && result.coreRun.replyText) ||
-      "";
-
-    emit({
-      level: "info",
-      trace_id: traceId,
-      trace_start_ms: req.traceStartMs,
-      log_kind: "telegram_webhook",
-      event: "request_complete",
-      data: {
-        crumb: "webhook_request_complete",
-        thread_end: true,
-        trace_id: traceId,
-        actor_key: inboundCtx.actor_key,
-        chat_id: inboundCtx.chat_id,
-        update_id: inboundCtx.update_id,
-        brain: result.brain,
-        lane: result.laneDecision.lane,
-        lane_mode: result.laneDecision.mode,
-        total_ms: Date.now() - req.traceStartMs,
-        inbound_preview: inboundCtx.inbound_text_preview,
-        reply_preview: replyForPreview ? previewText(replyForPreview, 120) : "",
-        outbound_sent: !!(result.outbound && result.outbound.ok),
-      },
-    });
-
-    return res.status(200).json(result.json);
-  });
 });
 
 /**

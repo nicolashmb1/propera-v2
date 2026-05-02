@@ -1,6 +1,6 @@
 const { test, describe } = require("node:test");
 const assert = require("node:assert/strict");
-const { buildIssueTicketGroups } = require("../src/brain/core/splitIssueGroups");
+const { buildIssueTicketGroups } = require("../src/brain/core/finalizeTicketGroups");
 
 describe("multi-issue split grouping", () => {
   test("distinct systems split into two groups", () => {

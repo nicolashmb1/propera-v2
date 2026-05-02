@@ -123,7 +123,7 @@ async function createProgramRun(o) {
 
   const { data: propRow } = await sb
     .from("properties")
-    .select("code")
+    .select("code, program_expansion_profile")
     .eq("code", propertyCode)
     .maybeSingle();
   if (!propRow) return { ok: false, error: "unknown_property" };
@@ -133,7 +133,9 @@ async function createProgramRun(o) {
       ? await loadActiveUnitRows(propertyCode)
       : [];
 
-  const lineSpecs = expandProgramLines(template, unitRows);
+  const lineSpecs = expandProgramLines(template, unitRows, {
+    expansionProfile: propRow.program_expansion_profile,
+  });
   const displayName = await getPropertyDisplayName(propertyCode);
   const title = `${displayName} — ${template.label}`;
 

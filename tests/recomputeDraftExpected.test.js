@@ -56,6 +56,19 @@ test("all three pre-ticket + openerNext=SCHEDULE → SCHEDULE_PRETICKET", () => 
   assert.equal(next, "SCHEDULE_PRETICKET");
 });
 
+test("staff `#` capture: openerNext=SCHEDULE ignored → FINALIZE_DRAFT (no schedule prompt)", () => {
+  const { next } = recomputeDraftExpected({
+    hasIssue: true,
+    hasProperty: true,
+    hasUnit: true,
+    hasSchedule: false,
+    pendingTicketRow: 0,
+    openerNext: "SCHEDULE",
+    staffCaptureNoScheduleAsk: true,
+  });
+  assert.equal(next, "FINALIZE_DRAFT");
+});
+
 test("pre-ticket with schedule already filled does not stay SCHEDULE_PRETICKET", () => {
   const { next } = recomputeDraftExpected({
     hasIssue: true,

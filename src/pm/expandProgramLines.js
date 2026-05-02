@@ -30,13 +30,34 @@ function sortUnitRows(unitRows) {
 }
 
 /**
+ * Normalize `properties.program_expansion_profile` (jsonb) for expansion helpers.
+ * @param {unknown} raw
+ * @returns {Record<string, unknown>}
+ */
+function normalizeExpansionProfile(raw) {
+  if (raw == null) return {};
+  if (typeof raw === "string") {
+    try {
+      const o = JSON.parse(raw);
+      return o && typeof o === "object" && !Array.isArray(o) ? o : {};
+    } catch {
+      return {};
+    }
+  }
+  if (typeof raw === "object" && !Array.isArray(raw)) return /** @type {Record<string, unknown>} */ (raw);
+  return {};
+}
+
+/**
  * @param {object} template — row from program_templates
  * @param {{ unit_label?: string }[]} unitRows — from tenant_roster for property (active only)
+ * @param {{ expansionProfile?: unknown }} [options] — `properties.program_expansion_profile` (per-property overrides)
  * @returns {{ scope_type: string, scope_label: string, sort_order: number }[]}
  */
-function expandProgramLines(template, unitRows) {
+function expandProgramLines(template, unitRows, options) {
   const expansionType = String(template?.expansion_type || "").trim();
   const defaults = template?.default_scope_labels;
+  const profile = normalizeExpansionProfile(options && options.expansionProfile);
 
   if (expansionType === "UNIT_PLUS_COMMON") {
     const sorted = sortUnitRows(unitRows);
@@ -59,7 +80,11 @@ function expandProgramLines(template, unitRows) {
 
   if (expansionType === "FLOOR_BASED") {
     let labels = [];
-    if (Array.isArray(defaults)) {
+    const fromProfile = profile.floor_paint_scopes;
+    if (Array.isArray(fromProfile) && fromProfile.length) {
+      labels = fromProfile.map((x) => String(x).trim()).filter(Boolean);
+    }
+    if (!labels.length && Array.isArray(defaults)) {
       labels = defaults.map((x) => String(x));
     }
     if (!labels.length) {
@@ -74,13 +99,18 @@ function expandProgramLines(template, unitRows) {
 
   if (expansionType === "COMMON_AREA_ONLY") {
     let labels = [];
-    if (Array.isArray(defaults) && defaults.length) {
+    const fromProfile = profile.common_paint_scopes;
+    if (Array.isArray(fromProfile) && fromProfile.length) {
+      labels = fromProfile.map((x) => String(x).trim()).filter(Boolean);
+    }
+    if (!labels.length && Array.isArray(defaults) && defaults.length) {
       labels = defaults.map((x) => String(x));
-    } else {
+    }
+    if (!labels.length) {
       labels = ["Common Area"];
     }
     return labels.map((scope_label, i) => ({
-      scope_type: "SITE",
+      scope_type: "COMMON_AREA",
       scope_label,
       sort_order: i,
     }));
@@ -97,4 +127,5 @@ module.exports = {
   expandProgramLines,
   formatUnitScopeLabel,
   sortUnitRows,
+  normalizeExpansionProfile,
 };

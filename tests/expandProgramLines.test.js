@@ -56,6 +56,32 @@ test("FLOOR_BASED falls back when defaults empty", () => {
   assert.ok(lines.some((l) => /1st Floor/i.test(l.scope_label)));
 });
 
+test("FLOOR_BASED uses properties.program_expansion_profile.floor_paint_scopes when set", () => {
+  const template = {
+    expansion_type: "FLOOR_BASED",
+    default_scope_labels: ["Template", "Default"],
+  };
+  const lines = expandProgramLines(template, [], {
+    expansionProfile: { floor_paint_scopes: ["Lobby", "Roof"] },
+  });
+  assert.deepEqual(
+    lines.map((l) => l.scope_label),
+    ["Lobby", "Roof"]
+  );
+});
+
+test("COMMON_AREA_ONLY uses common_paint_scopes when set", () => {
+  const template = { expansion_type: "COMMON_AREA_ONLY", default_scope_labels: null };
+  const lines = expandProgramLines(template, [], {
+    expansionProfile: { common_paint_scopes: ["East stair", "Lobby"] },
+  });
+  assert.deepEqual(
+    lines.map((l) => l.scope_label),
+    ["East stair", "Lobby"]
+  );
+  assert.ok(lines.every((l) => l.scope_type === "COMMON_AREA"));
+});
+
 test("CUSTOM_MANUAL yields no lines", () => {
   const lines = expandProgramLines(
     { expansion_type: "CUSTOM_MANUAL" },

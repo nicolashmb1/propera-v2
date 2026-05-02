@@ -32,6 +32,7 @@ Do these in your **web browser** at [supabase.com](https://supabase.com):
    - Optional: **`007_category_final_legacy.sql`** (comment only).  
    - For roster + PropertyPolicy seed + same property columns as 008: **`004_roster_and_policy_seed.sql`** (run after `003`; if you use `004`, `008` is still safe to run afterward).  
    - **Staff `#capture` tenant lookup (GAS Tenants sheet parity):** **`012_tenant_roster.sql`** — then seed rows (`property_code`, `unit_label`, `phone_e164`, `resident_name`, `active`). Without this table, staff-created tickets still save **empty** tenant phone (safe; no crash).
+   - **Portal Supabase signup (propera-app):** **`021_portal_auth_allowlist.sql`** after **`003_identity.sql`** (FK to `staff.staff_id`). Then insert allowlist rows in SQL Editor (`email_lower`, `portal_role`, optional `staff_id`). **`propera-app`** register checks this table before `auth.admin.createUser`.
 
 6. Restart `propera-v2` (`npm start`) and open `http://localhost:8080/health`.  
    You want `"db": { "configured": true, "ok": true }`.

@@ -88,7 +88,7 @@ Checklist / progress rows.
 |----------------|----------|-----------------|
 | `UNIT_PLUS_COMMON` | HVAC, water heater, filters, smoke detectors | Active units from roster + common area line |
 | `FLOOR_BASED` | Painting, hallway cleaning, floor inspections | Floors from property metadata **or** defaults until metadata exists |
-| `COMMON_AREA_ONLY` | Lobby repair, exterior lights, boiler room | Common / site-scoped lines only |
+| `COMMON_AREA_ONLY` | Lobby repair, exterior lights, boiler room | Common-area lines only (`scope_type` **`COMMON_AREA`**) |
 | `CUSTOM_MANUAL` | One-offs | Minimal or empty initial lines; staff add lines later (later phase) |
 
 **Pattern:** `template_key` → `expansion_type` → **deterministic line generator** (no per-service hardcoding in core logic).
@@ -151,7 +151,7 @@ propera-app **does not** write DB directly. It calls V2; V2 validates, persists,
 
 Auth: same portal token pattern as existing portal routes (`X-Propera-Portal-Token` / `PROPERA_PORTAL_TOKEN`).
 
-**Migration:** `supabase/migrations/018_program_engine_v1.sql`
+**Migrations:** `supabase/migrations/018_program_engine_v1.sql` (program tables), **`019_properties_program_expansion_profile.sql`** (`properties.program_expansion_profile` — optional per-property `floor_paint_scopes` / `common_paint_scopes` arrays for line expansion).
 
 ---
 

@@ -8,6 +8,7 @@
  */
 
 const { localCategoryFromText } = require("../../dal/ticketDefaults");
+const { parseIssueDeterministic } = require("../gas/issueParseDeterministic");
 const {
   canonicalInboundLooksScheduleOnly,
 } = require("./intakeAttachClassify");
@@ -236,6 +237,52 @@ function groupIssueAtomsIntoTicketGroups(issueAtoms) {
   return groups;
 }
 
+/**
+ * Roll AC subsystem clauses (filter/drain/etc.) to fixtureKey `ac` so same-system
+ * sub-issues stay one ticket (see tests/splitIssueGroups.test.js).
+ */
+function normalizeAtomAcSubsystemRollup(atom) {
+  if (!atom) return atom;
+  const t = String(atom.rawText || atom.normalizedTitle || "").toLowerCase();
+  if (!/\bac\b|\ba\/c\b|air conditioner/.test(t)) return atom;
+  if (!/\b(filter|drain|clog|condenser|coil|freon|coolant)\b/.test(t)) return atom;
+  // Group key uses category|fixtureKey|faultFamilyKey — align all AC subsystem clauses.
+  return {
+    ...atom,
+    fixtureKey: "ac",
+    category: "HVAC",
+    faultFamilyKey: "HVAC",
+  };
+}
+
+/**
+ * Deterministic multi-issue grouping for free text (parse clauses → atoms → GAS-style groups).
+ * Used by regression tests; same atoms path as finalize reconciliation helpers.
+ */
+function buildIssueTicketGroups(freeText) {
+  const raw = String(freeText || "").trim();
+  if (!raw) return [];
+  const parsed = parseIssueDeterministic(raw);
+  const clauses = Array.isArray(parsed.clauses) ? parsed.clauses : [];
+  const atoms = [];
+  for (let i = 0; i < clauses.length; i++) {
+    const c = clauses[i];
+    const t = String(c && c.text ? c.text : "").trim();
+    if (!t) continue;
+    const atom = issueAtomFromProblemText(t, "build_issue_groups");
+    if (atom) atoms.push(atom);
+  }
+  let merged = atoms.length
+    ? atoms.map(normalizeAtomAcSubsystemRollup)
+    : [];
+  if (!merged.length) {
+    const atom = issueAtomFromProblemText(raw, "build_issue_fallback");
+    if (atom) merged.push(normalizeAtomAcSubsystemRollup(atom));
+  }
+  merged = dedupeIssueAtomsByDedupeKey(merged);
+  return groupIssueAtomsIntoTicketGroups(merged);
+}
+
 function expandAtomsPipeSplit(atoms) {
   const expanded = [];
   for (const a of atoms || []) {
@@ -438,4 +485,5 @@ module.exports = {
   pickStructuredIssuesForFinalizeAtoms,
   rawFromStructuredIssue,
   structuredIssueHasProblemSignal,
+  buildIssueTicketGroups,
 };

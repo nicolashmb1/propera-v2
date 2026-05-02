@@ -2,7 +2,8 @@
  * Shared heuristics for merge path (e.g. UNIT slot — suppress LLM fluff).
  *
  * **Finalize ticket boundaries** — GAS `reconcileTicketGroupsForFinalize_` — live in
- * `finalizeTicketGroups.js` (issue atoms + grouping), **not** punctuation/`and` splitting.
+ * `finalizeTicketGroups.js` (issue atoms + grouping + **`buildIssueTicketGroups`**),
+ * **not** punctuation/`and` splitting.
  */
 
 const { localCategoryFromText } = require("../../dal/ticketDefaults");

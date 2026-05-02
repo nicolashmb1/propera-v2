@@ -14,6 +14,7 @@
  * @param {boolean} [s.skipScheduling] — ctx / emergency: skip schedule stage
  * @param {boolean} [s.isEmergencyContinuation]
  * @param {string} [s.openerNext] — compile opener hint (`SCHEDULE` => ask pre-ticket schedule)
+ * @param {boolean} [s.staffCaptureNoScheduleAsk] — `#` staff capture: never SCHEDULE_PRETICKET; finalize without prompting schedule
  */
 
 /**
@@ -35,7 +36,10 @@ function recomputeDraftExpected(s) {
   const pendingRow = Number(s.pendingTicketRow || 0);
   const skipScheduling = !!s.skipScheduling;
   const emerg = !!s.isEmergencyContinuation;
+  const staffCapNoSched = !!s.staffCaptureNoScheduleAsk;
   const openerNext = String(s.openerNext || "").trim().toUpperCase();
+  /** Staff `#` capture must not enter tenant-style schedule asks; only parse `Preferred:` / compile schedule when present. */
+  const openerForPreTicket = staffCapNoSched ? "" : openerNext;
 
   let next = "";
   if (!hasIssue) next = "ISSUE";
@@ -44,7 +48,7 @@ function recomputeDraftExpected(s) {
   else if (pendingRow > 0 && !hasSchedule) {
     next = "SCHEDULE";
   } else if (pendingRow <= 0) {
-    next = !hasSchedule && openerNext === "SCHEDULE"
+    next = !hasSchedule && openerForPreTicket === "SCHEDULE"
       ? "SCHEDULE_PRETICKET"
       : "FINALIZE_DRAFT";
   } else {

@@ -29,6 +29,12 @@ function normalizeIssueText_(s) {
   return t;
 }
 
+/** Dedupe key for issue lines (e.g. merge base + buffer before finalize). */
+function normalizeIssueForCompare(s) {
+  const t = normalizeIssueText_(s);
+  return String(t || "").toLowerCase().trim();
+}
+
 function isResolvedOrDismissedClause_(c) {
   const t = String(c || "").toLowerCase();
   return /\b(fixed\s+itself|no\s+worries|all\s+good|resolved|not\s+an\s+issue|no\s+longer|went\s+away|never\s*mind|nevermind|ignore\s+that|disregard|nothing\s+to\s+worry)\b/.test(
@@ -456,7 +462,7 @@ function issueMaybeSplitProblemClause_(text) {
   if (!t) return [];
   if (!/\band\b/i.test(t)) return [t];
   const nounAlt =
-    "sink|toilet|shower|tub|faucet|drain|pipe|stove|oven|range|burner|washer|dryer|fridge|refrigerator|freezer|dishwasher|microwave|light|hallway|corridor|intercom|door|lock|window|thermostat|ac|a\\/c|heater|outlet|breaker";
+    "sink|toilet|shower|tub|faucet|drain|pipe|stove|oven|range|burner|washer|dryer|fridge|refrigerator|freezer|dishwasher|microwave|light|hallway|corridor|intercom|door|lock|window|thermostat|ac|a\\/c|heater|outlet|breaker|ice\\s*maker|icemaker";
   try {
     const rxSplit = new RegExp(
       "\\s+and\\s+(?=(?:the\\s+)?(?:" + nounAlt + ")\\b)",
@@ -611,6 +617,7 @@ function parseIssueDeterministic(rawText, opts) {
 
 module.exports = {
   parseIssueDeterministic,
+  normalizeIssueForCompare,
   /** @internal tests / tools */
   _issueParseTestExports: {
     issueClassifyClauseType_,

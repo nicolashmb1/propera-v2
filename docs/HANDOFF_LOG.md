@@ -7,6 +7,52 @@
 
 ---
 
+## 2026-05-02 — `portal_auth_allowlist` migration (021)
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`021_portal_auth_allowlist.sql`** | Pre-approved emails, `portal_role`, optional `staff_id` → `staff(staff_id)`, RLS enabled (service role used by app) |
+
+### Ops
+
+Run after **`003_identity.sql`**. Seed rows for each allowed signup email. **`propera-app`** register/login unchanged — already targeted this table.
+
+---
+
+## 2026-05-02 — `program_lines` scope_type: drop SITE (020)
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`020_program_lines_scope_type_common_area_only.sql`** | `SITE` → `COMMON_AREA`; check constraint `UNIT` / `COMMON_AREA` / `FLOOR` only |
+| **`expandProgramLines.js`** | `COMMON_AREA_ONLY` emits `scope_type: COMMON_AREA` (not `SITE`) |
+
+### Ops
+
+Apply **`020_program_lines_scope_type_common_area_only.sql`** after **018** on any DB that still allows `SITE`.
+
+---
+
+## 2026-05-02 — `properties.program_expansion_profile` + migration 019
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`019_properties_program_expansion_profile.sql`** | `properties.program_expansion_profile` jsonb default `{}` + comment |
+| **`expandProgramLines.js`** | Optional third arg: `floor_paint_scopes` / `common_paint_scopes` override template defaults for `FLOOR_BASED` / `COMMON_AREA_ONLY` |
+| **`programRuns.js`** | Loads profile on create; passes into `expandProgramLines` |
+| **Docs / tests** | **`PM_PROGRAM_ENGINE_V1.md`**, **`supabase/migrations/README.md`**; **`expandProgramLines.test.js`** |
+
+### Ops
+
+Apply **`019_properties_program_expansion_profile.sql`** in Supabase if the column is missing (recovery DBs that only had 018).
+
+---
+
 ## 2026-04-29 — PM / Tasks V1 spec + backend slice
 
 ### Done
