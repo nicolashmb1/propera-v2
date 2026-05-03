@@ -3,6 +3,7 @@
  */
 const { getSupabase } = require("../db/supabase");
 const { mapTicketRowToRemoteShape } = require("../portal/mapTicketRowToRemoteShape");
+const { programExpansionProfileForApi } = require("./portalPropertyProgramProfile");
 
 const CLOSED = new Set([
   "completed",
@@ -124,7 +125,7 @@ async function listPropertiesForPortal() {
 
   const { data: props, error: pErr } = await sb
     .from("properties")
-    .select("code, display_name, short_name, ticket_prefix, address")
+    .select("code, display_name, short_name, ticket_prefix, address, program_expansion_profile")
     .eq("active", true);
 
   if (pErr || !props || !props.length) return [];
@@ -154,6 +155,7 @@ async function listPropertiesForPortal() {
         avgResolution: "—",
         lastActivity: "—",
         address: String(p.address || "").trim(),
+        programExpansionProfile: programExpansionProfileForApi(p.program_expansion_profile),
       };
     });
   }
@@ -184,6 +186,7 @@ async function listPropertiesForPortal() {
       avgResolution: "—",
       lastActivity: "—",
       address: String(p.address || "").trim(),
+      programExpansionProfile: programExpansionProfileForApi(p.program_expansion_profile),
     };
   });
 }

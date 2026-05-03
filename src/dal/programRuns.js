@@ -226,6 +226,100 @@ async function createProgramRun(o) {
 }
 
 /**
+ * Dry-run line expansion for PM/Task V1 (no DB writes).
+ * @param {object} o
+ * @param {string} [o.property]
+ * @param {string} [o.propertyCode]
+ * @param {string} o.templateKey
+ * @returns {Promise<{ ok: boolean; lines?: object[]; expansion_type?: string; template_key?: string; property_code?: string; error?: string }>}
+ */
+/**
+ * @param {string} runId
+ * @param {object} [o]
+ * @param {string} [o.traceId]
+ * @returns {Promise<{ ok: boolean; error?: string }>}
+ */
+async function deleteProgramRun(runId, o) {
+  const sb = getSupabase();
+  if (!sb) return { ok: false, error: "no_db" };
+
+  const id = String(runId || "").trim();
+  if (!id) return { ok: false, error: "missing_run_id" };
+
+  const { data: existing, error: fetchErr } = await sb
+    .from("program_runs")
+    .select("id, property_code, template_key, title")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (fetchErr) return { ok: false, error: fetchErr.message || "fetch_failed" };
+  if (!existing) return { ok: false, error: "not_found" };
+
+  const { error: delErr } = await sb.from("program_runs").delete().eq("id", id);
+  if (delErr) return { ok: false, error: delErr.message || "delete_failed" };
+
+  await appendEventLog({
+    traceId: String(o?.traceId || ""),
+    log_kind: "portal",
+    event: "PROGRAM_RUN_DELETED",
+    payload: {
+      program_run_id: id,
+      property_code: String(existing.property_code || ""),
+      template_key: String(existing.template_key || ""),
+      title: String(existing.title || ""),
+    },
+  });
+
+  return { ok: true };
+}
+
+async function previewProgramRunExpansion(o) {
+  const sb = getSupabase();
+  if (!sb) return { ok: false, error: "no_db" };
+
+  const templateKey = String(o.templateKey || "")
+    .trim()
+    .toUpperCase();
+  if (!templateKey) return { ok: false, error: "missing_template_key" };
+
+  const template = await getTemplate(templateKey);
+  if (!template) return { ok: false, error: "unknown_template" };
+
+  let propertyCode = String(o.propertyCode || "").trim().toUpperCase();
+  if (!propertyCode) {
+    propertyCode = await resolvePropertyCodeFromLabel(
+      sb,
+      String(o.property || "").trim()
+    );
+  }
+  if (!propertyCode) return { ok: false, error: "unknown_property" };
+
+  const { data: propRow } = await sb
+    .from("properties")
+    .select("code, program_expansion_profile")
+    .eq("code", propertyCode)
+    .maybeSingle();
+  if (!propRow) return { ok: false, error: "unknown_property" };
+
+  const unitRows =
+    String(template.expansion_type) === "UNIT_PLUS_COMMON"
+      ? await loadActiveUnitRows(propertyCode)
+      : [];
+
+  const lineSpecs = expandProgramLines(template, unitRows, {
+    expansionProfile: propRow.program_expansion_profile,
+  });
+
+  return {
+    ok: true,
+    lines: lineSpecs,
+    expansion_type: String(template.expansion_type || ""),
+    template_key: templateKey,
+    property_code: propertyCode,
+  };
+}
+
+/**
  * @returns {Promise<object[]>}
  */
 async function listProgramRuns() {
@@ -453,6 +547,8 @@ async function reopenProgramLine(lineId, o) {
 
 module.exports = {
   createProgramRun,
+  previewProgramRunExpansion,
+  deleteProgramRun,
   listProgramRuns,
   getProgramRunById,
   completeProgramLine,

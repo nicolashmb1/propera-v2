@@ -10,11 +10,14 @@ const {
 } = require("../dal/portalTenants");
 const {
   createProgramRun,
+  previewProgramRunExpansion,
+  deleteProgramRun,
   listProgramRuns,
   getProgramRunById,
   completeProgramLine,
   reopenProgramLine,
 } = require("../dal/programRuns");
+const { patchPropertyProgramExpansionProfile } = require("../dal/portalPropertyProgramProfile");
 const { getSupabase } = require("../db/supabase");
 const { verifyPortalRequest } = require("./portalAuth");
 
@@ -73,8 +76,90 @@ function registerPortalReadRoutes(app) {
     return res.status(400).json({ ok: false, error: "unknown_path" });
   }));
 
+  /**
+   * Same portal token as GET gas-compat — POST body carries payload.
+   * Used when clients only bookmark …/gas-compat (Proxies may not route extra /api/portal/* paths).
+   */
+  app.post("/api/portal/gas-compat", gate(async (req, res) => {
+    const path = String(req.query.path || "").trim().toLowerCase();
+    if (path === "program-runs-preview") {
+      try {
+        const body = req.body || {};
+        const out = await previewProgramRunExpansion({
+          property: body.property,
+          propertyCode: body.propertyCode,
+          templateKey: body.templateKey,
+        });
+        if (!out.ok) {
+          return res.status(400).json({ ok: false, error: out.error || "preview_failed" });
+        }
+        return res.status(200).json({
+          ok: true,
+          lines: out.lines,
+          expansion_type: out.expansion_type,
+          template_key: out.template_key,
+          property_code: out.property_code,
+        });
+      } catch (err) {
+        return res.status(500).json({
+          ok: false,
+          error: String(err && err.message ? err.message : err),
+        });
+      }
+    }
+    if (path === "program-runs-delete") {
+      try {
+        const body = req.body || {};
+        const id = String(body.id || body.runId || "").trim();
+        const out = await deleteProgramRun(id, { traceId: req.traceId });
+        if (!out.ok) {
+          const code = out.error === "not_found" ? 404 : 400;
+          return res.status(code).json({ ok: false, error: out.error || "delete_failed" });
+        }
+        return res.status(200).json({ ok: true });
+      } catch (err) {
+        return res.status(500).json({
+          ok: false,
+          error: String(err && err.message ? err.message : err),
+        });
+      }
+    }
+    return res.status(400).json({ ok: false, error: "unknown_post_path" });
+  }));
+
   app.get("/api/portal/tickets", gate(sendTickets));
   app.get("/api/portal/properties", gate(sendProperties));
+
+  app.patch(
+    "/api/portal/properties/:code/program-expansion-profile",
+    gate(async (req, res) => {
+      try {
+        const code = String(req.params.code || "").trim();
+        const out = await patchPropertyProgramExpansionProfile(
+          code,
+          req.body || {},
+          req.traceId
+        );
+        if (!out.ok) {
+          const status =
+            out.error === "unknown_property" || out.error === "invalid_property_code"
+              ? 404
+              : 400;
+          return res.status(status).json({ ok: false, error: out.error || "update_failed" });
+        }
+        return res.status(200).json({
+          ok: true,
+          programExpansionProfile: out.programExpansionProfile,
+        });
+      } catch (err) {
+        return res.status(500).json({
+          ok: false,
+          error: String(err && err.message ? err.message : err),
+        });
+      }
+    })
+  );
+
   app.get("/api/portal/tenants", gate(sendTenants));
 
   app.post("/api/portal/tenants", gate(async (req, res) => {
@@ -157,6 +242,39 @@ function registerPortalReadRoutes(app) {
     }
   }));
 
+  app.post(
+    "/api/portal/program-runs/preview",
+    gate(async (req, res) => {
+      try {
+        const body = req.body || {};
+        const out = await previewProgramRunExpansion({
+          property: body.property,
+          propertyCode: body.propertyCode,
+          templateKey: body.templateKey,
+        });
+        if (!out.ok) {
+          const code =
+            out.error === "unknown_property" || out.error === "unknown_template"
+              ? 400
+              : 400;
+          return res.status(code).json({ ok: false, error: out.error || "preview_failed" });
+        }
+        return res.status(200).json({
+          ok: true,
+          lines: out.lines,
+          expansion_type: out.expansion_type,
+          template_key: out.template_key,
+          property_code: out.property_code,
+        });
+      } catch (err) {
+        return res.status(500).json({
+          ok: false,
+          error: String(err && err.message ? err.message : err),
+        });
+      }
+    })
+  );
+
   app.get("/api/portal/program-runs/:id", gate(async (req, res) => {
     try {
       const row = await getProgramRunById(req.params.id);
@@ -164,6 +282,22 @@ function registerPortalReadRoutes(app) {
         return res.status(404).json({ ok: false, error: "not_found" });
       }
       return res.status(200).json(row);
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.delete("/api/portal/program-runs/:id", gate(async (req, res) => {
+    try {
+      const out = await deleteProgramRun(req.params.id, { traceId: req.traceId });
+      if (!out.ok) {
+        const code = out.error === "not_found" ? 404 : 400;
+        return res.status(code).json({ ok: false, error: out.error || "delete_failed" });
+      }
+      return res.status(200).json({ ok: true });
     } catch (err) {
       return res.status(500).json({
         ok: false,
