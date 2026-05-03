@@ -79,22 +79,37 @@ function expandProgramLines(template, unitRows, options) {
   }
 
   if (expansionType === "FLOOR_BASED") {
-    let labels = [];
-    const fromProfile = profile.floor_paint_scopes;
-    if (Array.isArray(fromProfile) && fromProfile.length) {
-      labels = fromProfile.map((x) => String(x).trim()).filter(Boolean);
+    let floorLabels = [];
+    const fromFloors = profile.floor_paint_scopes;
+    if (Array.isArray(fromFloors) && fromFloors.length) {
+      floorLabels = fromFloors.map((x) => String(x).trim()).filter(Boolean);
     }
-    if (!labels.length && Array.isArray(defaults)) {
-      labels = defaults.map((x) => String(x));
+    if (!floorLabels.length && Array.isArray(defaults)) {
+      floorLabels = defaults.map((x) => String(x));
     }
-    if (!labels.length) {
-      labels = ["1st Floor", "2nd Floor", "3rd Floor", "Stairwell"];
+    if (!floorLabels.length) {
+      floorLabels = ["1st Floor", "2nd Floor", "3rd Floor", "Stairwell"];
     }
-    return labels.map((scope_label, i) => ({
+    const floorLines = floorLabels.map((scope_label, i) => ({
       scope_type: "FLOOR",
       scope_label,
       sort_order: i,
     }));
+
+    /** Same keys as property UI — gym, lobby, terrace, etc. */
+    let commonLabels = [];
+    const fromCommon = profile.common_paint_scopes;
+    if (Array.isArray(fromCommon) && fromCommon.length) {
+      commonLabels = fromCommon.map((x) => String(x).trim()).filter(Boolean);
+    }
+    let order = floorLines.length;
+    const commonLines = commonLabels.map((scope_label) => ({
+      scope_type: "COMMON_AREA",
+      scope_label,
+      sort_order: order++,
+    }));
+
+    return [...floorLines, ...commonLines];
   }
 
   if (expansionType === "COMMON_AREA_ONLY") {

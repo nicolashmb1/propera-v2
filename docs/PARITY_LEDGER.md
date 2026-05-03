@@ -22,7 +22,7 @@
 
 **Biggest intentional gaps vs full GAS:** full **`handleInboundRouter_`** graph (vendor/system lanes, complete Twilio parity), full **`handleLifecycleSignal_`** / sheet-style lifecycle, **Outgate template map**, **amenity/leasing/water/vendor** engines, **canonical intake vision/CIG** queue, **Alexa/sensors**.
 
-**PM / Task programs (V2-only, not GAS):** Template-driven **`program_runs`** + **`program_lines`** — building ops checklists (`018_program_engine_v1.sql`, `src/dal/programRuns.js`, `/api/portal/program-*`). Intentionally **separate** from reactive tenant tickets; see **`docs/PM_PROGRAM_ENGINE_V1.md`**.
+**PM / Task programs (V2-only, not GAS):** Template-driven **`program_runs`** + **`program_lines`** — building ops checklists (`018_program_engine_v1.sql`, `src/dal/programRuns.js`, `src/pm/expandProgramLines.js`, `/api/portal/program-*` including **preview** and **delete**). Intentionally **separate** from reactive tenant tickets; see **`docs/PM_PROGRAM_ENGINE_V1.md`**. Per-property **`program_expansion_profile`** (**019**) feeds line expansion; **roadmap** to reuse that building structure for intake, ticket routing, and staff flows is in the same doc (**Strategic reuse** section). **File map:** **`docs/BRAIN_PORT_MAP.md`** (Portal: preventive / program runs).
 
 ### GAS V1 engine file → V2 coverage map
 

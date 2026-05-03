@@ -7,6 +7,25 @@
 
 ---
 
+## 2026-05-02 — Preventive / program runs: preview, scope subset, FLOOR_BASED + commons, app UX
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`expandProgramLines.js`** | **`FLOOR_BASED`** now appends **`common_paint_scopes`** as **`COMMON_AREA`** lines after floor lines (same profile as Properties → building structure). |
+| **`programRuns.js`** | **`createProgramRun`**: optional **`includedScopeLabels`** filters expanded lines by trimmed **`scope_label`**; **`no_matching_scopes`** if empty after filter; **`previewProgramRunExpansion`** dry-run; **`deleteProgramRun`**. |
+| **`registerPortalRoutes.js`** | **`POST .../program-runs/preview`**; create passes **`includedScopeLabels`**; **`DELETE .../program-runs/:id`**. |
+| **Tests** | **`expandProgramLines.test.js`** — floors + commons case. |
+| **propera-app** | **`/preventive`**: preview + **Areas in this run** checkboxes + **`includedScopeLabels`** on create; **`body-row` / `table-pane` / single `page-scroll`** so the page scrolls; property detail **building structure** + PATCH profile; friendly error for **`no_matching_scopes`**. |
+| **Docs** | **`docs/PM_PROGRAM_ENGINE_V1.md`** — status, preview, create body, DELETE, app UI, implementation checklist, **Strategic reuse** (building structure → future tenant/staff/ops flows). **`docs/BRAIN_PORT_MAP.md`** — portal PM table; **`docs/PARITY_LEDGER.md`** snapshot line; **`AGENTS.md`** — stance + “update these docs” row + **Where everything lives**; **`README.md`** — runtime bullet for portal program API. |
+
+### Ops
+
+Restart **propera-v2** after pulling so portal expansion matches app preview.
+
+---
+
 ## 2026-05-02 — WI_CREATED_UNSCHEDULED without default owner (`PING_UNSCHEDULED`)
 
 ### Done

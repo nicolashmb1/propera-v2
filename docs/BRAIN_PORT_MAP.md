@@ -24,6 +24,18 @@
 
 **Keep docs current:** When you change behavior, update **this file**, **[PROPERA_V2_GAS_EXIT_PLAN.md](./PROPERA_V2_GAS_EXIT_PLAN.md)** (todos + narrative), and **[OUTSIDE_CURSOR.md](./OUTSIDE_CURSOR.md)** if operators must run new SQL or env steps. See *Documentation discipline* at the bottom.
 
+### Portal: preventive / program runs (separate from inbound brain)
+
+**Not** part of `runInboundPipeline` / `handleInboundCore`. Owner-portal HTTP on the same Express app:
+
+| Piece | Location |
+|-------|----------|
+| Expansion (pure) | `src/pm/expandProgramLines.js` |
+| DAL (create, list, detail, preview, delete, line PATCH) | `src/dal/programRuns.js` |
+| Routes | `src/portal/registerPortalRoutes.js` — `GET/POST /api/portal/program-templates`, `GET/POST /api/portal/program-runs`, `POST /api/portal/program-runs/preview`, `GET/DELETE /api/portal/program-runs/:id`, `PATCH .../program-lines/:id/complete` & `reopen` |
+
+**Canonical spec + UI contract:** **[PM_PROGRAM_ENGINE_V1.md](./PM_PROGRAM_ENGINE_V1.md)**. **Per-property building data:** `properties.program_expansion_profile` (migration **019**). **Roadmap** (tenant/staff/ops reuse of that structure): same doc, **Strategic reuse — building structure beyond preventive**.
+
 ---
 
 ## PHASE 1 — Current vs target flow
@@ -139,4 +151,5 @@ After meaningful changes to V2 behavior — or when **conversation direction / s
 | **PORTING_FROM_GAS.md** | Which GAS file owns each behavior; **no parallel rewrites** of stage/parse/policy rules. |
 | **ADAPTER_ONBOARDING.md** | New channel implementation checklist (adapter/contract/tests/docs) with channel-agnostic core constraints. |
 | **TESTING_STRATEGY.md** | Scenario / integration tests; **staged implementation** (tests when the corresponding brain slice has a stable boundary). |
-| **README.md** (propera-v2) | New scripts (`npm run dev`), ports, or first-run steps. |
+| **README.md** (propera-v2) | New scripts (`npm run dev`), ports, first-run steps, or **portal surfaces** (e.g. program-run API). |
+| **PM_PROGRAM_ENGINE_V1.md** | Portal **preventive / program runs** behavior, expansion rules, **`program_expansion_profile`**, strategic reuse of building structure. |

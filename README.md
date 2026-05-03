@@ -9,7 +9,7 @@ This folder is the **Propera V2** server (Node + Supabase). **Staff portal and P
 - Edit Node code under `src/`.
 - Run the server locally (see below).
 - Commit `propera-v2/` to git when you are happy.
-- **Keep docs current:** when behavior or migrations change, update **[docs/BRAIN_PORT_MAP.md](docs/BRAIN_PORT_MAP.md)**, **[docs/PARITY_LEDGER.md](docs/PARITY_LEDGER.md)**, and **[docs/PROPERA_V2_GAS_EXIT_PLAN.md](docs/PROPERA_V2_GAS_EXIT_PLAN.md)** (and **[docs/OUTSIDE_CURSOR.md](docs/OUTSIDE_CURSOR.md)** if operators need new SQL/env steps). **Inbound routing (order, core guards, lane stubs):** **[docs/ORCHESTRATOR_ROUTING.md](docs/ORCHESTRATOR_ROUTING.md)**. Logging / flight-recorder: **[docs/STRUCTURED_LOGS.md](docs/STRUCTURED_LOGS.md)**. **Recent session notes:** **[docs/HANDOFF_LOG.md](docs/HANDOFF_LOG.md)**.
+- **Keep docs current:** when behavior or migrations change, update **[docs/BRAIN_PORT_MAP.md](docs/BRAIN_PORT_MAP.md)**, **[docs/PARITY_LEDGER.md](docs/PARITY_LEDGER.md)**, and **[docs/PROPERA_V2_GAS_EXIT_PLAN.md](docs/PROPERA_V2_GAS_EXIT_PLAN.md)** (and **[docs/OUTSIDE_CURSOR.md](docs/OUTSIDE_CURSOR.md)** if operators need new SQL/env steps). **Inbound routing (order, core guards, lane stubs):** **[docs/ORCHESTRATOR_ROUTING.md](docs/ORCHESTRATOR_ROUTING.md)**. **Portal preventive / program runs:** **[docs/PM_PROGRAM_ENGINE_V1.md](docs/PM_PROGRAM_ENGINE_V1.md)**. Logging / flight-recorder: **[docs/STRUCTURED_LOGS.md](docs/STRUCTURED_LOGS.md)**. **Recent session notes:** **[docs/HANDOFF_LOG.md](docs/HANDOFF_LOG.md)**.
 
 ## Adding a new channel
 
@@ -67,6 +67,7 @@ Something else is using **8080** (often a previous `node` you forgot to stop).
 - Express app: `GET /`, `GET /health`, **`POST /webhooks/telegram`**, **`POST /webhooks/twilio`**, **`POST /webhooks/sms`** (Twilio SMS + WhatsApp share the Twilio handler).
 - **Postgres (Supabase)** when `SUPABASE_*` are set — see **`supabase/migrations/README.md`** for required migrations.
 - **Shared inbound pipeline:** **`src/inbound/runInboundPipeline.js`** — staff context → **precursors** → **lane** (`src/inbound/routeInboundDecision.js`) → SMS compliance / opt-out (SMS only) → optional **vendor/system lane stub** → **`handleInboundCore`** (maintenance) → **Outgate** **`dispatchOutbound`** (Telegram or Twilio). **Do not** call transport senders from brain code. Order and guards: **`docs/ORCHESTRATOR_ROUTING.md`**.
+- **Portal preventive / program runs (not inbound brain):** `GET/POST /api/portal/program-*` (templates, runs, **preview**, line complete/reopen, run **delete**) — **`src/portal/registerPortalRoutes.js`**, **`src/dal/programRuns.js`**, **`src/pm/expandProgramLines.js`**. **`properties.program_expansion_profile`** (**019**) drives floor + common line expansion. **Spec + roadmap** (building structure reuse for tenant/staff/ops): **`docs/PM_PROGRAM_ENGINE_V1.md`**. **Where it lives vs router:** **`docs/BRAIN_PORT_MAP.md`** (Portal: preventive / program runs).
 - Dockerfile for later Cloud Run deploy.
 
 **Identity (dev):** After **`003_identity.sql`** (and **`008_properties_dal_columns.sql`** or **`004_roster_and_policy_seed.sql`** so `properties.legacy_property_id` exists), try  

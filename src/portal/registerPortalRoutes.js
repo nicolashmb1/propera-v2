@@ -315,6 +315,7 @@ function registerPortalReadRoutes(app) {
         templateKey: body.templateKey,
         createdBy: body.createdBy,
         traceId: req.traceId,
+        includedScopeLabels: Array.isArray(body.includedScopeLabels) ? body.includedScopeLabels : undefined,
       });
       if (!out.ok) {
         const code =

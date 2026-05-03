@@ -98,6 +98,7 @@ async function recalcProgramRunStatus(sb, programRunId) {
  * @param {string} o.templateKey — e.g. HVAC_PM
  * @param {string} [o.createdBy]
  * @param {string} [o.traceId]
+ * @param {string[]} [o.includedScopeLabels] — if non-empty, only these checklist lines are created (must match expanded `scope_label` values).
  * @returns {Promise<{ ok: boolean, run?: object, lines?: object[], error?: string }>}
  */
 async function createProgramRun(o) {
@@ -133,9 +134,23 @@ async function createProgramRun(o) {
       ? await loadActiveUnitRows(propertyCode)
       : [];
 
-  const lineSpecs = expandProgramLines(template, unitRows, {
+  let lineSpecs = expandProgramLines(template, unitRows, {
     expansionProfile: propRow.program_expansion_profile,
   });
+
+  const rawInclude = o && o.includedScopeLabels;
+  const want = Array.isArray(rawInclude)
+    ? rawInclude.map((x) => String(x || "").trim()).filter(Boolean)
+    : [];
+  if (want.length) {
+    const allow = new Set(want);
+    lineSpecs = lineSpecs.filter((spec) => allow.has(String(spec.scope_label || "").trim()));
+    if (!lineSpecs.length) {
+      return { ok: false, error: "no_matching_scopes" };
+    }
+    lineSpecs = lineSpecs.map((spec, i) => ({ ...spec, sort_order: i }));
+  }
+
   const displayName = await getPropertyDisplayName(propertyCode);
   const title = `${displayName} — ${template.label}`;
 
@@ -335,8 +350,8 @@ async function listProgramRuns() {
 
   if (error || !runs) return [];
 
-  const ids = runs.map((r) => r.id);
-  if (!ids.length) return runs.map(enrichRunSummary);
+  const ids = runs.map((r) => r.id).filter(Boolean);
+  if (!ids.length) return [];
 
   const { data: lineRows } = await sb
     .from("program_lines")

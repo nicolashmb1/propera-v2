@@ -25,7 +25,7 @@ Optional: **`docs/GAS_ENGINE_PORT_PROGRAM.md`** (phased port for engines 10/12/1
 - **Operator default: V2-first** for the **staff portal stack** (`propera-app` → `/webhooks/portal`, Supabase reads). **GAS + Sheets** is **legacy backup** for slices not retired (escape hatch / old ticket rows), not the default target for new portal PM features.  
 - **Semantic reference:** **`docs/PARITY_LEDGER.md`** still tracks **GAS-class behavior** where it matters for maintenance intake and regressions — that is **correctness reference**, not “ship every change to GAS first.”  
 - **Do not add new product paths or new brain surfaces** unless the user explicitly un-freezes that. Prior work item: **what is already wired must behave like GAS** (regression / parity), not scope expansion.  
-- **Exception (explicit):** **PM/Task V1** — template-driven `program_runs` / `program_lines` + `/api/portal/program-*` routes (**`docs/PM_PROGRAM_ENGINE_V1.md`**). **Not** tenant reactive intake; keep **`handleInboundCore`** out of program creation.  
+- **Exception (explicit):** **PM/Task V1** — template-driven `program_runs` / `program_lines` + `/api/portal/program-*` routes (**`docs/PM_PROGRAM_ENGINE_V1.md`**). **Not** tenant reactive intake; keep **`handleInboundCore`** out of program creation. **`properties.program_expansion_profile`** is the per-property **building structure** for expansion today; **planned reuse** for tenant/staff/ops assistance (same labels across tickets and programs) is documented under **Strategic reuse** in that file — still **read-side / resolver** until explicitly owned elsewhere (**`docs/BRAIN_PORT_MAP.md`** portal PM table).  
 - **Any behavior change** → update **`docs/PARITY_LEDGER.md`** and pointer comments in code (`PARITY GAP:` where reduced vs GAS).
 
 ---
@@ -64,6 +64,7 @@ Conversations **drift**: freeze lifts, scope shifts, priorities change, a port l
 | Session wrap-up: what shipped, where to continue | **`docs/HANDOFF_LOG.md`** (append a **dated section**) |
 | Freeze lifted, new priority (e.g. parity-only → new paths), or agent instructions | **`AGENTS.md`** (this file) — **especially “Current stance”** |
 | Test strategy / what to run for regression | **`docs/TESTING_STRATEGY.md`** (if testing expectations changed) |
+| Portal preventive / program expansion or building-profile contract | **`docs/PM_PROGRAM_ENGINE_V1.md`** (+ **`docs/BRAIN_PORT_MAP.md`** portal PM row if routes/files move) |
 
 **Rule:** Stale docs are a bug. **Do not** end a meaningful direction change with only chat context updated.
 
@@ -81,6 +82,7 @@ Conversations **drift**: freeze lifts, scope shifts, priorities change, a port l
 | New channel onboarding checklist | `docs/ADAPTER_ONBOARDING.md` |
 | Porting rules + GAS source table | `docs/PORTING_FROM_GAS.md` |
 | Runnable code | `propera-v2/src/` |
+| Portal PM / preventive (program runs, expansion) | `docs/PM_PROGRAM_ENGINE_V1.md`; code: `src/dal/programRuns.js`, `src/pm/expandProgramLines.js`, `src/portal/registerPortalRoutes.js` |
 | Unit tests | `propera-v2/tests/` |
 | Supabase SQL | `propera-v2/supabase/migrations/` |
 | Env template | `propera-v2/.env.example` |

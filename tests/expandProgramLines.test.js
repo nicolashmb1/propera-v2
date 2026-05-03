@@ -70,6 +70,27 @@ test("FLOOR_BASED uses properties.program_expansion_profile.floor_paint_scopes w
   );
 });
 
+test("FLOOR_BASED appends common_paint_scopes as COMMON_AREA lines after floors", () => {
+  const template = { expansion_type: "FLOOR_BASED", default_scope_labels: null };
+  const lines = expandProgramLines(template, [], {
+    expansionProfile: {
+      floor_paint_scopes: ["1st floor", "2nd floor"],
+      common_paint_scopes: ["Gym", "Lobby"],
+    },
+  });
+  assert.equal(lines.length, 4);
+  assert.deepEqual(
+    lines.map((l) => ({ t: l.scope_type, s: l.scope_label })),
+    [
+      { t: "FLOOR", s: "1st floor" },
+      { t: "FLOOR", s: "2nd floor" },
+      { t: "COMMON_AREA", s: "Gym" },
+      { t: "COMMON_AREA", s: "Lobby" },
+    ]
+  );
+  assert.deepEqual(lines.map((l) => l.sort_order), [0, 1, 2, 3]);
+});
+
 test("COMMON_AREA_ONLY uses common_paint_scopes when set", () => {
   const template = { expansion_type: "COMMON_AREA_ONLY", default_scope_labels: null };
   const lines = expandProgramLines(template, [], {
