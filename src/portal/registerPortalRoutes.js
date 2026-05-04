@@ -17,6 +17,11 @@ const {
   completeProgramLine,
   reopenProgramLine,
 } = require("../dal/programRuns");
+const {
+  createSavedProgram,
+  listSavedPrograms,
+  archiveSavedProgram,
+} = require("../dal/savedPrograms");
 const { patchPropertyProgramExpansionProfile } = require("../dal/portalPropertyProgramProfile");
 const { getSupabase } = require("../db/supabase");
 const { verifyPortalRequest } = require("./portalAuth");
@@ -89,6 +94,11 @@ function registerPortalReadRoutes(app) {
           property: body.property,
           propertyCode: body.propertyCode,
           templateKey: body.templateKey,
+          savedProgramId: body.savedProgramId,
+          expansionType: body.expansionType,
+          includedScopeLabels: Array.isArray(body.includedScopeLabels)
+            ? body.includedScopeLabels
+            : undefined,
         });
         if (!out.ok) {
           return res.status(400).json({ ok: false, error: out.error || "preview_failed" });
@@ -98,6 +108,7 @@ function registerPortalReadRoutes(app) {
           lines: out.lines,
           expansion_type: out.expansion_type,
           template_key: out.template_key,
+          saved_program_id: out.saved_program_id,
           property_code: out.property_code,
         });
       } catch (err) {
@@ -209,6 +220,62 @@ function registerPortalReadRoutes(app) {
     }
   }));
 
+  app.get("/api/portal/saved-programs", gate(async (req, res) => {
+    try {
+      const code = String(req.query.propertyCode || "").trim().toUpperCase();
+      if (!code) {
+        return res.status(400).json({ ok: false, error: "missing_property_code" });
+      }
+      const rows = await listSavedPrograms(code);
+      return res.status(200).json(rows);
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.post("/api/portal/saved-programs", gate(async (req, res) => {
+    try {
+      const body = req.body || {};
+      const out = await createSavedProgram({
+        propertyCode: body.propertyCode,
+        displayName: body.displayName,
+        expansionType: body.expansionType,
+        defaultIncludedScopeLabels: Array.isArray(body.defaultIncludedScopeLabels)
+          ? body.defaultIncludedScopeLabels
+          : undefined,
+        createdBy: body.createdBy || "PORTAL",
+      });
+      if (!out.ok) {
+        return res.status(400).json({ ok: false, error: out.error || "create_failed" });
+      }
+      return res.status(201).json({ ok: true, program: out.program });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.delete("/api/portal/saved-programs/:id", gate(async (req, res) => {
+    try {
+      const out = await archiveSavedProgram(req.params.id);
+      if (!out.ok) {
+        const code = out.error === "not_found" ? 404 : 400;
+        return res.status(code).json({ ok: false, error: out.error || "archive_failed" });
+      }
+      return res.status(200).json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
   /** PM/Task V1 — propera-app Preventive tab (see docs/PM_PROGRAM_ENGINE_V1.md) */
   app.get("/api/portal/program-templates", gate(async (_req, res) => {
     try {
@@ -251,6 +318,11 @@ function registerPortalReadRoutes(app) {
           property: body.property,
           propertyCode: body.propertyCode,
           templateKey: body.templateKey,
+          savedProgramId: body.savedProgramId,
+          expansionType: body.expansionType,
+          includedScopeLabels: Array.isArray(body.includedScopeLabels)
+            ? body.includedScopeLabels
+            : undefined,
         });
         if (!out.ok) {
           const code =
@@ -264,6 +336,7 @@ function registerPortalReadRoutes(app) {
           lines: out.lines,
           expansion_type: out.expansion_type,
           template_key: out.template_key,
+          saved_program_id: out.saved_program_id,
           property_code: out.property_code,
         });
       } catch (err) {
@@ -313,6 +386,7 @@ function registerPortalReadRoutes(app) {
         property: body.property,
         propertyCode: body.propertyCode,
         templateKey: body.templateKey,
+        savedProgramId: body.savedProgramId,
         createdBy: body.createdBy,
         traceId: req.traceId,
         includedScopeLabels: Array.isArray(body.includedScopeLabels) ? body.includedScopeLabels : undefined,

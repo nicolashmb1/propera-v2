@@ -6,6 +6,11 @@ const { getSupabase } = require("../db/supabase");
 const { appendEventLog } = require("./appendEventLog");
 const { resolvePropertyCodeFromLabel } = require("./portalTenants");
 const { expandProgramLines } = require("../pm/expandProgramLines");
+const {
+  getSavedProgram,
+  parseIncludedLabelsJson,
+  EXPANSION_TYPES,
+} = require("./savedPrograms");
 
 /**
  * @param {string} propertyCode
@@ -59,6 +64,36 @@ async function getTemplate(templateKey) {
   return data;
 }
 
+/**
+ * Shape expected by expandProgramLines (mirrors program_templates row).
+ * @param {object} p
+ * @param {string} p.expansionType
+ * @param {string[]} [p.defaultScopeLabels]
+ * @param {string} [p.label]
+ */
+function templateShapeForExpand(p) {
+  const expansionType = String(p.expansionType || "").trim();
+  const labels = Array.isArray(p.defaultScopeLabels)
+    ? p.defaultScopeLabels.map((x) => String(x || "").trim()).filter(Boolean)
+    : [];
+  return {
+    template_key: String(p.templateKeyStub || "_SYNTH_"),
+    label: String(p.label || "Program").trim() || "Program",
+    expansion_type: expansionType,
+    default_scope_labels: labels.length ? labels : null,
+  };
+}
+
+/**
+ * @param {unknown} raw
+ * @returns {string[]}
+ */
+function normalizeIncludedArray(raw) {
+  if (!raw) return [];
+  if (!Array.isArray(raw)) return [];
+  return raw.map((x) => String(x || "").trim()).filter(Boolean);
+}
+
 async function recalcProgramRunStatus(sb, programRunId) {
   const { data: lines } = await sb
     .from("program_lines")
@@ -92,26 +127,143 @@ async function recalcProgramRunStatus(sb, programRunId) {
 }
 
 /**
- * @param {object} o
- * @param {string} [o.property] — display name or code (Murray / MURRAY)
- * @param {string} [o.propertyCode] — canonical code override
- * @param {string} o.templateKey — e.g. HVAC_PM
- * @param {string} [o.createdBy]
- * @param {string} [o.traceId]
- * @param {string[]} [o.includedScopeLabels] — if non-empty, only these checklist lines are created (must match expanded `scope_label` values).
- * @returns {Promise<{ ok: boolean, run?: object, lines?: object[], error?: string }>}
+ * Expand + apply includedScopeLabels (request) > defaultIncluded (definition) > all lines.
+ * @param {string} propertyCode
+ * @param {object} templateShape — row-like object for expandProgramLines
+ * @param {string[]|undefined} includedScopeLabels — from request
+ * @param {string[]} defaultIncludedLabels — from saved program or template defaults
  */
-async function createProgramRun(o) {
+async function buildProgramLineSpecs(propertyCode, templateShape, includedScopeLabels, defaultIncludedLabels) {
+  const code = String(propertyCode || "").trim().toUpperCase();
   const sb = getSupabase();
-  if (!sb) return { ok: false, error: "no_db" };
+  if (!sb || !code) return { ok: false, error: "unknown_property" };
+
+  const { data: propRow } = await sb
+    .from("properties")
+    .select("code, program_expansion_profile")
+    .eq("code", code)
+    .maybeSingle();
+  if (!propRow) return { ok: false, error: "unknown_property" };
+
+  const unitRows =
+    String(templateShape.expansion_type) === "UNIT_PLUS_COMMON"
+      ? await loadActiveUnitRows(code)
+      : [];
+
+  let lineSpecs = expandProgramLines(templateShape, unitRows, {
+    expansionProfile: propRow.program_expansion_profile,
+  });
+
+  const req = normalizeIncludedArray(includedScopeLabels);
+  const def = normalizeIncludedArray(defaultIncludedLabels);
+
+  if (req.length) {
+    const allow = new Set(req);
+    lineSpecs = lineSpecs.filter((spec) => allow.has(String(spec.scope_label || "").trim()));
+    if (!lineSpecs.length) {
+      return { ok: false, error: "no_matching_scopes" };
+    }
+    lineSpecs = lineSpecs.map((spec, i) => ({ ...spec, sort_order: i }));
+    return { ok: true, lineSpecs };
+  }
+
+  if (def.length) {
+    const allow = new Set(def);
+    lineSpecs = lineSpecs.filter((spec) => allow.has(String(spec.scope_label || "").trim()));
+    if (!lineSpecs.length) {
+      return { ok: false, error: "no_matching_scopes" };
+    }
+    lineSpecs = lineSpecs.map((spec, i) => ({ ...spec, sort_order: i }));
+    return { ok: true, lineSpecs };
+  }
+
+  return { ok: true, lineSpecs };
+}
+
+/**
+ * @param {object} o
+ * @param {string} o.propertyCode
+ * @param {string} [o.templateKey]
+ * @param {string} [o.savedProgramId]
+ * @returns {Promise<{ ok: boolean, sourceType?: string, sourceId?: string, displayName?: string, expansionType?: string, defaultIncludedScopeLabels?: string[], templateShape?: object, error?: string }>}
+ */
+async function resolveProgramDefinitionForRun(o) {
+  const propertyCode = String(o.propertyCode || "").trim().toUpperCase();
+  if (!propertyCode) return { ok: false, error: "missing_property_code" };
 
   const templateKey = String(o.templateKey || "")
     .trim()
     .toUpperCase();
-  if (!templateKey) return { ok: false, error: "missing_template_key" };
+  const savedProgramId = String(o.savedProgramId || "").trim();
 
-  const template = await getTemplate(templateKey);
-  if (!template) return { ok: false, error: "unknown_template" };
+  const hasT = Boolean(templateKey);
+  const hasS = Boolean(savedProgramId);
+  if (hasT === hasS) {
+    return { ok: false, error: hasT ? "ambiguous_run_source" : "missing_run_source" };
+  }
+
+  if (hasT) {
+    const template = await getTemplate(templateKey);
+    if (!template) return { ok: false, error: "unknown_template" };
+    const defaultIncludedScopeLabels = parseIncludedLabelsJson(template.default_scope_labels);
+    const templateShape = templateShapeForExpand({
+      expansionType: template.expansion_type,
+      defaultScopeLabels: defaultIncludedScopeLabels,
+      label: template.label,
+      templateKeyStub: template.template_key,
+    });
+    return {
+      ok: true,
+      sourceType: "legacy_template",
+      sourceId: templateKey,
+      displayName: String(template.label || "").trim() || templateKey,
+      expansionType: String(template.expansion_type || ""),
+      defaultIncludedScopeLabels,
+      templateShape,
+    };
+  }
+
+  const sp = await getSavedProgram(savedProgramId);
+  if (!sp) return { ok: false, error: "unknown_saved_program" };
+  if (String(sp.property_code || "").trim().toUpperCase() !== propertyCode) {
+    return { ok: false, error: "saved_program_property_mismatch" };
+  }
+  if (sp.active === false) {
+    return { ok: false, error: "saved_program_archived" };
+  }
+
+  const defaultIncludedScopeLabels = parseIncludedLabelsJson(sp.default_included_scope_labels);
+  const templateShape = templateShapeForExpand({
+    expansionType: sp.expansion_type,
+    defaultScopeLabels: defaultIncludedScopeLabels,
+    label: sp.display_name,
+    templateKeyStub: "_SAVED_",
+  });
+
+  return {
+    ok: true,
+    sourceType: "saved_program",
+    sourceId: savedProgramId,
+    displayName: String(sp.display_name || "").trim() || "Program",
+    expansionType: String(sp.expansion_type || ""),
+    defaultIncludedScopeLabels,
+    templateShape,
+  };
+}
+
+/**
+ * @param {object} o
+ * @param {string} [o.property]
+ * @param {string} [o.propertyCode]
+ * @param {string} [o.templateKey]
+ * @param {string} [o.savedProgramId]
+ * @param {string} [o.createdBy]
+ * @param {string} [o.traceId]
+ * @param {string[]} [o.includedScopeLabels]
+ */
+async function createProgramRun(o) {
+  const sb = getSupabase();
+  if (!sb) return { ok: false, error: "no_db" };
 
   let propertyCode = String(o.propertyCode || "").trim().toUpperCase();
   if (!propertyCode) {
@@ -122,56 +274,60 @@ async function createProgramRun(o) {
   }
   if (!propertyCode) return { ok: false, error: "unknown_property" };
 
-  const { data: propRow } = await sb
-    .from("properties")
-    .select("code, program_expansion_profile")
-    .eq("code", propertyCode)
-    .maybeSingle();
-  if (!propRow) return { ok: false, error: "unknown_property" };
-
-  const unitRows =
-    String(template.expansion_type) === "UNIT_PLUS_COMMON"
-      ? await loadActiveUnitRows(propertyCode)
-      : [];
-
-  let lineSpecs = expandProgramLines(template, unitRows, {
-    expansionProfile: propRow.program_expansion_profile,
+  const resolved = await resolveProgramDefinitionForRun({
+    propertyCode,
+    templateKey: o.templateKey,
+    savedProgramId: o.savedProgramId,
   });
-
-  const rawInclude = o && o.includedScopeLabels;
-  const want = Array.isArray(rawInclude)
-    ? rawInclude.map((x) => String(x || "").trim()).filter(Boolean)
-    : [];
-  if (want.length) {
-    const allow = new Set(want);
-    lineSpecs = lineSpecs.filter((spec) => allow.has(String(spec.scope_label || "").trim()));
-    if (!lineSpecs.length) {
-      return { ok: false, error: "no_matching_scopes" };
-    }
-    lineSpecs = lineSpecs.map((spec, i) => ({ ...spec, sort_order: i }));
+  if (!resolved.ok) {
+    return { ok: false, error: resolved.error || "resolve_failed" };
   }
 
-  const displayName = await getPropertyDisplayName(propertyCode);
-  const title = `${displayName} — ${template.label}`;
+  const built = await buildProgramLineSpecs(
+    propertyCode,
+    resolved.templateShape,
+    o.includedScopeLabels,
+    resolved.defaultIncludedScopeLabels
+  );
+  if (!built.ok) {
+    return { ok: false, error: built.error || "expand_failed" };
+  }
+  const lineSpecs = built.lineSpecs;
+
+  const propDisplay = await getPropertyDisplayName(propertyCode);
+  const title = `${propDisplay} — ${resolved.displayName}`;
 
   const createdBy = String(o.createdBy || "PORTAL").slice(0, 200);
   const traceId = String(o.traceId || "");
 
-  const runInsert = {
-    property_code: propertyCode,
-    template_key: templateKey,
-    title,
-    status: lineSpecs.length === 0 ? "OPEN" : "OPEN",
-    created_by: createdBy,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  };
+  const runInsert =
+    resolved.sourceType === "legacy_template"
+      ? {
+          property_code: propertyCode,
+          template_key: resolved.sourceId,
+          saved_program_id: null,
+          title,
+          status: "OPEN",
+          created_by: createdBy,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }
+      : {
+          property_code: propertyCode,
+          template_key: null,
+          saved_program_id: resolved.sourceId,
+          title,
+          status: "OPEN",
+          created_by: createdBy,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
 
   const { data: run, error: runErr } = await sb
     .from("program_runs")
     .insert(runInsert)
     .select(
-      "id, property_code, template_key, title, status, created_by, created_at, updated_at"
+      "id, property_code, template_key, saved_program_id, title, status, created_by, created_at, updated_at"
     )
     .maybeSingle();
 
@@ -228,7 +384,8 @@ async function createProgramRun(o) {
     payload: {
       program_run_id: runId,
       property_code: propertyCode,
-      template_key: templateKey,
+      template_key: run.template_key || null,
+      saved_program_id: run.saved_program_id || null,
       line_count: insertedLines.length,
     },
   });
@@ -241,18 +398,9 @@ async function createProgramRun(o) {
 }
 
 /**
- * Dry-run line expansion for PM/Task V1 (no DB writes).
- * @param {object} o
- * @param {string} [o.property]
- * @param {string} [o.propertyCode]
- * @param {string} o.templateKey
- * @returns {Promise<{ ok: boolean; lines?: object[]; expansion_type?: string; template_key?: string; property_code?: string; error?: string }>}
- */
-/**
  * @param {string} runId
  * @param {object} [o]
  * @param {string} [o.traceId]
- * @returns {Promise<{ ok: boolean; error?: string }>}
  */
 async function deleteProgramRun(runId, o) {
   const sb = getSupabase();
@@ -263,7 +411,7 @@ async function deleteProgramRun(runId, o) {
 
   const { data: existing, error: fetchErr } = await sb
     .from("program_runs")
-    .select("id, property_code, template_key, title")
+    .select("id, property_code, template_key, saved_program_id, title")
     .eq("id", id)
     .maybeSingle();
 
@@ -281,6 +429,7 @@ async function deleteProgramRun(runId, o) {
       program_run_id: id,
       property_code: String(existing.property_code || ""),
       template_key: String(existing.template_key || ""),
+      saved_program_id: String(existing.saved_program_id || ""),
       title: String(existing.title || ""),
     },
   });
@@ -288,6 +437,16 @@ async function deleteProgramRun(runId, o) {
   return { ok: true };
 }
 
+/**
+ * Preview expansion (no DB writes for lines). Supports legacy templateKey, savedProgramId, or ephemeral expansionType.
+ * @param {object} o
+ * @param {string} [o.property]
+ * @param {string} [o.propertyCode]
+ * @param {string} [o.templateKey]
+ * @param {string} [o.savedProgramId]
+ * @param {string} [o.expansionType]
+ * @param {string[]} [o.includedScopeLabels]
+ */
 async function previewProgramRunExpansion(o) {
   const sb = getSupabase();
   if (!sb) return { ok: false, error: "no_db" };
@@ -295,41 +454,81 @@ async function previewProgramRunExpansion(o) {
   const templateKey = String(o.templateKey || "")
     .trim()
     .toUpperCase();
-  if (!templateKey) return { ok: false, error: "missing_template_key" };
+  const savedProgramId = String(o.savedProgramId || "").trim();
+  const expansionType = String(o.expansionType || "")
+    .trim()
+    .toUpperCase();
 
-  const template = await getTemplate(templateKey);
-  if (!template) return { ok: false, error: "unknown_template" };
+  const n = (templateKey ? 1 : 0) + (savedProgramId ? 1 : 0) + (expansionType ? 1 : 0);
+  if (n !== 1) {
+    return { ok: false, error: n === 0 ? "missing_preview_source" : "ambiguous_preview_source" };
+  }
 
   let propertyCode = String(o.propertyCode || "").trim().toUpperCase();
   if (!propertyCode) {
-    propertyCode = await resolvePropertyCodeFromLabel(
-      sb,
-      String(o.property || "").trim()
-    );
+    propertyCode = await resolvePropertyCodeFromLabel(sb, String(o.property || "").trim());
   }
   if (!propertyCode) return { ok: false, error: "unknown_property" };
 
-  const { data: propRow } = await sb
-    .from("properties")
-    .select("code, program_expansion_profile")
-    .eq("code", propertyCode)
-    .maybeSingle();
-  if (!propRow) return { ok: false, error: "unknown_property" };
+  let templateShape;
+  let defaultIncludedScopeLabels = [];
+  let outTemplateKey = templateKey || null;
+  let outSavedId = savedProgramId || null;
 
-  const unitRows =
-    String(template.expansion_type) === "UNIT_PLUS_COMMON"
-      ? await loadActiveUnitRows(propertyCode)
-      : [];
+  if (templateKey) {
+    const template = await getTemplate(templateKey);
+    if (!template) return { ok: false, error: "unknown_template" };
+    defaultIncludedScopeLabels = parseIncludedLabelsJson(template.default_scope_labels);
+    templateShape = templateShapeForExpand({
+      expansionType: template.expansion_type,
+      defaultScopeLabels: defaultIncludedScopeLabels,
+      label: template.label,
+      templateKeyStub: template.template_key,
+    });
+  } else if (savedProgramId) {
+    const sp = await getSavedProgram(savedProgramId);
+    if (!sp) return { ok: false, error: "unknown_saved_program" };
+    if (String(sp.property_code || "").trim().toUpperCase() !== propertyCode) {
+      return { ok: false, error: "saved_program_property_mismatch" };
+    }
+    defaultIncludedScopeLabels = parseIncludedLabelsJson(sp.default_included_scope_labels);
+    templateShape = templateShapeForExpand({
+      expansionType: sp.expansion_type,
+      defaultScopeLabels: defaultIncludedScopeLabels,
+      label: sp.display_name,
+      templateKeyStub: "_SAVED_",
+    });
+  } else {
+    if (!EXPANSION_TYPES.has(expansionType)) {
+      return { ok: false, error: "invalid_expansion_type" };
+    }
+    outTemplateKey = null;
+    outSavedId = null;
+    templateShape = templateShapeForExpand({
+      expansionType,
+      defaultScopeLabels: [],
+      label: "",
+      templateKeyStub: "_EPHEMERAL_",
+    });
+    defaultIncludedScopeLabels = [];
+  }
 
-  const lineSpecs = expandProgramLines(template, unitRows, {
-    expansionProfile: propRow.program_expansion_profile,
-  });
+  const built = await buildProgramLineSpecs(
+    propertyCode,
+    templateShape,
+    o.includedScopeLabels,
+    defaultIncludedScopeLabels
+  );
+  if (!built.ok) {
+    return { ok: false, error: built.error || "expand_failed" };
+  }
 
   return {
     ok: true,
-    lines: lineSpecs,
-    expansion_type: String(template.expansion_type || ""),
-    template_key: templateKey,
+    lines: built.lineSpecs,
+    expansion_type: String(templateShape.expansion_type || ""),
+    template_key: outTemplateKey,
+    saved_program_id: outSavedId,
     property_code: propertyCode,
   };
 }
@@ -344,7 +543,7 @@ async function listProgramRuns() {
   const { data: runs, error } = await sb
     .from("program_runs")
     .select(
-      "id, property_code, template_key, title, status, created_by, created_at, updated_at"
+      "id, property_code, template_key, saved_program_id, title, status, created_by, created_at, updated_at"
     )
     .order("created_at", { ascending: false });
 
@@ -368,13 +567,23 @@ async function listProgramRuns() {
     }
   }
 
-  const { data: templates } = await sb
-    .from("program_templates")
-    .select("template_key, label");
+  const { data: templates } = await sb.from("program_templates").select("template_key, label");
 
   const labelByKey = {};
   for (const t of templates || []) {
     labelByKey[String(t.template_key).toUpperCase()] = String(t.label || "").trim();
+  }
+
+  const savedIds = [...new Set(runs.map((r) => r.saved_program_id).filter(Boolean))];
+  const labelBySavedId = {};
+  if (savedIds.length) {
+    const { data: sps } = await sb
+      .from("saved_programs")
+      .select("id, display_name")
+      .in("id", savedIds);
+    for (const sp of sps || []) {
+      labelBySavedId[String(sp.id)] = String(sp.display_name || "").trim();
+    }
   }
 
   const displayNames = {};
@@ -395,10 +604,15 @@ async function listProgramRuns() {
     const total = totalByRun[id] || 0;
     const complete = completeByRun[id] || 0;
     const pc = String(r.property_code || "").trim().toUpperCase();
+    const sid = r.saved_program_id ? String(r.saved_program_id) : "";
+    const tk = r.template_key ? String(r.template_key).toUpperCase() : "";
+    const templateLabel = sid
+      ? labelBySavedId[sid] || sid
+      : labelByKey[tk] || r.template_key || "";
     return {
       ...r,
       property_display: displayNames[pc] || pc,
-      template_label: labelByKey[String(r.template_key).toUpperCase()] || r.template_key,
+      template_label: templateLabel,
       line_total: total,
       line_complete: complete,
     };
@@ -417,7 +631,7 @@ async function getProgramRunById(runId) {
   const { data: run, error } = await sb
     .from("program_runs")
     .select(
-      "id, property_code, template_key, title, status, created_by, created_at, updated_at"
+      "id, property_code, template_key, saved_program_id, title, status, created_by, created_at, updated_at"
     )
     .eq("id", id)
     .maybeSingle();
@@ -433,24 +647,33 @@ async function getProgramRunById(runId) {
     .order("sort_order", { ascending: true })
     .order("scope_label", { ascending: true });
 
-  const { data: tmpl } = await sb
-    .from("program_templates")
-    .select("label, expansion_type")
-    .eq("template_key", run.template_key)
-    .maybeSingle();
+  let template_label = "";
+  let expansion_type = "";
+
+  if (run.saved_program_id) {
+    const sp = await getSavedProgram(String(run.saved_program_id));
+    template_label = sp ? String(sp.display_name || "").trim() : "";
+    expansion_type = sp ? String(sp.expansion_type || "").trim() : "";
+  } else if (run.template_key) {
+    const { data: tmpl } = await sb
+      .from("program_templates")
+      .select("label, expansion_type")
+      .eq("template_key", run.template_key)
+      .maybeSingle();
+    template_label = tmpl?.label || run.template_key;
+    expansion_type = tmpl?.expansion_type || "";
+  }
 
   const total = (lines || []).length;
-  const complete = (lines || []).filter(
-    (l) => String(l.status).toUpperCase() === "COMPLETE"
-  ).length;
+  const complete = (lines || []).filter((l) => String(l.status).toUpperCase() === "COMPLETE").length;
 
   const propDisplay = await getPropertyDisplayName(run.property_code);
 
   return {
     ...run,
     property_display: propDisplay,
-    template_label: tmpl?.label || run.template_key,
-    expansion_type: tmpl?.expansion_type || "",
+    template_label,
+    expansion_type,
     lines: lines || [],
     line_total: total,
     line_complete: complete,
@@ -468,13 +691,13 @@ async function completeProgramLine(lineId, o) {
   const sb = getSupabase();
   if (!sb) return { ok: false, error: "no_db" };
 
-  const id = String(lineId || "").trim();
-  if (!id) return { ok: false, error: "missing_line_id" };
+  const lid = String(lineId || "").trim();
+  if (!lid) return { ok: false, error: "missing_line_id" };
 
   const { data: line, error: lineErr } = await sb
     .from("program_lines")
     .select("id, program_run_id, status")
-    .eq("id", id)
+    .eq("id", lid)
     .maybeSingle();
 
   if (lineErr || !line) return { ok: false, error: "not_found" };
@@ -491,7 +714,7 @@ async function completeProgramLine(lineId, o) {
       completed_at: now,
       notes,
     })
-    .eq("id", id);
+    .eq("id", lid);
 
   if (upErr) return { ok: false, error: upErr.message || "update_failed" };
 
@@ -502,7 +725,7 @@ async function completeProgramLine(lineId, o) {
     log_kind: "portal",
     event: "PROGRAM_LINE_COMPLETED",
     payload: {
-      program_line_id: id,
+      program_line_id: lid,
       program_run_id: line.program_run_id,
       completed_by: completedBy,
     },
@@ -521,13 +744,13 @@ async function reopenProgramLine(lineId, o) {
   const sb = getSupabase();
   if (!sb) return { ok: false, error: "no_db" };
 
-  const id = String(lineId || "").trim();
-  if (!id) return { ok: false, error: "missing_line_id" };
+  const lid = String(lineId || "").trim();
+  if (!lid) return { ok: false, error: "missing_line_id" };
 
   const { data: line, error: lineErr } = await sb
     .from("program_lines")
     .select("id, program_run_id")
-    .eq("id", id)
+    .eq("id", lid)
     .maybeSingle();
 
   if (lineErr || !line) return { ok: false, error: "not_found" };
@@ -540,7 +763,7 @@ async function reopenProgramLine(lineId, o) {
       completed_at: null,
       notes: "",
     })
-    .eq("id", id);
+    .eq("id", lid);
 
   if (upErr) return { ok: false, error: upErr.message || "update_failed" };
 
@@ -551,7 +774,7 @@ async function reopenProgramLine(lineId, o) {
     log_kind: "portal",
     event: "PROGRAM_LINE_REOPENED",
     payload: {
-      program_line_id: id,
+      program_line_id: lid,
       program_run_id: line.program_run_id,
     },
   });
@@ -569,4 +792,5 @@ module.exports = {
   completeProgramLine,
   reopenProgramLine,
   getTemplate,
+  resolveProgramDefinitionForRun,
 };

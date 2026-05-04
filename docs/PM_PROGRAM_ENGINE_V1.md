@@ -17,14 +17,16 @@ One engine handles HVAC, painting, water heater, gutters, cleaning, etc. — **n
 
 | Input | Example |
 |--------|---------|
-| Property + template + optional **subset of expanded scope labels** | “Start painting for Morris — only 1st floor + Gym this quarter” |
+| Property + **legacy** `templateKey` + optional **subset of expanded scope labels** | “Start painting for Morris — only 1st floor + Gym this quarter” |
+| Property + **saved program** (`savedProgramId`) + optional **`includedScopeLabels`** | Re-run “Gutter Maintenance” for Morris with default or overridden scopes |
+| Property + **`expansionType`** (preview only) + optional **`includedScopeLabels`** | Ephemeral checklist preview before saving a definition |
 
 **Output:**
 
 - One **program run**: e.g. “Murray — HVAC Maintenance”
 - Many **lines**: Unit 101 Open, Unit 102 Open, …, plus common scopes (or one **Common Area**) — staff mark each complete.
 
-Templates define **how lines expand** (units vs floors vs common-only), because each service has a different progress model.
+**Expansion engine** (`expansion_type` on a global template row or on a **saved program**) defines **how lines expand** (units vs floors vs common-only). The **display name** is a label only (template `label`, or `saved_programs.display_name`).
 
 ---
 
@@ -50,15 +52,27 @@ Defines behavior and label.
 | `WATER_HEATER_PM` | Water Heater Maintenance | `UNIT_PLUS_COMMON` |
 | `COMMON_AREA_PAINT` | Common Area Painting | `FLOOR_BASED` |
 
+### `saved_programs` (property-scoped definitions)
+
+| Field | Notes |
+|-------|--------|
+| `id` | uuid PK |
+| `property_code` | FK → `properties.code` |
+| `display_name` | Operator label (“Carpet Cleaning”, …) |
+| `expansion_type` | Same four engines as templates |
+| `default_included_scope_labels` | jsonb optional — default subset of `scope_label` values when starting a run without explicit **`includedScopeLabels`** |
+| `active` / `archived_at` | Soft-delete: archive hides from library; historical runs keep `saved_program_id` |
+
 ### `program_runs`
 
-One active program/task per row.
+One active program/task per row. **Strict XOR:** exactly one of **`template_key`** (legacy global template) or **`saved_program_id`** (saved program definition).
 
 | Field | Example |
 |-------|---------|
 | `id` | uuid |
 | `property_code` | `MURRAY` |
-| `template_key` | `HVAC_PM` |
+| `template_key` | `HVAC_PM` **or** `null` when using a saved program |
+| `saved_program_id` | uuid **or** `null` when using a legacy template |
 | `title` | Murray — HVAC Maintenance |
 | `status` | `OPEN` / `IN_PROGRESS` / `COMPLETE` |
 | `created_by` | `STAFF_NICK` / `PORTAL` |
@@ -90,24 +104,28 @@ Checklist / progress rows.
 | `COMMON_AREA_ONLY` | Lobby repair, exterior lights, boiler room | Common-area lines only (`scope_type` **`COMMON_AREA`**) |
 | `CUSTOM_MANUAL` | One-offs | Minimal or empty initial lines; staff add lines later (later phase) |
 
-**Pattern:** `template_key` → `expansion_type` → **deterministic line generator** (no per-service hardcoding in core logic).
+**Pattern:** resolve **definition** (legacy `program_templates` row **or** `saved_programs` row **or** ephemeral preview shape) → `expansion_type` → **`expandProgramLines`** (no second expansion implementation).
 
 ---
 
 ## Smart creation (`createProgramRun`)
 
-**Inputs:** JSON with **`templateKey`**, **`createdBy`**, and either **`propertyCode`** or **`property`** (display name). Optional **`includedScopeLabels`**: string[] of **`scope_label`** values to keep after expansion. If omitted or empty, **all** expanded lines are inserted (backward compatible). If non-empty and **no** expanded line matches, create fails with **`no_matching_scopes`**.
+**Inputs:** exactly one of **`templateKey`** or **`savedProgramId`**; **`createdBy`**; either **`propertyCode`** or **`property`** (display name). Optional **`includedScopeLabels`**: string[] of **`scope_label`** values to keep after expansion.
+
+**Filter merge order:** if **`includedScopeLabels`** is non-empty, filter expanded lines to that set. Else if the definition has **default included labels** (saved program `default_included_scope_labels` or template `default_scope_labels`), filter to that set. Else keep **all** expanded lines. Empty filter result → **`no_matching_scopes`**.
+
+**Saved program runs** require the saved row **`active = true`** and matching **`property_code`**.
 
 **Flow:**
 
 1. Resolve property name/code → `property_code`; load `properties.program_expansion_profile` (jsonb).
-2. Load `program_templates` row for `template_key`.
+2. Resolve definition: load **`program_templates`** for **`templateKey`**, or **`saved_programs`** for **`savedProgramId`** (with property match + active check).
 3. **`expandProgramLines(template, unitRows, { expansionProfile })`** — pure function; no DB.
    - **UNIT_PLUS_COMMON:** active roster units + one line per **`common_paint_scopes`** entry (building structure); if that list is empty, a single **“Common Area”** line.
    - **FLOOR_BASED:** floors from **`floor_paint_scopes`** (else template `default_scope_labels`, else built-in defaults), then **append** **`common_paint_scopes`** as lines with `scope_type` **`COMMON_AREA`** (same labels as Properties → **Building structure**).
    - **COMMON_AREA_ONLY:** **`common_paint_scopes`** only (else defaults).
    - **CUSTOM_MANUAL:** no lines at create.
-4. If **`includedScopeLabels`** is non-empty, filter expanded specs to those whose trimmed **`scope_label`** is in the set; renumber **`sort_order`**. Empty result → **`no_matching_scopes`**.
+4. Apply **filter merge order** above; renumber **`sort_order`**. Empty result → **`no_matching_scopes`**.
 5. Insert one `program_runs` row + N `program_lines` in one transaction.
 6. Return the new run and lines.
 
@@ -118,7 +136,13 @@ Checklist / progress rows.
 
 **Purpose:** Same expansion as create, **no writes** — for UI checklist preview.
 
-**Portal:** `POST /api/portal/program-runs/preview` with body like `{ "templateKey": "COMMON_AREA_PAINT", "propertyCode": "MORRIS" }` (or `"property": "Morris"`) → `{ ok, lines: [{ scope_type, scope_label, sort_order }], expansion_type, template_key, property_code }`.
+**Portal:** `POST /api/portal/program-runs/preview` with **exactly one** of:
+
+- Legacy: `{ "templateKey": "COMMON_AREA_PAINT", "propertyCode": "MORRIS" }`
+- Saved: `{ "savedProgramId": "<uuid>", "propertyCode": "MORRIS" }`
+- Ephemeral (before a saved row exists): `{ "propertyCode": "MORR", "expansionType": "COMMON_AREA_ONLY", "includedScopeLabels": ["Roof", "Exterior"] }`
+
+Response includes `lines`, `expansion_type`, `property_code`, and `template_key` / `saved_program_id` when applicable (both null for ephemeral).
 
 ---
 
@@ -147,6 +171,9 @@ propera-app **does not** write DB directly. It calls V2; V2 validates, persists,
 | Need | Method | Path |
 |------|--------|------|
 | List templates (dropdown) | GET | `/api/portal/program-templates` |
+| List saved programs (active) for property | GET | `/api/portal/saved-programs?propertyCode=` |
+| Create saved program | POST | `/api/portal/saved-programs` |
+| Archive saved program | DELETE | `/api/portal/saved-programs/:id` |
 | List runs | GET | `/api/portal/program-runs` |
 | One run + lines | GET | `/api/portal/program-runs/:id` |
 | Preview expansion (no DB) | POST | `/api/portal/program-runs/preview` |
@@ -155,15 +182,20 @@ propera-app **does not** write DB directly. It calls V2; V2 validates, persists,
 | Mark line complete | PATCH | `/api/portal/program-lines/:id/complete` |
 | Reopen line | PATCH | `/api/portal/program-lines/:id/reopen` |
 
-**POST body (create):** `{ "propertyCode": "MORRIS", "templateKey": "COMMON_AREA_PAINT", "createdBy": "PORTAL", "includedScopeLabels": ["1st floor", "Gym"] }` — `includedScopeLabels` optional; `property` (display name) allowed instead of `propertyCode`.
+**POST body (create):** either  
+`{ "propertyCode": "MORRIS", "templateKey": "COMMON_AREA_PAINT", "createdBy": "PORTAL", "includedScopeLabels": ["1st floor", "Gym"] }`  
+or  
+`{ "propertyCode": "MORRIS", "savedProgramId": "<uuid>", "createdBy": "PORTAL", "includedScopeLabels": [] }` — **`includedScopeLabels`** optional; `property` (display name) allowed instead of `propertyCode`.
 
-**POST body (preview):** `{ "propertyCode": "MORRIS", "templateKey": "COMMON_AREA_PAINT" }` (or `property`).
+**POST body (saved program):** `{ "propertyCode": "MORR", "displayName": "Gutter Maintenance", "expansionType": "COMMON_AREA_ONLY", "defaultIncludedScopeLabels": ["Roof", "Exterior"] }` — **`defaultIncludedScopeLabels`** optional.
+
+**POST body (preview):** one of templateKey / savedProgramId / expansionType bodies above; optional **`includedScopeLabels`**.
 
 **PATCH complete body:** `{ "completedBy": "STAFF_NICK", "notes": "" }` (optional).
 
 Auth: same portal token pattern as existing portal routes (`X-Propera-Portal-Token` / `PROPERA_PORTAL_TOKEN`).
 
-**Migrations:** `supabase/migrations/018_program_engine_v1.sql` (program tables), **`019_properties_program_expansion_profile.sql`** (`properties.program_expansion_profile` — optional per-property `floor_paint_scopes` / `common_paint_scopes` arrays for line expansion).
+**Migrations:** `supabase/migrations/018_program_engine_v1.sql` (program tables), **`019_properties_program_expansion_profile.sql`** (`properties.program_expansion_profile` — optional per-property `floor_paint_scopes` / `common_paint_scopes` arrays for line expansion), **`022_saved_programs.sql`** (`saved_programs`, `program_runs.saved_program_id`, strict XOR on runs).
 
 ---
 
@@ -171,18 +203,18 @@ Auth: same portal token pattern as existing portal routes (`X-Propera-Portal-Tok
 
 **Feature flag:** `NEXT_PUBLIC_PROPERA_PREVENTIVE_ENABLED=1` shows nav **Preventive** and wires API proxies (`PROPERA_V2_API_URL` + `PROPERA_PORTAL_TOKEN`).
 
-**Route:** `/preventive`. Next routes proxy to V2: `/api/program-templates`, `/api/program-runs` (GET/POST), `/api/program-runs/preview` (POST), `/api/program-runs/[id]` (GET/DELETE), `/api/program-lines/[id]/complete`, `/api/program-lines/[id]/reopen`.
+**Route:** `/preventive`. Next routes proxy to V2: `/api/program-templates`, `/api/saved-programs`, `/api/program-runs` (GET/POST), `/api/program-runs/preview` (POST), `/api/program-runs/[id]` (GET/DELETE), `/api/program-lines/[id]/complete`, `/api/program-lines/[id]/reopen`.
 
 **Property building structure:** `/properties/[propertyKey]` — **Preventive · Building structure**: edit **`floor_paint_scopes`** and **`common_paint_scopes`**; PATCH merges **`program_expansion_profile`** on the property (V2). Link from Preventive (“Property structure”) and optional `?propertyCode=` preset when opening Preventive from a property.
 
 **Preventive page:**
 
-- Start program: property + template selectors; template cards with expansion-type hints.
+- Start program: property + **structure type** cards + program name; ephemeral preview; **create** persists **`saved_programs`** then **`program_runs`** with **`savedProgramId`** (Option A). Legacy **`templateKey`** runs remain supported in the API.
 - **Preview checklist** (computed lines) when both are chosen.
 - **Areas in this run:** one checkbox per distinct **`scope_label`** from preview (default all on); **Select all / Clear all**.
 - **Create program run** sends **`includedScopeLabels`** when the preview had lines and at least one area remains checked.
 - Main column scrolls as a single **`page-scroll`** region (header through run list) so long previews and area lists are not clipped.
-- **Filter runs** by property; run cards open right **checklist** panel (complete/reopen per line).
+- **Filter runs** by property; **Saved programs** strip (desktop) lists active definitions with **Start run**; run cards open right **checklist** panel (complete/reopen per line; **completed_at** / **completed_by** on lines).
 - **Delete program run** from list or panel where portal role allows (V2 + app gate).
 
 ---
@@ -196,6 +228,7 @@ Auth: same portal token pattern as existing portal routes (`X-Propera-Portal-Tok
 | Portal routes + **`includedScopeLabels`** on create | Done |
 | **propera-app** `/preventive` + proxies + property profile PATCH | Done |
 | Staff NL → `createProgramRun` | Later |
+| **`saved_programs` + XOR `program_runs` + preview ephemeral + app proxies** | Done (`022_saved_programs.sql`, DAL, portal, propera-app) |
 
 ---
 
@@ -248,26 +281,11 @@ Auth: same portal token pattern as existing portal routes (`X-Propera-Portal-Tok
 
 ---
 
-## Planned evolution: user-defined programs (“structure + name”, not global product templates)
+## User-defined programs (shipped)
 
-**Intent (product):** Stop treating **HVAC_PM** / **COMMON_AREA_PAINT**–style rows as the primary UX. Operators want to **choose property → pick structure kind** (same `expansion_type` vocabulary today: *Units + common*, *Floors / zones*, *Common areas only*, *Manual*) **→ align with that property’s building structure** (`program_expansion_profile`) **→ name the program** (e.g. “HVAC Maintenance”, “Carpet Cleaning”) **→ save** so it can be **re-run** the same way later. “Template” becomes **structure + saved program definition**, not a fixed global catalog.
+Property-scoped **`saved_programs`** hold **`display_name`** + **`expansion_type`** + optional **`default_included_scope_labels`**. **`program_runs`** use **strict XOR**: legacy **`template_key`** **or** **`saved_program_id`**. Archive = **`active`** / **`archived_at`** (DELETE on portal is logical archive). **`program_lines`** remain the operational truth per child (stable ids); scheduling / access fields are future columns on lines or child tables.
 
-**Contrast with V1 today:**
-
-| Today (V1) | Target direction |
-|------------|-------------------|
-| Global **`program_templates`** rows (seed keys) + `program_runs.template_key` FK | **Saved program definitions** per property (or org): `expansion_type` + **user label** + optional scope subset / overrides; runs reference **that definition** (new id) or a stable generated key namespaced per property |
-| Label implies product (“HVAC Maintenance”) in seed data | **User-chosen display name** at save time; reuse is “start another run from this saved program” |
-| Template dropdown = fixed list | **Create program** flow: structure picker + property structure + name + save; library = **my programs for this property** |
-
-**Engineering when picked up (sketch, not final):**
-
-- New table (e.g. **`program_definitions`** or **`saved_programs`**) with at least: `id`, `property_code`, `display_name`, `expansion_type`, optional `default_scope_labels` / flags for which profile slices to include, `created_by`, timestamps — **or** relax `program_templates` to allow **inserted** rows with keys like `PROP:{code}:{slug}` and property ownership metadata (weaker normalization).  
-- **`program_runs`**: either FK to definition id + snapshot expansion at run time, or keep `template_key` but populate `program_templates` dynamically per save (trade-offs: FK churn vs clarity).  
-- **Portal + app:** CRUD for definitions; create run = pick **saved program** (or duplicate wizard); preview still uses **`expandProgramLines`** with profile + definition.  
-- **Migration / seed:** existing seeds become **defaults** or **examples**, not the only path.
-
-**Gate:** Spec and schema first after V1 checklist + mobile flows are accepted; avoid parallel “half global, half custom” without a migration story.
+**Durable spine (query / memory later):** Property → Saved program → Run → Lines (`status`, **`completed_at`**, **`completed_by`**, …).
 
 ---
 
@@ -286,4 +304,4 @@ Auth: same portal token pattern as existing portal routes (`X-Propera-Portal-Tok
 - Parity / reactive maintenance: `docs/PARITY_LEDGER.md` (do not conflate with this V1 scope)  
 - File map (where portal PM code lives vs inbound brain): `docs/BRAIN_PORT_MAP.md` — **Portal: preventive / program runs**  
 - App market-entry backlog (same “Request access” intent): **`propera-app/PROPERA_APP_MARKET_ENTRY_PLAN.md`** §8  
-- **User-defined programs (structure + name):** this doc, **Planned evolution** section above
+- **User-defined programs:** this doc, **User-defined programs (shipped)** section above
