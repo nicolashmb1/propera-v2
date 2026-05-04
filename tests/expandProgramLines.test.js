@@ -36,6 +36,24 @@ test("UNIT_PLUS_COMMON expands units + Common Area", () => {
   assert.equal(lines[2].scope_label, "Common Area");
 });
 
+test("UNIT_PLUS_COMMON uses common_paint_scopes from profile when set", () => {
+  const template = { expansion_type: "UNIT_PLUS_COMMON", default_scope_labels: null };
+  const lines = expandProgramLines(
+    template,
+    [{ unit_label: "101" }],
+    { expansionProfile: { common_paint_scopes: ["Gym", "Lobby"] } }
+  );
+  assert.equal(lines.length, 3);
+  assert.deepEqual(
+    lines.map((l) => ({ t: l.scope_type, s: l.scope_label })),
+    [
+      { t: "UNIT", s: "Unit 101" },
+      { t: "COMMON_AREA", s: "Gym" },
+      { t: "COMMON_AREA", s: "Lobby" },
+    ]
+  );
+});
+
 test("FLOOR_BASED uses template default_scope_labels", () => {
   const template = {
     expansion_type: "FLOOR_BASED",

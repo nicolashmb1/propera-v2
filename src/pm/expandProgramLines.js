@@ -70,11 +70,22 @@ function expandProgramLines(template, unitRows, options) {
         sort_order: order++,
       });
     }
-    out.push({
-      scope_type: "COMMON_AREA",
-      scope_label: "Common Area",
-      sort_order: order++,
-    });
+    /** Building structure common scopes (Gym, Lobby, …); else legacy single "Common Area" line */
+    let commonLabels = [];
+    const fromCommon = profile.common_paint_scopes;
+    if (Array.isArray(fromCommon) && fromCommon.length) {
+      commonLabels = fromCommon.map((x) => String(x).trim()).filter(Boolean);
+    }
+    if (!commonLabels.length) {
+      commonLabels = ["Common Area"];
+    }
+    for (const scope_label of commonLabels) {
+      out.push({
+        scope_type: "COMMON_AREA",
+        scope_label,
+        sort_order: order++,
+      });
+    }
     return out;
   }
 

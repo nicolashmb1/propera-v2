@@ -22,7 +22,7 @@ One engine handles HVAC, painting, water heater, gutters, cleaning, etc. — **n
 **Output:**
 
 - One **program run**: e.g. “Murray — HVAC Maintenance”
-- Many **lines**: Unit 101 Open, Unit 102 Open, …, Common Area Open — staff mark each complete.
+- Many **lines**: Unit 101 Open, Unit 102 Open, …, plus common scopes (or one **Common Area**) — staff mark each complete.
 
 Templates define **how lines expand** (units vs floors vs common-only), because each service has a different progress model.
 
@@ -85,7 +85,7 @@ Checklist / progress rows.
 
 | expansion_type | Used for | Line generation |
 |----------------|----------|-----------------|
-| `UNIT_PLUS_COMMON` | HVAC, water heater, filters, smoke detectors | Active units from roster + common area line |
+| `UNIT_PLUS_COMMON` | HVAC, water heater, filters, smoke detectors | Active units from roster + **`common_paint_scopes`** as **COMMON_AREA** lines when set on the property; else one **“Common Area”** line |
 | `FLOOR_BASED` | Painting, hallway cleaning, floor inspections | Floors from `program_expansion_profile.floor_paint_scopes`, then **common-area scopes** from `common_paint_scopes` (same card as Properties → building structure), then template defaults |
 | `COMMON_AREA_ONLY` | Lobby repair, exterior lights, boiler room | Common-area lines only (`scope_type` **`COMMON_AREA`**) |
 | `CUSTOM_MANUAL` | One-offs | Minimal or empty initial lines; staff add lines later (later phase) |
@@ -103,7 +103,7 @@ Checklist / progress rows.
 1. Resolve property name/code → `property_code`; load `properties.program_expansion_profile` (jsonb).
 2. Load `program_templates` row for `template_key`.
 3. **`expandProgramLines(template, unitRows, { expansionProfile })`** — pure function; no DB.
-   - **UNIT_PLUS_COMMON:** active roster units + one generic “Common Area” line.
+   - **UNIT_PLUS_COMMON:** active roster units + one line per **`common_paint_scopes`** entry (building structure); if that list is empty, a single **“Common Area”** line.
    - **FLOOR_BASED:** floors from **`floor_paint_scopes`** (else template `default_scope_labels`, else built-in defaults), then **append** **`common_paint_scopes`** as lines with `scope_type` **`COMMON_AREA`** (same labels as Properties → **Building structure**).
    - **COMMON_AREA_ONLY:** **`common_paint_scopes`** only (else defaults).
    - **CUSTOM_MANUAL:** no lines at create.
@@ -111,7 +111,7 @@ Checklist / progress rows.
 5. Insert one `program_runs` row + N `program_lines` in one transaction.
 6. Return the new run and lines.
 
-**HVAC example:** Murray → Unit 101, Unit 102, …, Common Area (roster-driven).  
+**HVAC example:** Murray → Unit 101, Unit 102, …, then **Gym** / **Lobby** (or **Common Area**) when `common_paint_scopes` is set (roster + building structure).  
 **Painting example:** Morris → 1st–4th floor lines (`FLOOR`) + Gym, Lobby (`COMMON_AREA`) when saved on the property; portal/app may send **`includedScopeLabels`** to create a subset only.
 
 ## Preview (`previewProgramRunExpansion`)
@@ -225,6 +225,52 @@ Auth: same portal token pattern as existing portal routes (`X-Propera-Portal-Tok
 
 ---
 
+## Planned after V1 acceptance (V1.2-style): “Request access” on program lines
+
+**Gate:** Start this slice only after **V1 PM** is stable in product: template construction, preventive layout, checklist workflow (`program_runs` / `program_lines` + app), and operators are happy with the flow. **propera-app** product note: **`PROPERA_APP_MARKET_ENTRY_PLAN.md`** §8.
+
+**Problem:** Runs like **HVAC filter** expand to one **`program_line` per unit** (plus common lines). Staff often need **permission or a scheduled time** before entering a unit.
+
+**Planned behavior (middle agent, not full autonomy):**
+
+| Piece | Intent |
+|-------|--------|
+| **UI** | Per line (e.g. each **UNIT** row in the checklist panel), an action **Request access** alongside **Complete** / **Reopen**. |
+| **Outbound** | Propera sends a message (channel TBD — SMS / WhatsApp / etc.) asking the tenant for **a time window** or **permission to enter**. |
+| **Inbound** | Tenant reply is received through the normal messaging path where applicable. |
+| **Persistence** | Parsed outcome is **stored on the child** — the same **`program_line`** (new columns) or a **small child row** keyed by `program_line_id` — so the row shows e.g. *access requested → “OK after 2pm Tue”* without conflating with unrelated ticket rows unless a later design explicitly merges them. |
+
+**Engineering notes when picked up:**
+
+- Schema: e.g. `access_request_status`, `access_window_text`, `access_replied_at`, or a dedicated `program_line_access_events` table — decide in migration + DAL; keep **portal + `event_log`** auditable.  
+- **Outgate** sends the ask; **brain / intake** must not silently auto-complete program lines from tenant SMS without an explicit policy (North Compass: *who owns the next action?*).  
+- Stay consistent with **Boundary** above: program completion remains staff-driven unless product explicitly adds tenant-confirm flows with clear ownership.
+
+---
+
+## Planned evolution: user-defined programs (“structure + name”, not global product templates)
+
+**Intent (product):** Stop treating **HVAC_PM** / **COMMON_AREA_PAINT**–style rows as the primary UX. Operators want to **choose property → pick structure kind** (same `expansion_type` vocabulary today: *Units + common*, *Floors / zones*, *Common areas only*, *Manual*) **→ align with that property’s building structure** (`program_expansion_profile`) **→ name the program** (e.g. “HVAC Maintenance”, “Carpet Cleaning”) **→ save** so it can be **re-run** the same way later. “Template” becomes **structure + saved program definition**, not a fixed global catalog.
+
+**Contrast with V1 today:**
+
+| Today (V1) | Target direction |
+|------------|-------------------|
+| Global **`program_templates`** rows (seed keys) + `program_runs.template_key` FK | **Saved program definitions** per property (or org): `expansion_type` + **user label** + optional scope subset / overrides; runs reference **that definition** (new id) or a stable generated key namespaced per property |
+| Label implies product (“HVAC Maintenance”) in seed data | **User-chosen display name** at save time; reuse is “start another run from this saved program” |
+| Template dropdown = fixed list | **Create program** flow: structure picker + property structure + name + save; library = **my programs for this property** |
+
+**Engineering when picked up (sketch, not final):**
+
+- New table (e.g. **`program_definitions`** or **`saved_programs`**) with at least: `id`, `property_code`, `display_name`, `expansion_type`, optional `default_scope_labels` / flags for which profile slices to include, `created_by`, timestamps — **or** relax `program_templates` to allow **inserted** rows with keys like `PROP:{code}:{slug}` and property ownership metadata (weaker normalization).  
+- **`program_runs`**: either FK to definition id + snapshot expansion at run time, or keep `template_key` but populate `program_templates` dynamically per save (trade-offs: FK churn vs clarity).  
+- **Portal + app:** CRUD for definitions; create run = pick **saved program** (or duplicate wizard); preview still uses **`expandProgramLines`** with profile + definition.  
+- **Migration / seed:** existing seeds become **defaults** or **examples**, not the only path.
+
+**Gate:** Spec and schema first after V1 checklist + mobile flows are accepted; avoid parallel “half global, half custom” without a migration story.
+
+---
+
 ## Compass alignment
 
 - **Signal** → portal POST or future staff command (normalized).  
@@ -238,4 +284,6 @@ Auth: same portal token pattern as existing portal routes (`X-Propera-Portal-Tok
 
 - Cursor plan (broader PM vision): `.cursor/plans/preventive_maintenance_pm_fit_*.plan.md`  
 - Parity / reactive maintenance: `docs/PARITY_LEDGER.md` (do not conflate with this V1 scope)  
-- File map (where portal PM code lives vs inbound brain): `docs/BRAIN_PORT_MAP.md` — **Portal: preventive / program runs**
+- File map (where portal PM code lives vs inbound brain): `docs/BRAIN_PORT_MAP.md` — **Portal: preventive / program runs**  
+- App market-entry backlog (same “Request access” intent): **`propera-app/PROPERA_APP_MARKET_ENTRY_PLAN.md`** §8  
+- **User-defined programs (structure + name):** this doc, **Planned evolution** section above
