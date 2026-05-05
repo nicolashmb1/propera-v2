@@ -32,7 +32,6 @@ const {
   clearAttachClarifyLatch,
 } = require("../../dal/conversationCtxAttach");
 const { parseAttachClarifyReply } = require("../gas/parseAttachClarifyReply");
-const { normalizeIssueForCompare } = require("../gas/issueParseDeterministic");
 const { setWorkItemSubstate } = require("../../dal/workItemSubstate");
 const {
   parseMaintenanceDraftAsync,
@@ -44,10 +43,7 @@ const {
   resolveMaintenanceDraftLocationType,
 } = require("../shared/commonArea");
 const { mergeMaintenanceDraftTurn } = require("./mergeMaintenanceDraft");
-const {
-  recomputeDraftExpected,
-  expiryMinutesForExpectedStage,
-} = require("./recomputeDraftExpected");
+const { recomputeDraftExpected } = require("./recomputeDraftExpected");
 const {
   buildMaintenancePrompt,
   maintenanceTemplateKeyForNext,
@@ -73,6 +69,19 @@ const {
   setScheduleWaitAfterFinalizeDraft,
   allocateNewDraft,
 } = require("../../dal/staffCaptureDraft");
+const {
+  isPortalCreateTicketRouter,
+  extractScheduleHintStaffCapture,
+  extractScheduleHintStaffCaptureFromTurn,
+  extractScheduleHintPortalStaff,
+  extractScheduleHintPortalStaffMulti,
+} = require("./handleInboundCoreScheduleHints");
+const {
+  draftFlagsFromSlots,
+  computePendingExpiresAtIso,
+  issueTextForFinalize,
+} = require("./handleInboundCoreDraftHelpers");
+const { appendPortalStaffScheduleNote } = require("./appendPortalStaffScheduleNote");
 
 /**
  * GAS `enrichStaffCapTenantIdentity_` / `findTenantCandidates_` — resident phone for staff #capture only.
@@ -131,153 +140,9 @@ async function loadPropertyCodesUpper(sb) {
   return set;
 }
 
-function draftFlagsFromSlots(d) {
-  const issue = String(d.draft_issue || "").trim();
-  const issueBuf = Array.isArray(d.draft_issue_buf_json) ? d.draft_issue_buf_json : [];
-  const prop = String(d.draft_property || "").trim();
-  const unit = String(d.draft_unit || "").trim();
-  const sched = String(d.draft_schedule_raw || "").trim();
-  return {
-    hasIssue: issue.length >= 2 || issueBuf.length >= 1,
-    hasProperty: !!prop,
-    hasUnit: !!unit,
-    hasSchedule: !!sched,
-  };
-}
-
-function computePendingExpiresAtIso(next) {
-  const mins = expiryMinutesForExpectedStage(next);
-  if (mins == null) return "";
-  return new Date(Date.now() + mins * 60 * 1000).toISOString();
-}
-
 /** Outgate hints — templateKey is stable; text still built by brain until MessageSpec bind. */
 function outgateMeta(templateKey, extra) {
   return { outgate: { templateKey, ...(extra || {}) } };
-}
-
-function isPortalCreateTicketRouter(routerParameter) {
-  return (
-    String(routerParameter && routerParameter._portalAction ? routerParameter._portalAction : "")
-      .trim()
-      .toLowerCase() === "create_ticket"
-  );
-}
-
-/**
- * `#` staff capture (same turn as report): `compileTurn` `scheduleRaw`, or `Preferred:` line
- * (aligned with `extractScheduleHintPortalStaff` minus portal JSON).
- */
-function extractScheduleHintStaffCapture(fastDraft, effectiveBody) {
-  const sr = String(fastDraft && fastDraft.scheduleRaw ? fastDraft.scheduleRaw : "").trim();
-  if (sr.length >= MIN_SCHEDULE_LEN) return sr;
-  const body = String(effectiveBody || "");
-  const m = body.match(/(?:^|\n)\s*Preferred:\s*(.+?)(?:\n|$)/im);
-  if (m && String(m[1]).trim().length >= MIN_SCHEDULE_LEN) return String(m[1]).trim();
-  return "";
-}
-
-function extractScheduleHintStaffCaptureFromTurn(merged, fastDraft, effectiveBody) {
-  const fromMerge = String(merged && merged.draft_schedule_raw ? merged.draft_schedule_raw : "")
-    .trim();
-  if (fromMerge.length >= MIN_SCHEDULE_LEN) return fromMerge;
-  return extractScheduleHintStaffCapture(fastDraft, effectiveBody);
-}
-
-/**
- * Staff PM portal create: schedule from compile `scheduleRaw`, `Preferred:` line, or JSON `preferredWindow`.
- */
-function extractScheduleHintPortalStaff(fastDraft, effectiveBody, routerParameter) {
-  const sr = String(fastDraft && fastDraft.scheduleRaw ? fastDraft.scheduleRaw : "").trim();
-  if (sr.length >= MIN_SCHEDULE_LEN) return sr;
-  const body = String(effectiveBody || "");
-  const m = body.match(/(?:^|\n)\s*Preferred:\s*(.+?)(?:\n|$)/im);
-  if (m && String(m[1]).trim().length >= MIN_SCHEDULE_LEN) return String(m[1]).trim();
-  try {
-    const j = JSON.parse(String(routerParameter._portalPayloadJson || "{}"));
-    const pw = String(j.preferredWindow || "").trim();
-    if (pw.length >= MIN_SCHEDULE_LEN) return pw;
-  } catch (_) {
-    /* ignore */
-  }
-  return "";
-}
-
-function extractScheduleHintPortalStaffMulti(merged, effectiveBody, routerParameter) {
-  const sched = String(merged && merged.draft_schedule_raw ? merged.draft_schedule_raw : "").trim();
-  if (sched.length >= MIN_SCHEDULE_LEN) return sched;
-  return extractScheduleHintPortalStaff(
-    { scheduleRaw: "" },
-    effectiveBody,
-    routerParameter
-  );
-}
-
-/**
- * If staff portal (or `#` staff capture) provided a schedule hint, apply to ticket; append short note to receipt
- * (no second prompt). Optional lifecycle follow-up when `scheduleOpts.afterLifecycle`.
- */
-async function appendPortalStaffScheduleNote(
-  receiptBase,
-  scheduleHint,
-  ticketKey,
-  traceId,
-  traceStartMs,
-  scheduleOpts
-) {
-  if (!ticketKey || String(scheduleHint || "").trim().length < MIN_SCHEDULE_LEN) {
-    return receiptBase;
-  }
-  const applied = await applyPreferredWindowByTicketKey({
-    ticketKey,
-    preferredWindow: String(scheduleHint).trim(),
-    traceId,
-    traceStartMs,
-  });
-  if (applied.ok) {
-    if (scheduleOpts && scheduleOpts.afterLifecycle) {
-      const sb = getSupabase();
-      if (sb) {
-        await afterTenantScheduleApplied({
-          sb,
-          ticketKey: String(ticketKey).trim(),
-          parsed: applied.parsed || null,
-          propertyCodeHint: String(scheduleOpts.propertyCodeHint || "").trim(),
-          traceId,
-          traceStartMs: traceStartMs != null ? traceStartMs : undefined,
-        });
-      }
-    }
-    const label =
-      applied.parsed && applied.parsed.label
-        ? applied.parsed.label
-        : String(scheduleHint).trim();
-    return `${receiptBase}\n\nPreferred time noted: ${label}.`;
-  }
-  if (applied.policyKey) {
-    return `${receiptBase}\n\n${schedulePolicyRejectMessage(
-      applied.policyKey,
-      applied.policyVars
-    )}`;
-  }
-  return `${receiptBase}\n\n(Preferred time could not be saved; add it from the ticket when ready.)`;
-}
-
-function issueTextForFinalize(draftIssue, issueBuf) {
-  const base = String(draftIssue || "").trim();
-  const extras = Array.isArray(issueBuf)
-    ? issueBuf.map((x) => String(x || "").trim()).filter(Boolean)
-    : [];
-  if (!base && !extras.length) return "";
-  const seen = new Set();
-  const out = [];
-  for (const x of [base, ...extras]) {
-    const k = normalizeIssueForCompare(x);
-    if (!k || seen.has(k)) continue;
-    seen.add(k);
-    out.push(x);
-  }
-  return out.join(" | ").slice(0, 900);
 }
 
 /**
@@ -948,6 +813,7 @@ async function handleInboundCore(o) {
           {
             afterLifecycle: true,
             propertyCodeHint: String(fastDraft.propertyCode || "").trim(),
+            sb,
           }
         );
         await clearIntakeLike();
@@ -1433,6 +1299,7 @@ async function handleInboundCore(o) {
           {
             afterLifecycle: true,
             propertyCodeHint: String(merged.draft_property || "").trim(),
+            sb,
           }
         );
         await clearIntakeLike();
