@@ -20,6 +20,7 @@ describe("buildRouterParameterFromTwilio media", () => {
     assert.equal(raw.length, 1);
     assert.equal(raw[0].kind, "image");
     assert.equal(raw[0].source, "twilio");
+    assert.equal(raw[0].provider, "twilio");
   });
 });
 

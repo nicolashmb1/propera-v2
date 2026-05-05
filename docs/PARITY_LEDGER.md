@@ -157,10 +157,10 @@ Requires migration **`011_sms_opt_out.sql`** for opt-out persistence. See [PROPE
 
 | Behavior | GAS source | V2 implementation | Status | What is missing | Risk | Notes |
 |----------|------------|-------------------|--------|-----------------|------|-------|
-| Actor resolution (tenant/staff) | GAS directory + router identity | `resolveActor` — `src/identity/resolveActor.js` | **PARTIAL** | Postgres `contacts` / staff tables; not full GAS identity + router graph | **Medium** | Optional dev route when `IDENTITY_API_ENABLED`; not a substitute for full router. |
+| Actor resolution (tenant/staff) | GAS directory + router identity | `resolveActor` — `src/identity/resolveActor.js` | **PARTIAL** | Postgres `contacts` / staff tables; not full GAS identity + router graph | **Medium** | Optional dev route when `IDENTITY_API_ENABLED`; **`TG:…` query uses `telegram_chat_link` → roster phone** (same bridge as router). Not a substitute for full router. |
 | Telegram → `RouterParameter` | `02_TELEGRAM_ADAPTER.gs` `syntheticE.parameter` | `buildRouterParameterFromTelegram` — `src/contracts/buildRouterParameterFromTelegram.js` | **PARTIAL** | Keep field-level parity with GAS `parameter` — see **BRAIN_PORT_MAP** PHASE 2 | **Medium** | |
 | `update_id` dedupe | GAS queue / replay rules | `tryConsumeUpdateId` — `src/adapters/telegram/dedupeUpdateId.js` | **PARTIAL** | In-process TTL map vs durable queue | **Low** | Transport replay guard; not semantic parity. |
-| Telegram chat ↔ phone link | GAS linkage | `upsertTelegramChatLink` — `src/identity/upsertTelegramChatLink.js` | **PARTIAL** | DB-backed; compare to GAS if divergences reported | **Low** | |
+| Telegram chat ↔ phone link | GAS linkage | `upsertTelegramChatLink` + **`getLinkedPhoneE164ForTelegramInbound`** — `src/dal/telegramChatLinkLookup.js` | **PARTIAL** | Inbound **staff detection** and **`resolveCanonicalBrainActorKey`** share this bridge when `phone_e164` is set on `telegram_chat_link` | **Low** | Ops still populate link row `phone_e164` when Telegram maps to a roster phone (same row outgate uses for TG-first sends). |
 
 ---
 

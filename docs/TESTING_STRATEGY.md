@@ -237,7 +237,19 @@ These should become shared assertion helpers over time.
 ## What exists in V2 now (concrete)
 
 - Unit: `recomputeDraftExpected`, `mergeMaintenanceDraft`, `parseMaintenanceDraft`, `ticketDefaults`, router precursors (see `npm test`).
-- **Not yet:** scenario runner over shared fixtures, replay library, integration job, outgate golden matrix.
+- **Scenario (in-memory, no real Supabase):** `tests/scenarios/tenantMaintenanceInMemory.test.js` — injected client via `setSupabaseClientForTests` + `PROPERA_TEST_INJECT_SB=1` in-file; uses `tests/helpers/memorySupabaseScenario.js`. Covers multi-turn tenant maintenance (PENN opener → unit → schedule) with `INTAKE_COMPILE_TURN=1`, `CORE_ENABLED=1`, LLM/OCR off; asserts single ticket/work item, no duplicates, and adapter normalization (SMS vs Telegram) where brain-visible facts should align.
+- **Integration (in-memory, not in default `npm test`):** `npm run test:integration` — `tests/integration/staffCaptureCrossChannel.test.js` with `memorySupabaseStaffCapture.js` (now includes `tickets` / `work_items` / `property_policy` / `intake_sessions` shells and `insert().select().maybeSingle()` for finalize parity). Proves staff-capture cross-channel identity + draft continuation. **Note:** openers must not accidentally pre-fill a unit (e.g. a leading `305` in the issue line) or compile_turn may advance to `FINALIZE_DRAFT` on the property turn and clear the draft — by design; keep fixtures aligned with the story under test.
+- **Not yet:** shared JSON scenario runner, replay library, outgate golden matrix, dev-Supabase integration job in CI.
+
+### Scenario vs future fixtures
+
+- **Covered (stable enough):** In-memory maintenance path through core with compile turn; post-receipt schedule / `preferred_window` when the current DAL + core actually persist it; channel normalization smoke.
+- **Future (document only until contract is stable):** True one-shot `PENN 4B kitchen sink is leaking` → `core_finalized` in a single turn (today compile_turn often leaves `expected: UNIT` until a follow-up); full lifecycle/verify-resolution; real Twilio/Telegram send success.
+
+### Manual / smoke-only (unchanged)
+
+- Live **Telegram** bot + **ngrok** (or any real transport webhook) remains **smoke** — not required for `npm test`.
+- Real **Supabase**, **OpenAI**, **OCR** — not part of default or `test:integration` in-memory runs.
 
 ---
 
@@ -245,15 +257,13 @@ These should become shared assertion helpers over time.
 
 **Immediate**
 
-- Scenario runner + `tests/scenarios/` maintenance intake JSON/JS fixtures.
-- Orchestrated test with **stubbed** `finalizeMaintenanceDraft` / `getSupabase` for full `handleInboundCore` paths (optional).
-- Golden: **issue only → PROPERTY → UNIT → finalize** (multi-turn) **in memory**.
+- Grow `tests/scenarios/` with table-driven fixtures when a behavior row in the matrix above is stable.
+- Optional: dev-Supabase `integration/` job (separate from in-memory `test:integration`).
 
 **Soon**
 
-- Schedule / preferred window (when engine exists).
 - Router replay cases (compliance + staff gate).
-- Integration: Supabase round-trip for `intake_sessions` + ticket insert.
+- Outgate intent-key golden tests when the map stabilizes.
 
 **Stay manual / non-default**
 

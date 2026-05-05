@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node --test tests/*.test.js",
+    "test": "node --test tests/*.test.js tests/scenarios/*.test.js",
     "test:integration": "node --test tests/integration/staffCaptureCrossChannel.test.js"
   },
   "engines": {

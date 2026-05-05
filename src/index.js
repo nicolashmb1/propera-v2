@@ -23,7 +23,6 @@ const {
 const { resolveActor } = require("./identity/resolveActor");
 const { verifyTelegramWebhookSecret } = require("./adapters/telegram/verifyWebhookSecret");
 const { normalizeTelegramUpdate } = require("./adapters/telegram/normalizeTelegramUpdate");
-const { enrichTelegramMediaWithOcr } = require("./adapters/telegram/enrichTelegramMediaWithOcr");
 const { tryConsumeUpdateId } = require("./adapters/telegram/dedupeUpdateId");
 const { buildRouterParameterFromTelegram } = require("./contracts/buildRouterParameterFromTelegram");
 const { buildRouterParameterFromTwilio } = require("./contracts/buildRouterParameterFromTwilio");
@@ -121,10 +120,6 @@ app.post("/webhooks/telegram", async (req, res) => {
     if (!signal) {
       return res.status(200).json({ ok: true, ignored: true });
     }
-    if (signal.body && Array.isArray(signal.body.media) && signal.body.media.length > 0) {
-      signal.body.media = await enrichTelegramMediaWithOcr(signal.body.media);
-    }
-
     let routerParameter;
     try {
       routerParameter = buildRouterParameterFromTelegram(signal, payload);

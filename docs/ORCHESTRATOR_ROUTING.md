@@ -11,7 +11,7 @@ This document is the **reviewer-facing** map of **order**, **guards**, and **lan
 | Step | What runs | Notes |
 |------|-----------|--------|
 | 1 | `upsertTelegramChatLink` (Telegram only) | Transport shell |
-| 2 | `resolveStaffContextFromRouterParameter` | Staff row + actor key |
+| 2 | `resolveStaffContextFromRouterParameter` | Staff row + actor key; **Telegram:** `contacts` by transport key (`TG:…` / E.164), else **`telegram_chat_link`** (`telegram_user_id` then `telegram_chat_id`) → roster **`phone_e164`** → same `contacts`/`staff` lookup — `src/dal/telegramChatLinkLookup.js` |
 | 3 | `evaluateRouterPrecursor` | `#` staff capture first; **any** identified staff → `STAFF_LIFECYCLE_GATE` (including **empty body**); else compliance / tenant commands |
 | 4 | `normalizeInboundEventFromRouterParameter` | Canonical inbound event for lane |
 | 5 | `buildLaneDecision` | Staff capture / staff gate **or** `decideLane(inbound)` |

@@ -24,6 +24,7 @@ function buildRouterParameterFromTwilio(body) {
       media.push({
         url,
         contentType: ct,
+        provider: "twilio",
         source: "twilio",
         kind: ctLower.startsWith("image/") ? "image" : "file",
       });

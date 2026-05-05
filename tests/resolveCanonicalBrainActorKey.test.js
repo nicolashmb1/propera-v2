@@ -106,6 +106,13 @@ test("resolveCanonicalBrainActorKey — staff: telegram_chat_link by chat id", a
                       : { data: null },
                 };
               }
+              if (col === "telegram_user_id") {
+                return {
+                  order: () => ({
+                    limit: async () => ({ data: [], error: null }),
+                  }),
+                };
+              }
               return {
                 maybeSingle: async () => ({ data: null }),
                 order: () => ({

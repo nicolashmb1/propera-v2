@@ -1,9 +1,16 @@
 /**
  * Who is this phone? STAFF vs TENANT vs UNKNOWN (VENDOR later).
  * Data: contacts + staff + staff_assignments (+ properties).
+ * Telegram `TG:…` queries resolve roster phone via `telegram_chat_link` when present.
  */
 const { getSupabase } = require("../db/supabase");
+const {
+  getLinkedPhoneE164ForTelegramInbound,
+} = require("../dal/telegramChatLinkLookup");
 const { normalizePhoneE164 } = require("../utils/phone");
+const {
+  normalizeTelegramActorKeyForStaff,
+} = require("../utils/telegramActor");
 
 /**
  * @returns {Promise<{
@@ -16,8 +23,38 @@ const { normalizePhoneE164 } = require("../utils/phone");
  * }>}
  */
 async function resolveActor(phoneRaw) {
-  const phoneE164 = normalizePhoneE164(phoneRaw);
-  if (!phoneE164) {
+  const raw = String(phoneRaw || "").trim();
+  const sb = getSupabase();
+
+  if (!sb) {
+    const fallback =
+      normalizeTelegramActorKeyForStaff(raw) || normalizePhoneE164(raw);
+    return {
+      phoneE164: fallback || "",
+      lane: "UNKNOWN",
+      contact: null,
+      staff: null,
+      assignments: [],
+      reason: "db_not_configured",
+    };
+  }
+
+  let lookupKey = "";
+  const tgKey = normalizeTelegramActorKeyForStaff(raw);
+  if (tgKey) {
+    const digits = tgKey.replace(/^TG:/i, "").replace(/\D/g, "");
+    const linked = await getLinkedPhoneE164ForTelegramInbound(sb, {
+      telegramUserIdDigits: digits,
+      telegramChatId: "",
+    });
+    lookupKey = linked
+      ? normalizePhoneE164(linked) || String(linked).trim()
+      : tgKey;
+  } else {
+    lookupKey = normalizePhoneE164(raw);
+  }
+
+  if (!lookupKey) {
     return {
       phoneE164: "",
       lane: "UNKNOWN",
@@ -28,17 +65,7 @@ async function resolveActor(phoneRaw) {
     };
   }
 
-  const sb = getSupabase();
-  if (!sb) {
-    return {
-      phoneE164,
-      lane: "UNKNOWN",
-      contact: null,
-      staff: null,
-      assignments: [],
-      reason: "db_not_configured",
-    };
-  }
+  const phoneE164 = lookupKey;
 
   const { data: contact, error: cErr } = await sb
     .from("contacts")

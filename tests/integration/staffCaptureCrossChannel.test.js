@@ -64,11 +64,12 @@ describe(
 
       const { runInboundPipeline } = require("../../src/inbound/runInboundPipeline");
 
+      /** No leading unit digit (e.g. not “305 …”) — compile_turn would treat that as unit and turn 2 could FINALIZE + clear the draft. */
       const r1 = await runInboundPipeline({
         traceId: "int-a-1",
         transportChannel: "telegram",
         routerParameter: {
-          Body: "# 305 ice maker clogged",
+          Body: "# ice maker clogged",
           From: "TG:888888888",
           _phoneE164: CANON_E164,
           _channel: "TELEGRAM",

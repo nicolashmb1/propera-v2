@@ -1,8 +1,11 @@
 /**
- * In-memory Supabase subset for staff-capture cross-channel integration tests.
- * Includes empty maintenance tables + `insert().select().maybeSingle()` so
- * `finalizeMaintenanceDraft` (tickets) can run in integration without a real DB.
+ * In-memory Supabase client for **scenario tests** (tenant maintenance + schedule paths).
+ * Extends staff-capture mock shapes with: tickets, work_items, intake_sessions, property_policy,
+ * richer select (.neq, .in), chained updates, and insert().select().maybeSingle().
+ *
+ * Does **not** replace `memorySupabaseStaffCapture.js` — staff integration keeps using that helper.
  */
+
 const crypto = require("crypto");
 
 function matches(row, filters) {
@@ -22,43 +25,50 @@ function filterRows(rows, filters) {
   return rows.filter((row) => matches(row, filters));
 }
 
-function createMemorySupabase(seed) {
+function tableKey(tableName) {
+  const map = {
+    properties: "properties",
+    property_policy: "property_policy",
+    property_aliases: "property_aliases",
+    contacts: "contacts",
+    staff: "staff",
+    staff_capture_drafts: "staff_capture_drafts",
+    telegram_chat_link: "telegram_chat_link",
+    conversation_ctx: "conversation_ctx",
+    event_log: "event_log",
+    intake_sessions: "intake_sessions",
+    tickets: "tickets",
+    work_items: "work_items",
+  };
+  return map[tableName] || null;
+}
+
+/**
+ * @param {object} seed
+ */
+function createScenarioMemorySupabase(seed) {
   const state = {
     draftSeqCounter: seed.draftSeqCounter || 0,
     properties: (seed.properties || []).map((r) => ({ ...r })),
-    staff_capture_drafts: (seed.staff_capture_drafts || []).map((r) => ({ ...r })),
+    property_policy: (seed.property_policy || []).map((r) => ({ ...r })),
+    property_aliases: (seed.property_aliases || []).map((r) => ({ ...r })),
     contacts: (seed.contacts || []).map((r) => ({ ...r })),
     staff: (seed.staff || []).map((r) => ({ ...r })),
+    staff_capture_drafts: (seed.staff_capture_drafts || []).map((r) => ({ ...r })),
     telegram_chat_link: (seed.telegram_chat_link || []).map((r) => ({ ...r })),
-    event_log: [],
     conversation_ctx: (seed.conversation_ctx || []).map((r) => ({ ...r })),
-    property_aliases: (seed.property_aliases || []).map((r) => ({ ...r })),
-    property_policy: (seed.property_policy || []).map((r) => ({ ...r })),
+    event_log: (seed.event_log || []).map((r) => ({ ...r })),
     intake_sessions: (seed.intake_sessions || []).map((r) => ({ ...r })),
     tickets: (seed.tickets || []).map((r) => ({ ...r })),
     work_items: (seed.work_items || []).map((r) => ({ ...r })),
   };
 
   function rowsFor(tableName) {
-    const k =
-      {
-        properties: "properties",
-        staff_capture_drafts: "staff_capture_drafts",
-        contacts: "contacts",
-        staff: "staff",
-        telegram_chat_link: "telegram_chat_link",
-        event_log: "event_log",
-        conversation_ctx: "conversation_ctx",
-        property_aliases: "property_aliases",
-        property_policy: "property_policy",
-        intake_sessions: "intake_sessions",
-        tickets: "tickets",
-        work_items: "work_items",
-      }[tableName] || null;
+    const k = tableKey(tableName);
     return k ? state[k] : null;
   }
 
-  function selectChain(tableName, filters, selectCols) {
+  function selectChain(tableName, filters, _selectCols) {
     let orderCol = null;
     let orderAsc = true;
     let limitN = null;
@@ -124,26 +134,18 @@ function createMemorySupabase(seed) {
 
   function updateThenable(tableName, patch) {
     const filters = [];
-    async function exec() {
-      const rows = rowsFor(tableName);
-      if (!rows) return { data: null, error: { message: "unknown table" } };
-      const hit = filterRows(rows, filters);
-      const now = new Date().toISOString();
-      hit.forEach((row) => Object.assign(row, patch));
-      if (tableName === "staff_capture_drafts") {
-        hit.forEach((row) => {
-          row.updated_at_iso = patch.updated_at_iso || now;
-        });
-      }
-      return { data: hit, error: null };
-    }
     const chain = {
       eq(col, val) {
         filters.push({ op: "eq", col, val });
         return chain;
       },
       then(onFulfilled, onRejected) {
-        return exec().then(onFulfilled, onRejected);
+        const rows = rowsFor(tableName);
+        if (!rows) return Promise.resolve({ data: null, error: { message: "unknown table" } });
+        const hit = filterRows(rows, filters);
+        const now = new Date().toISOString();
+        hit.forEach((row) => Object.assign(row, patch, { updated_at: patch.updated_at || now }));
+        return Promise.resolve({ data: hit, error: null }).then(onFulfilled, onRejected);
       },
     };
     return chain;
@@ -151,23 +153,20 @@ function createMemorySupabase(seed) {
 
   function deleteThenable(tableName) {
     const filters = [];
-    async function exec() {
-      const rows = rowsFor(tableName);
-      if (!rows) return { data: null, error: { message: "unknown table" } };
-      const hit = filterRows(rows, filters);
-      hit.forEach((h) => {
-        const i = rows.indexOf(h);
-        if (i >= 0) rows.splice(i, 1);
-      });
-      return { data: null, error: null };
-    }
     const chain = {
       eq(col, val) {
         filters.push({ op: "eq", col, val });
         return chain;
       },
       then(onFulfilled, onRejected) {
-        return exec().then(onFulfilled, onRejected);
+        const rows = rowsFor(tableName);
+        if (!rows) return Promise.resolve({ data: null, error: { message: "unknown table" } });
+        const hit = filterRows(rows, filters);
+        hit.forEach((h) => {
+          const i = rows.indexOf(h);
+          if (i >= 0) rows.splice(i, 1);
+        });
+        return Promise.resolve({ data: null, error: null }).then(onFulfilled, onRejected);
       },
     };
     return chain;
@@ -175,29 +174,6 @@ function createMemorySupabase(seed) {
 
   function insertThenable(tableName, row) {
     const rows = rowsFor(tableName);
-    if (!rows) {
-      return {
-        select() {
-          return {
-            maybeSingle: async () => ({
-              data: null,
-              error: { message: "unknown table " + tableName },
-            }),
-            single: async () => ({
-              data: null,
-              error: { message: "unknown table " + tableName },
-            }),
-          };
-        },
-        then(onFulfilled, onRejected) {
-          return Promise.resolve({
-            data: null,
-            error: { message: "unknown table " + tableName },
-          }).then(onFulfilled, onRejected);
-        },
-      };
-    }
-
     let consumed = false;
     const o = Array.isArray(row) ? row[0] : row;
     const copy = { ...o };
@@ -205,6 +181,7 @@ function createMemorySupabase(seed) {
     function push() {
       if (consumed) return copy;
       consumed = true;
+      if (!rows) return copy;
       if (tableName === "tickets" && copy.id == null) {
         copy.id = crypto.randomUUID();
       }
@@ -217,11 +194,11 @@ function createMemorySupabase(seed) {
         return {
           maybeSingle: async () => {
             const c = push();
-            return { data: tableName === "tickets" ? { id: c.id } : { ...c }, error: null };
+            return { data: { id: c.id }, error: null };
           },
           single: async () => {
             const c = push();
-            return { data: tableName === "tickets" ? { id: c.id } : { ...c }, error: null };
+            return { data: { id: c.id }, error: null };
           },
         };
       },
@@ -274,4 +251,64 @@ function createMemorySupabase(seed) {
   };
 }
 
-module.exports = { createMemorySupabase };
+/** Canonical tenant actor for `scenarioMaintenanceSeedPenn()` scenarios */
+const SCENARIO_TENANT_E164 = "+15551234001";
+
+/** Minimal seeds: PENN building + lifecycle off + permissive schedule policy for in-memory schedule replies */
+function scenarioMaintenanceSeedPenn() {
+  return {
+    contacts: [],
+    staff: [],
+    staff_capture_drafts: [],
+    telegram_chat_link: [],
+    conversation_ctx: [],
+    event_log: [],
+    intake_sessions: [],
+    tickets: [],
+    work_items: [],
+    property_aliases: [],
+    properties: [
+      {
+        code: "PENN",
+        display_name: "The Grand at Penn",
+        ticket_prefix: "PENN",
+        short_name: "Penn",
+        address: "1 Penn Ave",
+        active: true,
+        legacy_property_id: "",
+      },
+    ],
+    property_policy: [
+      {
+        property_code: "GLOBAL",
+        policy_key: "LIFECYCLE_ENABLED",
+        value: "false",
+        value_type: "BOOL",
+      },
+      {
+        property_code: "GLOBAL",
+        policy_key: "SCHED_MIN_LEAD_HOURS",
+        value: "0",
+        value_type: "NUMBER",
+      },
+      {
+        property_code: "GLOBAL",
+        policy_key: "SCHED_MAX_DAYS_OUT",
+        value: "60",
+        value_type: "NUMBER",
+      },
+      {
+        property_code: "PENN",
+        policy_key: "SCHED_MIN_LEAD_HOURS",
+        value: "0",
+        value_type: "NUMBER",
+      },
+    ],
+  };
+}
+
+module.exports = {
+  createScenarioMemorySupabase,
+  scenarioMaintenanceSeedPenn,
+  SCENARIO_TENANT_E164,
+};

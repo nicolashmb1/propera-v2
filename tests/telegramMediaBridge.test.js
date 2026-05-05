@@ -21,6 +21,7 @@ describe("telegram adapter media bridge", () => {
     assert.equal(Array.isArray(signal.body.media), true);
     assert.equal(signal.body.media.length, 1);
     assert.equal(signal.body.media[0].file_id, "best");
+    assert.equal(signal.body.media[0].provider, "telegram");
   });
 
   test("buildRouterParameterFromTelegram emits _mediaJson when media exists", () => {

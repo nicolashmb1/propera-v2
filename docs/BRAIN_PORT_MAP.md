@@ -46,7 +46,7 @@
 2. **Adapter** — Telegram: `verifyTelegramWebhookSecret`, `normalizeTelegramUpdate`, optional `enrichTelegramMediaWithOcr` → `buildRouterParameterFromTelegram`. Twilio: `buildRouterParameterFromTwilio` (form body).
 3. **`runInboundPipeline`** — `src/inbound/runInboundPipeline.js` (shared):
    - `upsertTelegramChatLink` (Telegram only)
-   - `resolveStaffContextFromRouterParameter`
+   - `resolveStaffContextFromRouterParameter` — staff roster match on real phone **or** `telegram_chat_link` bridge from `TG:…` (channel-agnostic identity; no duplicate `TG:` `contacts` row required when link row carries `phone_e164`)
    - `evaluateRouterPrecursor` → `normalizeInboundEventFromRouterParameter`
    - **`buildLaneDecision`** — `src/inbound/routeInboundDecision.js` (staff capture / staff gate **or** `decideLane`)
    - Staff lifecycle / SMS compliance / opt-out suppress / **non-maintenance lane stub** (vendor/system) / **`handleInboundCore`**

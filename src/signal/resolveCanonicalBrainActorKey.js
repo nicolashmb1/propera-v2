@@ -5,6 +5,9 @@
  * @see PROPERA_GUARDRAILS.md — Signal → Brain; adapters normalize transport, identity resolves canonical.
  */
 const { normalizePhoneE164 } = require("../utils/phone");
+const {
+  getLinkedPhoneE164ForTelegramInbound,
+} = require("../dal/telegramChatLinkLookup");
 
 /**
  * @param {object} o
@@ -38,32 +41,14 @@ async function resolveCanonicalBrainActorKey(o) {
   }
 
   const chatId = String(routerParameter._telegramChatId || "").trim();
-  if (chatId) {
-    const { data: linkByChat } = await sb
-      .from("telegram_chat_link")
-      .select("phone_e164")
-      .eq("telegram_chat_id", chatId)
-      .maybeSingle();
-    if (linkByChat && linkByChat.phone_e164) {
-      return String(linkByChat.phone_e164).trim();
-    }
-  }
-
   const raw = transportActorKey;
   const tgDigits = raw.replace(/^TG:/i, "").replace(/\D/g, "");
   if (tgDigits && /^TG:/i.test(raw)) {
-    const { data: rows } = await sb
-      .from("telegram_chat_link")
-      .select("phone_e164")
-      .eq("telegram_user_id", tgDigits)
-      .order("updated_at", { ascending: false })
-      .limit(5);
-    if (rows && rows.length) {
-      for (const row of rows) {
-        const ph = row && String(row.phone_e164 || "").trim();
-        if (ph) return ph;
-      }
-    }
+    const bridged = await getLinkedPhoneE164ForTelegramInbound(sb, {
+      telegramUserIdDigits: tgDigits,
+      telegramChatId: chatId,
+    });
+    if (bridged) return String(bridged).trim();
   }
 
   if (staffRow && staffRow.staff_id) {

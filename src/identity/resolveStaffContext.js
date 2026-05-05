@@ -4,18 +4,13 @@
  * @see ../../../16_ROUTER_ENGINE.gs — staffActorKey / _telegramChatId (~265–277)
  */
 const { getSupabase } = require("../db/supabase");
+const {
+  getLinkedPhoneE164ForTelegramInbound,
+} = require("../dal/telegramChatLinkLookup");
 const { normalizePhoneE164 } = require("../utils/phone");
-
-/**
- * @param {string} raw
- * @returns {string} "" or "TG:<digits>"
- */
-function normalizeTelegramActorKeyForStaff(raw) {
-  const s = String(raw || "").trim();
-  if (!/^TG:/i.test(s)) return "";
-  const id = s.replace(/^TG:\s*/i, "").replace(/\D/g, "");
-  return id ? "TG:" + id : "";
-}
+const {
+  normalizeTelegramActorKeyForStaff,
+} = require("../utils/telegramActor");
 
 /**
  * @param {Record<string, string | undefined>} p — RouterParameter
@@ -111,6 +106,37 @@ async function resolveStaffContextFromRouterParameter(parameter) {
         phoneForLog: phone,
         staff: r.staff,
       };
+    }
+  }
+
+  /**
+   * Roster phone on `contacts`; Telegram-only transport key `TG:…` — bridge via
+   * `telegram_chat_link` (same table outgate uses for TG-first sends).
+   */
+  if (isTgActor) {
+    const tgKey = normalizeTelegramActorKeyForStaff(staffActorKey);
+    const userDigits = tgKey
+      ? tgKey.replace(/^TG:/i, "").replace(/\D/g, "")
+      : "";
+    const linkedPhone = await getLinkedPhoneE164ForTelegramInbound(sb, {
+      telegramUserIdDigits: userDigits,
+      telegramChatId: chatDigits,
+    });
+    if (linkedPhone) {
+      const keyForStaff =
+        normalizePhoneE164(linkedPhone) || String(linkedPhone).trim();
+      if (keyForStaff) {
+        r = await isStaffForLookupKey(sb, keyForStaff);
+        if (r.isStaff) {
+          return {
+            staffActorKey: keyForStaff,
+            isStaff: true,
+            reason: "staff_match_telegram_chat_link",
+            phoneForLog: phone,
+            staff: r.staff,
+          };
+        }
+      }
     }
   }
 

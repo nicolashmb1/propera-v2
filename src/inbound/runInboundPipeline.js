@@ -11,7 +11,7 @@ const {
   parseMediaJson,
   composeInboundTextWithMedia,
 } = require("../brain/shared/mediaPayload");
-const { enrichTwilioMediaWithOcr } = require("../adapters/twilio/enrichTwilioMediaWithOcr");
+const { enrichInboundMediaWithOcr } = require("../brain/shared/enrichInboundMediaWithOcr");
 const { appendEventLog } = require("../dal/appendEventLog");
 const { isDbConfigured, getSupabase } = require("../db/supabase");
 const {
@@ -93,12 +93,10 @@ async function runInboundPipeline(o) {
   const signal = o.telegramSignal || null;
   const logKind = String(o.logKind || "inbound").trim() || "inbound";
 
-  if (transportChannel === "sms" || transportChannel === "whatsapp") {
-    const mediaArr = parseMediaJson(routerParameter._mediaJson);
-    if (mediaArr.length) {
-      const enriched = await enrichTwilioMediaWithOcr(mediaArr);
-      routerParameter._mediaJson = JSON.stringify(enriched);
-    }
+  const mediaArr = parseMediaJson(routerParameter._mediaJson);
+  if (mediaArr.length) {
+    const enriched = await enrichInboundMediaWithOcr(mediaArr);
+    routerParameter._mediaJson = JSON.stringify(enriched);
   }
 
   const smsCompliance = complianceSmsOnly(transportChannel);
