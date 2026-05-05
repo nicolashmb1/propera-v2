@@ -205,11 +205,30 @@ async function runInboundPipeline(o) {
   let staffRun = null;
   // Portal webhook is token-gated in `index.js`; PM saves must persist even when the
   // actor phone is not linked in `staff` (common for portal-only PM logins).
-  if (transportChannel === "portal" && isDbConfigured()) {
-    staffRun = await tryPortalPmTicketMutation({
-      traceId,
-      routerParameter,
-    });
+  // Same `Update <HUMAN_ID> …` parser for **staff** on Telegram / SMS / WhatsApp so
+  // ticket fields (e.g. unit) can be corrected after `#` capture finalizes (draft row is gone).
+  if (isDbConfigured()) {
+    const staffPmChannel =
+      transportChannel === "portal" ||
+      ((transportChannel === "telegram" ||
+        transportChannel === "whatsapp" ||
+        transportChannel === "sms") &&
+        staffContext &&
+        staffContext.isStaff);
+    if (staffPmChannel) {
+      staffRun = await tryPortalPmTicketMutation({
+        traceId,
+        traceStartMs,
+        routerParameter,
+        staffAmendContext:
+          staffContext && staffContext.isStaff && staffContext.staff
+            ? {
+                staffId: String(staffContext.staff.staff_id || "").trim(),
+                staffActorKey: String(staffContext.staffActorKey || "").trim(),
+              }
+            : null,
+      });
+    }
   }
   if (!staffRun && shouldInvokeStaffLifecycle(precursor, staffContext)) {
     staffRun = await handleStaffLifecycleCommand({
@@ -329,6 +348,9 @@ async function runInboundPipeline(o) {
     effectiveCompliance,
     precursor,
     transportChannel,
+    staffContext: {
+      isStaff: staffContext && staffContext.isStaff === true,
+    },
   });
 
   if (canEnterCore) {

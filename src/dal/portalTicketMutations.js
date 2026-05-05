@@ -5,6 +5,7 @@
 
 const { getSupabase } = require("../db/supabase");
 const { appendEventLog } = require("./appendEventLog");
+const { extractUnit, normalizeUnit_ } = require("../brain/shared/extractUnitGas");
 
 /** Matches `formatHumanTicketId` — PREFIX-MMDDYY-4digits */
 const HUMAN_ID = "([A-Za-z0-9]{2,12}-\\d{6}-\\d{4})";
@@ -33,7 +34,7 @@ function sliceLabeledFreeText(full, labelRe, stopBeforeNextLabel) {
 
 /** Next `fieldName:` segment (`service notes:` matches `service(?:\\s+notes?)?\\s*:`). */
 const LABEL_AHEAD =
-  "(?:category|status|urgency|priority|issue|service(?:\\s+notes?)?|preferred\\s+window|schedule)\\s*:";
+  "(?:category|status|urgency|priority|issue|service(?:\\s+notes?)?|preferred\\s+window|schedule|unit|apt|apartment)\\s*:";
 
 const STOP_BEFORE_NEXT_PORTAL_FIELD = new RegExp(
   "(?:\\.\\s+|\\s+)(?=" + LABEL_AHEAD + ")",
@@ -141,6 +142,11 @@ function hasUpdatableTicketFields(f) {
   if (Object.prototype.hasOwnProperty.call(f, "serviceNotes")) return true;
   if (Object.prototype.hasOwnProperty.call(f, "preferredWindow")) return true;
   if (Object.prototype.hasOwnProperty.call(f, "urgency")) return true;
+  if (
+    Object.prototype.hasOwnProperty.call(f, "unit") &&
+    String(f.unit || "").trim()
+  )
+    return true;
   if (f.attachmentsAdd && Array.isArray(f.attachmentsAdd) && f.attachmentsAdd.length) return true;
   return false;
 }
@@ -231,6 +237,31 @@ function parseFieldsFromUpdateRest(rest) {
   );
   if (pwVal !== undefined) fields.preferredWindow = pwVal;
 
+  /** NL / wire: "apt 322 to 323", "unit 101 as 102" — destination is the right-hand unit. */
+  const swapUnit = r.match(
+    /\b(?:apt|apartment|unit)\s+(\d{1,5}[A-Za-z\-]?)\s*(?:to|→|into|as)\s+(\d{1,5}[A-Za-z\-]?)\b/i
+  );
+  if (swapUnit && swapUnit[2]) {
+    fields.unit = normalizeUnit_(swapUnit[2]);
+  } else {
+    const unitLabeled = sliceLabeledFreeText(
+      r,
+      /\b(?:unit|apt|apartment)\s*:\s*/i,
+      STOP_BEFORE_NEXT_PORTAL_FIELD
+    );
+    if (unitLabeled !== undefined && String(unitLabeled || "").trim()) {
+      fields.unit = normalizeUnit_(unitLabeled);
+    } else if (!fields.unit) {
+      const shouldBe = r.match(/\b(?:should\s+be|meant)\s+(\d{1,5}[A-Za-z\-]?)\b/i);
+      if (shouldBe && shouldBe[1]) {
+        fields.unit = normalizeUnit_(shouldBe[1]);
+      } else if (/\b(?:unit|apt|apartment)\b/i.test(r)) {
+        const ex = extractUnit(r);
+        if (ex) fields.unit = normalizeUnit_(ex);
+      }
+    }
+  }
+
   return fields;
 }
 
@@ -289,6 +320,14 @@ function extractPortalPayloadTicketFields(routerParameter) {
       : [];
   const urls = rawAttach.map((x) => String(x || "").trim()).filter(Boolean);
   if (urls.length) fields.attachmentsAdd = urls;
+
+  if ("unit" in j && j.unit != null && String(j.unit).trim()) {
+    fields.unit = normalizeUnit_(String(j.unit));
+  } else if ("unit_label" in j && j.unit_label != null && String(j.unit_label).trim()) {
+    fields.unit = normalizeUnit_(String(j.unit_label));
+  } else if ("apt" in j && j.apt != null && String(j.apt).trim()) {
+    fields.unit = normalizeUnit_(String(j.apt));
+  }
 
   return { humanTicketId: idOk ? humanTicketId : "", fields };
 }
@@ -382,7 +421,7 @@ async function fetchTicketByHumanId(sb, humanTicketId) {
   if (!id) return null;
   const { data, error } = await sb
     .from("tickets")
-    .select("ticket_id, ticket_key, status, message_raw, attachments")
+    .select("ticket_id, ticket_key, property_code, status, message_raw, attachments")
     .eq("ticket_id", id)
     .maybeSingle();
   if (error || !data) return null;
@@ -399,7 +438,7 @@ async function fetchTicketForPortalMutation(sb, lookupHint) {
   if (TICKET_ROW_UUID_RE.test(hint)) {
     const { data, error } = await sb
       .from("tickets")
-      .select("ticket_id, ticket_key, status, message_raw, attachments")
+      .select("ticket_id, ticket_key, property_code, status, message_raw, attachments")
       .eq("id", hint)
       .maybeSingle();
     if (error || !data) return null;
@@ -422,16 +461,40 @@ async function updateWorkItemsByTicketKey(sb, ticketKey, wiPatch) {
 /**
  * @param {object} o
  * @param {string} o.traceId
+ * @param {number} [o.traceStartMs] — for `applyPreferredWindowByTicketKey` / structured log timing
  * @param {Record<string, string | undefined>} o.routerParameter
  * @returns {Promise<object | null>} staffRun-shaped object, or null to fall through
  */
 async function tryPortalPmTicketMutation(o) {
   const traceId = String(o.traceId || "");
+  const traceStartMs =
+    o.traceStartMs != null && isFinite(Number(o.traceStartMs))
+      ? Number(o.traceStartMs)
+      : undefined;
   const routerParameter = (o && o.routerParameter) || {};
-  const parsed = parsePortalPmTicketRequest(routerParameter);
+  const sb = getSupabase();
+
+  let parsed = parsePortalPmTicketRequest(routerParameter);
+  if (
+    !parsed &&
+    sb &&
+    o.staffAmendContext &&
+    String(o.staffAmendContext.staffId || "").trim()
+  ) {
+    const { tryStaffNaturalLanguageTicketAmend } = require("./staffTicketAmendNl");
+    const nl = await tryStaffNaturalLanguageTicketAmend({
+      sb,
+      traceId,
+      routerParameter,
+      staffId: String(o.staffAmendContext.staffId || "").trim(),
+      staffActorKey: String(o.staffAmendContext.staffActorKey || "").trim(),
+    });
+    if (nl && nl.amendRun) return nl.amendRun;
+    if (nl && nl.parsed) parsed = nl.parsed;
+  }
+
   if (!parsed) return null;
 
-  const sb = getSupabase();
   if (!sb) {
     return {
       ok: false,
@@ -534,13 +597,27 @@ async function tryPortalPmTicketMutation(o) {
   if (Object.prototype.hasOwnProperty.call(f, "serviceNotes")) {
     ticketPatch.service_notes = f.serviceNotes == null ? "" : String(f.serviceNotes).trim();
   }
+  /** Parsed schedule + policy + lifecycle — not a raw `preferred_window` string write. */
+  let scheduleCommitRaw = "";
   if (Object.prototype.hasOwnProperty.call(f, "preferredWindow")) {
-    ticketPatch.preferred_window =
-      f.preferredWindow == null ? "" : String(f.preferredWindow).trim();
+    const pw = f.preferredWindow == null ? "" : String(f.preferredWindow).trim();
+    if (pw.length >= 2) {
+      scheduleCommitRaw = pw;
+    }
   }
   if (Object.prototype.hasOwnProperty.call(f, "urgency")) {
     const u = f.urgency == null ? "" : String(f.urgency).trim();
     ticketPatch.priority = u ? normalizePortalPriority(u) : "normal";
+  }
+
+  let unitSyncToWorkItem = "";
+  if (Object.prototype.hasOwnProperty.call(f, "unit")) {
+    const u = f.unit == null ? "" : String(f.unit).trim();
+    if (u) {
+      const normalized = normalizeUnit_(u);
+      ticketPatch.unit_label = normalized;
+      unitSyncToWorkItem = normalized;
+    }
   }
 
   if (f.attachmentsAdd && Array.isArray(f.attachmentsAdd) && f.attachmentsAdd.length) {
@@ -577,6 +654,21 @@ async function tryPortalPmTicketMutation(o) {
       replyText: "Could not update ticket: " + tErr2.message,
       resolution: { error: tErr2.message },
     };
+  }
+
+  if (unitSyncToWorkItem && ticketKey) {
+    const wiUnitRes = await updateWorkItemsByTicketKey(sb, ticketKey, {
+      unit_id: unitSyncToWorkItem,
+      updated_at: now,
+    });
+    if (!wiUnitRes.ok) {
+      return {
+        ok: false,
+        brain: "portal_ticket_mutation",
+        replyText: "Ticket unit updated but work item save failed: " + wiUnitRes.error,
+        resolution: { error: wiUnitRes.error },
+      };
+    }
   }
 
   /** @type {Record<string, unknown> | null} */
@@ -623,6 +715,62 @@ async function tryPortalPmTicketMutation(o) {
     }
   }
 
+  /** Parse + policy + `scheduled_end_at`, then lifecycle (`afterTenantScheduleApplied`) — after WI status patch. */
+  let scheduleAppliedLabel = "";
+  if (
+    scheduleCommitRaw &&
+    ticketKey &&
+    canonicalStatus !== "Completed" &&
+    canonicalStatus !== "Deleted"
+  ) {
+    const {
+      applyPreferredWindowByTicketKey,
+      schedulePolicyRejectMessage,
+    } = require("./ticketPreferredWindow");
+    const { afterTenantScheduleApplied } = require("../brain/lifecycle/afterTenantScheduleApplied");
+
+    const schedRes = await applyPreferredWindowByTicketKey({
+      ticketKey,
+      preferredWindow: scheduleCommitRaw,
+      traceId,
+      traceStartMs,
+    });
+
+    if (!schedRes.ok) {
+      const msg =
+        schedRes.error === "policy"
+          ? schedulePolicyRejectMessage(schedRes.policyKey, schedRes.policyVars)
+          : schedRes.error === "bad_input"
+            ? "Could not interpret that time window. Try a clearer day and time (e.g. tomorrow 9–11am)."
+            : "Schedule could not be saved: " + String(schedRes.error || "error");
+      return {
+        ok: false,
+        brain: "portal_ticket_mutation",
+        replyText: "Ticket updated but schedule was not applied: " + msg,
+        resolution: {
+          error: schedRes.error,
+          policy_key: schedRes.policyKey || null,
+          humanTicketId: resolvedTicketId,
+        },
+      };
+    }
+
+    const propHint = String((ticket && ticket.property_code) || "").trim();
+    await afterTenantScheduleApplied({
+      sb,
+      ticketKey,
+      parsed: schedRes.parsed || null,
+      propertyCodeHint: propHint,
+      traceId,
+      traceStartMs: traceStartMs != null ? traceStartMs : undefined,
+    });
+
+    scheduleAppliedLabel =
+      schedRes.parsed && schedRes.parsed.label
+        ? String(schedRes.parsed.label).trim()
+        : scheduleCommitRaw.slice(0, 120);
+  }
+
   await appendEventLog({
     traceId,
     log_kind: "portal",
@@ -635,6 +783,7 @@ async function tryPortalPmTicketMutation(o) {
       canonical_status: canonicalStatus || undefined,
       attachments_added:
         f.attachmentsAdd && Array.isArray(f.attachmentsAdd) ? f.attachmentsAdd.length : 0,
+      schedule_commit: scheduleAppliedLabel ? { applied: true, label: scheduleAppliedLabel } : undefined,
     },
   });
 
@@ -644,7 +793,10 @@ async function tryPortalPmTicketMutation(o) {
   if (Object.prototype.hasOwnProperty.call(f, "category")) bits.push("category");
   if (Object.prototype.hasOwnProperty.call(f, "urgency")) bits.push("urgency");
   if (Object.prototype.hasOwnProperty.call(f, "serviceNotes")) bits.push("service notes");
-  if (Object.prototype.hasOwnProperty.call(f, "preferredWindow")) bits.push("schedule");
+  if (scheduleAppliedLabel) bits.push("schedule " + scheduleAppliedLabel);
+  if (Object.prototype.hasOwnProperty.call(f, "unit") && String(f.unit || "").trim()) {
+    bits.push("unit " + String(f.unit || "").trim());
+  }
   if (f.attachmentsAdd && f.attachmentsAdd.length) bits.push("attachments +" + f.attachmentsAdd.length);
   return {
     ok: true,
@@ -659,6 +811,7 @@ module.exports = {
   parsePortalPmTicketBody,
   parsePortalPmTicketRequest,
   parseFieldsFromUpdateRest,
+  hasUpdatableTicketFields,
   extractPortalPayloadTicketFields,
   flattenPortalPayload,
   pickTicketLookupHintFromFlat,

@@ -140,6 +140,7 @@ function buildNonMaintenanceLaneStub(lane) {
  * @param {string | null | undefined} o.effectiveCompliance — blocks core when truthy (SMS keyword matched)
  * @param {{ outcome: string, tenantCommand?: string | null }} o.precursor
  * @param {string} [o.transportChannel] — when `portal`, core (LLM intake) is off except `#` staff capture
+ * @param {{ isStaff?: boolean }} [o.staffContext] — when true, tenant maintenance core is forbidden except `#` staff capture
  */
 function computeCanEnterCore(o) {
   const {
@@ -152,12 +153,18 @@ function computeCanEnterCore(o) {
     effectiveCompliance,
     precursor,
     transportChannel,
+    staffContext,
   } = o || {};
   if (!laneAllowsMaintenanceCore(laneDecision)) return false;
 
   const transport = String(transportChannel || "").toLowerCase();
   const outcome = String((precursor && precursor.outcome) || "");
   if (transport === "portal" && outcome !== "STAFF_CAPTURE_HASH") {
+    return false;
+  }
+
+  /** Staff identity must not open tenant intake (`TENANT` mode); only `#` staff capture uses core. */
+  if (staffContext && staffContext.isStaff && outcome !== "STAFF_CAPTURE_HASH") {
     return false;
   }
 

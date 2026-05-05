@@ -76,6 +76,15 @@ describe("evaluateRouterPrecursor ordering", () => {
     assert.equal(p.compliance, null);
     assert.equal(p.tenantCommand, null);
   });
+  test("staff sender with empty body → lifecycle gate (never tenant PRECURSOR_EVALUATED)", () => {
+    const p = evaluateRouterPrecursor({
+      parameter: { Body: "", From: "TG:99", _channel: "TELEGRAM" },
+      staffContext: { isStaff: true, staffActorKey: "TG:99" },
+    });
+    assert.equal(p.outcome, "STAFF_LIFECYCLE_GATE");
+    assert.equal(p.compliance, null);
+    assert.equal(p.tenantCommand, null);
+  });
   test("non-staff help → compliance HELP unchanged", () => {
     const p = evaluateRouterPrecursor({
       parameter: { Body: "help", From: "TG:1" },

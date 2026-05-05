@@ -12,7 +12,7 @@ This document is the **reviewer-facing** map of **order**, **guards**, and **lan
 |------|-----------|--------|
 | 1 | `upsertTelegramChatLink` (Telegram only) | Transport shell |
 | 2 | `resolveStaffContextFromRouterParameter` | Staff row + actor key |
-| 3 | `evaluateRouterPrecursor` | Compliance keywords, `#` capture, staff lifecycle gate, tenant commands |
+| 3 | `evaluateRouterPrecursor` | `#` staff capture first; **any** identified staff → `STAFF_LIFECYCLE_GATE` (including **empty body**); else compliance / tenant commands |
 | 4 | `normalizeInboundEventFromRouterParameter` | Canonical inbound event for lane |
 | 5 | `buildLaneDecision` | Staff capture / staff gate **or** `decideLane(inbound)` |
 | 6 | `appendEventLog` `LANE_DECIDED` | Flight recorder |
@@ -42,6 +42,7 @@ This document is the **reviewer-facing** map of **order**, **guards**, and **lan
 | No SMS compliance keyword path | `!effectiveCompliance` (SMS STOP/START/HELP path) |
 | No tenant command | `!precursor.tenantCommand` |
 | Precursor allows core | `STAFF_CAPTURE_HASH` **or** `PRECURSOR_EVALUATED` |
+| **Not staff tenant-intake** | `computeCanEnterCore`: if `staffContext.isStaff` and precursor is **not** `STAFF_CAPTURE_HASH` → **false** (staff never opens `handleInboundCore` in `TENANT` mode; non-`#` traffic is lifecycle / PM amend, not tenant lane) |
 
 If any fails → core does not run.
 
@@ -55,6 +56,20 @@ If any fails → core does not run.
 | `STAFF_CAPTURE_HASH` | Yes (if other guards pass) | `#` strip → `MANAGER` mode |
 | `PRECURSOR_EVALUATED` | Yes (if lane + guards pass) | Normal tenant/manager flow |
 | Other | No | Router does not open core |
+
+---
+
+## 3b. Staff messaging without the app (SMS / WhatsApp / Telegram)
+
+Identified **staff** never use tenant maintenance intake (see §2 staff guard); non-`#` text is handled **before** core in this order:
+
+1. **PM-style ticket patch** — strict `Update PENN-MMDDYY-#### …` or deterministic **natural language** amend (`staffTicketAmendNl.js` + `portalTicketMutations.js`): unit, issue, status, urgency, **preferred window / schedule phrase** (parsed via **`applyPreferredWindowByTicketKey`** + **`afterTenantScheduleApplied`** — same as tenant schedule commit, not a raw string-only write), attachments, etc.
+2. **`handleStaffLifecycleCommand`** — same WI resolution as always:
+   - **Schedule:** natural language window after property/unit/issue context (e.g. “Friday afternoon”) → `SCHEDULE_SET` when parse + policy succeed.
+   - **Status / done:** phrases like *done, complete, mark complete, wrapped up, all set* → `STAFF_UPDATE` / lifecycle.
+   - **Parts / vendor / access / delayed** — existing keyword paths.
+
+Use **`#`** only for **new staff capture** drafts; use plain text for lifecycle and ticket edits.
 
 ---
 

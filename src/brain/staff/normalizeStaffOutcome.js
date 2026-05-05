@@ -79,7 +79,13 @@ function normalizeStaffOutcome(bodyTrim) {
     .toLowerCase()
     .trim();
   if (!t) return "UNRESOLVED";
-  if (/\b(done|complete|completed|finished|fixed|resolved)\b/.test(t)) return "COMPLETED";
+  if (
+    /\b(done|complete|completed|finished|fixed|resolved|mark\s+complete|marked\s+complete|close\s*out|wrapped\s+up|all\s+set|taken\s+care\s+of)\b/.test(
+      t
+    )
+  ) {
+    return "COMPLETED";
+  }
   if (/\b(in progress|working on it|started|on it)\b/.test(t)) return "IN_PROGRESS";
   if (/\b(waiting on parts|parts ordered|waiting for parts|backorder)\b/.test(t)) {
     const eta = parsePartsEta(bodyTrim);

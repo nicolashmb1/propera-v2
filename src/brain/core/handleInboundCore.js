@@ -40,8 +40,8 @@ const {
 } = require("./parseMaintenanceDraft");
 const {
   normalizeLocationType,
-  inferLocationTypeFromText,
   isCommonAreaLocation,
+  resolveMaintenanceDraftLocationType,
 } = require("../shared/commonArea");
 const { mergeMaintenanceDraftTurn } = require("./mergeMaintenanceDraft");
 const {
@@ -793,8 +793,11 @@ async function handleInboundCore(o) {
         ? { emergency: "No", emergencyType: "" }
         : inferEmergency(fastDraft.issueText);
     const fastLocationType = normalizeLocationType(
-      fastDraft.locationType ||
-        inferLocationTypeFromText(fastDraft.issueText || effectiveBody)
+      resolveMaintenanceDraftLocationType(
+        fastDraft,
+        effectiveBody,
+        fastDraft.issueText
+      )
     );
     const commonAreaFast = isCommonAreaLocation(fastLocationType);
     const scheduleHintPortalFast =
@@ -1100,13 +1103,28 @@ async function handleInboundCore(o) {
       parsedDraft: fastDraft,
     });
     const flagsNew = draftFlagsFromSlots(restarted);
+    const restartedIssueFin = issueTextForFinalize(
+      restarted.draft_issue,
+      restarted.draft_issue_buf_json
+    );
+    const restartLocType = resolveMaintenanceDraftLocationType(
+      fastDraft,
+      effectiveBody,
+      restartedIssueFin,
+      restarted.draft_issue
+    );
+    const restartCommon = isCommonAreaLocation(restartLocType);
+    const emRestart =
+      mode === "MANAGER" && isPortalCreateTicketRouter(p)
+        ? { emergency: "No", emergencyType: "" }
+        : inferEmergency(restartedIssueFin || restarted.draft_issue);
     const recNew = recomputeDraftExpected({
       hasIssue: flagsNew.hasIssue,
       hasProperty: flagsNew.hasProperty,
-      hasUnit: flagsNew.hasUnit,
+      hasUnit: restartCommon ? true : flagsNew.hasUnit,
       hasSchedule: flagsNew.hasSchedule,
       pendingTicketRow: 0,
-      skipScheduling: false,
+      skipScheduling: emRestart.emergency === "Yes" || restartCommon,
       isEmergencyContinuation: false,
       openerNext: fastDraft && fastDraft.openerNext ? fastDraft.openerNext : "",
       staffCaptureNoScheduleAsk: isStaffCapture,
@@ -1141,9 +1159,12 @@ async function handleInboundCore(o) {
     merged.draft_issue,
     merged.draft_issue_buf_json
   );
-  const draftLocationType = isCommonAreaLocation(fastDraft.locationType)
-    ? "COMMON_AREA"
-    : inferLocationTypeFromText(issueForFinalize || merged.draft_issue || effectiveBody);
+  const draftLocationType = resolveMaintenanceDraftLocationType(
+    fastDraft,
+    effectiveBody,
+    issueForFinalize,
+    merged.draft_issue
+  );
   const commonAreaDraft = isCommonAreaLocation(draftLocationType);
   const em =
     mode === "MANAGER" && isPortalCreateTicketRouter(p)

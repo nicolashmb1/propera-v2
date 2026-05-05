@@ -55,6 +55,36 @@ describe("parsePortalPmTicketBody", () => {
     assert.equal(p.fields.preferredWindow, "tomorrow 9–12.");
   });
 
+  test("update unit only via apt (staff Telegram / portal PM line)", () => {
+    const p = parsePortalPmTicketBody(
+      "Update PENN-050426-6362 Apt 322, not 323. My bad."
+    );
+    assert.equal(p && p.kind, "update");
+    assert.equal(p.humanTicketId, "PENN-050426-6362");
+    assert.equal(p.fields.unit, "322");
+  });
+
+  test("update unit via labeled unit:", () => {
+    const p = parsePortalPmTicketBody(
+      "Update PENN-050426-6362. unit: 322-B"
+    );
+    assert.equal(p && p.kind, "update");
+    assert.equal(p.fields.unit, "322-B");
+  });
+
+  test("status-only update does not invent unit from ticket id digits", () => {
+    const p = parsePortalPmTicketBody("Update PENN-042626-1877. status Open.");
+    assert.equal(p && p.kind, "update");
+    assert.equal(p.fields.statusRaw, "Open");
+    assert.equal(Object.prototype.hasOwnProperty.call(p.fields, "unit"), false);
+  });
+
+  test("parseFieldsFromUpdateRest: apt A to B picks destination unit", () => {
+    const { parseFieldsFromUpdateRest } = require("../src/dal/portalTicketMutations");
+    const f = parseFieldsFromUpdateRest("change apt 322 to 323 for penn");
+    assert.equal(f.unit, "323");
+  });
+
   test("issue keeps text after periods until next field", () => {
     const p = parsePortalPmTicketBody(
       "Update PENN-042626-1877. issue: Sink drips. Pool light flickers. category: Plumbing."
@@ -218,6 +248,18 @@ describe("parsePortalPmTicketRequest (Body + _portalPayloadJson)", () => {
     assert.equal(p?.humanTicketId, "PENN-042626-8784");
     assert.equal(p?.fields.issue, "ICEMAKER WORKS BUT DISPENSER IS NOT WORKING");
     assert.equal(p?.fields.category, "Appliance");
+  });
+
+  test("JSON unit_label merges for portal PATCH", () => {
+    const p = parsePortalPmTicketRequest({
+      Body: "noop",
+      _portalPayloadJson: JSON.stringify({
+        ticketId: "PENN-050426-6362",
+        unit_label: "322",
+      }),
+    });
+    assert.equal(p?.kind, "update");
+    assert.equal(p?.fields.unit, "322");
   });
 
   test("noop Body does not override JSON message_raw", () => {

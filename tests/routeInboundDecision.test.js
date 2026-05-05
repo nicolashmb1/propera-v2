@@ -55,8 +55,28 @@ test("computeCanEnterCore — happy path tenant", () => {
       effectiveCompliance: null,
       precursor,
       transportChannel: "sms",
+      staffContext: { isStaff: false },
     }),
     true
+  );
+});
+
+test("computeCanEnterCore — staff never enters tenant maintenance core", () => {
+  const precursor = { outcome: "PRECURSOR_EVALUATED", tenantCommand: null };
+  assert.equal(
+    computeCanEnterCore({
+      laneDecision: tenantLane,
+      coreEnabledFlag: true,
+      dbConfigured: true,
+      staffRun: null,
+      complianceRun: null,
+      suppressedRun: null,
+      effectiveCompliance: null,
+      precursor,
+      transportChannel: "telegram",
+      staffContext: { isStaff: true },
+    }),
+    false
   );
 });
 
@@ -82,6 +102,7 @@ test("computeCanEnterCore — portal skips maintenance core (no LLM) except # st
         tenantCommand: null,
       },
       transportChannel: "portal",
+      staffContext: { isStaff: true },
     }),
     true
   );
@@ -96,6 +117,7 @@ test("computeCanEnterCore — portal skips maintenance core (no LLM) except # st
       effectiveCompliance: null,
       precursor: { outcome: "PRECURSOR_EVALUATED", tenantCommand: null },
       transportChannel: "portal",
+      staffContext: { isStaff: false },
     }),
     false
   );
@@ -113,6 +135,7 @@ test("computeCanEnterCore — blocked by compliance keyword on SMS", () => {
       suppressedRun: null,
       effectiveCompliance: "STOP",
       precursor,
+      staffContext: { isStaff: false },
     }),
     false
   );
@@ -130,6 +153,7 @@ test("computeCanEnterCore — staff lifecycle ran", () => {
       suppressedRun: null,
       effectiveCompliance: null,
       precursor,
+      staffContext: { isStaff: false },
     }),
     false
   );
@@ -147,6 +171,7 @@ test("computeCanEnterCore — blocked on vendor lane (20-C)", () => {
       suppressedRun: null,
       effectiveCompliance: null,
       precursor,
+      staffContext: { isStaff: false },
     }),
     false
   );

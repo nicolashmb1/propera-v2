@@ -225,7 +225,9 @@ async function handleStaffLifecycleCommand(o) {
 
   const lower = body.toLowerCase();
   const hasDoneOrStatus =
-    /\b(done|complete|completed|finished|fixed|resolved)\b/.test(lower) ||
+    /\b(done|complete|completed|finished|fixed|resolved|mark\s+complete|marked\s+complete|close\s*out|wrapped\s+up|all\s+set|taken\s+care\s+of)\b/.test(
+      lower
+    ) ||
     /\b(in progress|working on it|started|on it)\b/.test(lower) ||
     /\b(waiting on parts|parts ordered|waiting for parts|backorder)\b/.test(lower) ||
     /\b(vendor|contractor|need to send|dispatch)\b/.test(lower) ||
@@ -464,7 +466,7 @@ async function handleStaffLifecycleCommand(o) {
       replyText:
         "Ticket " +
         resolved.wiId +
-        " selected. Reply with a status: done, in progress, waiting on parts, needs vendor, delayed, or access issue — or a visit window (e.g. tomorrow 9–11am).",
+        " selected. Reply with a status: done, mark complete, in progress, waiting on parts, needs vendor, delayed, or access issue — or a visit window (e.g. tomorrow 9–11am).",
       resolution: resolved,
     };
   }

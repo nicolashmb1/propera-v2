@@ -45,12 +45,12 @@ function evaluateRouterPrecursor(opts) {
     };
   }
 
-  if (
-    bodyTrim &&
-    bodyTrim.charAt(0) !== "#" &&
-    staffCtx &&
-    staffCtx.isStaff
-  ) {
+  /**
+   * Staff senders (phone or Telegram identity in `staff` / `contacts`) must **never** fall through to
+   * `PRECURSOR_EVALUATED` tenant maintenance — including **empty body** (media-only, adapter overrides).
+   * Non-`#` traffic is staff lifecycle / PM amend / schedule outcomes, not tenant intake.
+   */
+  if (staffCtx && staffCtx.isStaff) {
     return {
       outcome: "STAFF_LIFECYCLE_GATE",
       staffGate: {
