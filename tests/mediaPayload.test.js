@@ -2,6 +2,7 @@ const { test, describe } = require("node:test");
 const assert = require("node:assert/strict");
 const {
   parseMediaJson,
+  issueHintFromTelegramPhotoCaption,
   mediaTextHints,
   composeInboundTextWithMedia,
 } = require("../src/brain/shared/mediaPayload");
@@ -30,6 +31,87 @@ describe("mediaPayload (channel-agnostic media bridge)", () => {
     );
     assert.ok(txt.includes("photo attached"));
     assert.ok(txt.includes("Sink leaking in 303 penn"));
+  });
+
+  test("composeInboundTextWithMedia appends strong media signal synthetic body", () => {
+    const txt = composeInboundTextWithMedia(
+      "Penn 403",
+      [{ caption: "#staff" }],
+      500,
+      [
+        {
+          syntheticBody: "sink leaking",
+          issueNameHint: "sink leaking",
+          confidence: { issue: 0.78 },
+        },
+      ]
+    );
+    assert.equal(txt, "Penn 403\nsink leaking");
+  });
+
+  test("composeInboundTextWithMedia skips weak visual guesses but keeps OCR text", () => {
+    const txt = composeInboundTextWithMedia(
+      "Penn 403",
+      [],
+      500,
+      [
+        {
+          ocrText: "Unit 403 bathroom light is not working",
+          issueNameHint: "maybe electrical",
+          confidence: { issue: 0.2, ocr: 0.8 },
+          needsClarification: true,
+        },
+      ]
+    );
+    assert.equal(txt, "Penn 403\nUnit 403 bathroom light is not working");
+    assert.ok(!txt.includes("maybe electrical"));
+  });
+
+  test("issueHintFromTelegramPhotoCaption strips staff routing-only captions", () => {
+    assert.equal(issueHintFromTelegramPhotoCaption("#"), "");
+    assert.equal(issueHintFromTelegramPhotoCaption("  #  "), "");
+    assert.equal(issueHintFromTelegramPhotoCaption("#d126"), "");
+    assert.equal(issueHintFromTelegramPhotoCaption("#D126"), "");
+    assert.equal(issueHintFromTelegramPhotoCaption("#staff"), "");
+  });
+
+  test("issueHintFromTelegramPhotoCaption keeps prose after draft id or non-hash captions", () => {
+    assert.equal(
+      issueHintFromTelegramPhotoCaption("#d126 water leak under sink"),
+      "water leak under sink"
+    );
+    assert.equal(
+      issueHintFromTelegramPhotoCaption("# tenant says heat is out"),
+      "tenant says heat is out"
+    );
+    assert.equal(
+      issueHintFromTelegramPhotoCaption("#staff Penn 403 sink leak"),
+      "Penn 403 sink leak"
+    );
+    assert.equal(
+      issueHintFromTelegramPhotoCaption("No hash just issue"),
+      "No hash just issue"
+    );
+  });
+
+  test("mediaTextHints prefers OCR over bare # caption (staff photo + handle)", () => {
+    const hints = mediaTextHints([
+      {
+        caption: "#",
+        ocr_text: "Hello, this is the tenant in 413. Thermostat battery low.",
+      },
+    ]);
+    assert.deepEqual(hints, ["Hello, this is the tenant in 413. Thermostat battery low."]);
+  });
+
+  test("composeInboundTextWithMedia staff capture empty base + OCR only (no lone #)", () => {
+    const txt = composeInboundTextWithMedia(
+      "",
+      [{ caption: "#d126", ocr_text: "Penn 522 toilet paper holder request." }],
+      1400
+    );
+    assert.equal(txt, "Penn 522 toilet paper holder request.");
+    assert.ok(!/\n#\s*$/i.test(txt));
   });
 });
 

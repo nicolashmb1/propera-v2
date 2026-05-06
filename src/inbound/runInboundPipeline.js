@@ -11,7 +11,10 @@ const {
   parseMediaJson,
   composeInboundTextWithMedia,
 } = require("../brain/shared/mediaPayload");
-const { enrichInboundMediaWithOcr } = require("../brain/shared/enrichInboundMediaWithOcr");
+const {
+  enrichInboundMediaWithSignals,
+  parseMediaSignalsJson,
+} = require("../brain/shared/mediaSignalRuntime");
 const { appendEventLog } = require("../dal/appendEventLog");
 const { isDbConfigured, getSupabase } = require("../db/supabase");
 const {
@@ -84,6 +87,7 @@ function resolveOutboundIntentType(o) {
  * @param {'sms' | 'whatsapp' | 'telegram' | 'portal'} o.transportChannel
  * @param {object} [o.telegramSignal] — required for Telegram outbound + chat link
  * @param {string} [o.logKind] — structured log kind prefix
+ * @param {object} [o.mediaSignalDeps] — test injection for shared media signal runtime
  */
 async function runInboundPipeline(o) {
   const traceId = o.traceId || "";
@@ -95,8 +99,15 @@ async function runInboundPipeline(o) {
 
   const mediaArr = parseMediaJson(routerParameter._mediaJson);
   if (mediaArr.length) {
-    const enriched = await enrichInboundMediaWithOcr(mediaArr);
-    routerParameter._mediaJson = JSON.stringify(enriched);
+    const enriched = await enrichInboundMediaWithSignals(mediaArr, {
+      bodyText: String(routerParameter.Body || ""),
+      channel: transportChannel,
+      deps: o.mediaSignalDeps,
+    });
+    routerParameter._mediaJson = JSON.stringify(enriched.media);
+    routerParameter._mediaSignalsJson = enriched.mediaSignals.length
+      ? JSON.stringify(enriched.mediaSignals)
+      : "";
   }
 
   const smsCompliance = complianceSmsOnly(transportChannel);
@@ -359,6 +370,7 @@ async function runInboundPipeline(o) {
         ).trim()
       : String(routerParameter.Body || "").trim();
     const mediaForCore = parseMediaJson(routerParameter._mediaJson);
+    const mediaSignalsForCore = parseMediaSignalsJson(routerParameter._mediaSignalsJson);
     const staffDraftParsed = isStaffCapture
       ? parseStaffCapDraftIdFromStripped(bodyBase)
       : null;
@@ -370,7 +382,8 @@ async function runInboundPipeline(o) {
     const bodyForCore = composeInboundTextWithMedia(
       textForMediaCompose,
       mediaForCore,
-      1400
+      1400,
+      mediaSignalsForCore
     );
     coreRun = await handleInboundCore({
       traceId,

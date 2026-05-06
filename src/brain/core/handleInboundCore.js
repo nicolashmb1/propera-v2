@@ -54,6 +54,7 @@ const {
 } = require("./portalStructuredCreateDraft");
 const { reconcileFinalizeTicketRows } = require("./finalizeTicketGroups");
 const { parseMediaJson, composeInboundTextWithMedia } = require("../shared/mediaPayload");
+const { parseMediaSignalsJson } = require("../shared/mediaSignalRuntime");
 const { resolveStaffCaptureTenantPhone } = require("../../dal/tenantRoster");
 const {
   afterTenantScheduleApplied,
@@ -82,6 +83,7 @@ const {
   issueTextForFinalize,
 } = require("./handleInboundCoreDraftHelpers");
 const { appendPortalStaffScheduleNote } = require("./appendPortalStaffScheduleNote");
+const { hasProblemSignal } = require("./splitIssueGroups");
 
 /**
  * GAS `enrichStaffCapTenantIdentity_` / `findTenantCandidates_` — resident phone for staff #capture only.
@@ -115,7 +117,8 @@ async function resolveManagerTenantIfNeeded(
   const merged = composeInboundTextWithMedia(
     bodyText,
     parseMediaJson(p._mediaJson),
-    2400
+    2400,
+    parseMediaSignalsJson(p._mediaSignalsJson)
   );
   const r = await resolveStaffCaptureTenantPhone({
     sb,
@@ -143,6 +146,32 @@ async function loadPropertyCodesUpper(sb) {
 /** Outgate hints — templateKey is stable; text still built by brain until MessageSpec bind. */
 function outgateMeta(templateKey, extra) {
   return { outgate: { templateKey, ...(extra || {}) } };
+}
+
+function hasClarifyingStaffMediaSignal(mediaSignals) {
+  const list = Array.isArray(mediaSignals) ? mediaSignals : [];
+  return list.some((sig) => {
+    if (!sig || typeof sig !== "object") return false;
+    if (sig.needsClarification) return true;
+    const issueConf =
+      sig.confidence && typeof sig.confidence === "object"
+        ? Number(sig.confidence.issue)
+        : 0;
+    const hasIssueText = !!String(
+      sig.syntheticBody || sig.issueNameHint || sig.issueDescriptionHint || ""
+    ).trim();
+    return !hasIssueText && isFinite(issueConf) && issueConf > 0 && issueConf < 0.55;
+  });
+}
+
+function buildStaffPhotoIssueClarification(draft) {
+  const prop = String(draft && draft.draft_property || "").trim();
+  const unit = String(draft && draft.draft_unit || "").trim();
+  const place = [prop, unit].filter(Boolean).join(" ");
+  if (place) {
+    return "I received the photo for " + place + ". What issue should I create this for?";
+  }
+  return "I received the photo. What issue should I create this for?";
 }
 
 /**
@@ -178,6 +207,7 @@ async function handleInboundCore(o) {
     ? explicitCanonical
     : explicitCanonical || transportActorKey;
   let bodyText = String(o.bodyText != null ? o.bodyText : p.Body || "").trim();
+  const mediaSignals = parseMediaSignalsJson(p._mediaSignalsJson);
   /** Populated after staff draft resolve — `staffDraftSeq` on core results for D### tagging in pipeline. */
   let staffMeta = () => ({});
   const staffActorKey = String(o.staffActorKey || "").trim();
@@ -291,11 +321,13 @@ async function handleInboundCore(o) {
 
   let draftSeqActive = null;
   let sessionAtStart;
+  let staffTypedPayload = "";
   if (isStaffCapture) {
     const parsed =
       o.staffDraftParsed && typeof o.staffDraftParsed === "object"
         ? o.staffDraftParsed
         : parseStaffCapDraftIdFromStripped("");
+    staffTypedPayload = String(parsed.rest || "").trim();
     const resolved = await resolveStaffCaptureDraftTurn(
       sb,
       draftOwnerKey,
@@ -414,6 +446,7 @@ async function handleInboundCore(o) {
         traceId,
         traceStartMs,
         propertiesList,
+        mediaSignals: [],
       });
       const restarted = mergeMaintenanceDraftTurn({
         bodyText: restartBody,
@@ -485,6 +518,7 @@ async function handleInboundCore(o) {
       traceId,
       traceStartMs,
       propertiesList,
+      mediaSignals,
     });
     const mergedSched = mergeMaintenanceDraftTurn({
       bodyText: effectiveBody,
@@ -630,7 +664,17 @@ async function handleInboundCore(o) {
       traceId,
       traceStartMs,
       propertiesList,
+      mediaSignals,
     });
+  }
+  const suppressIssueFromClarifyMedia =
+    isStaffCapture &&
+    hasClarifyingStaffMediaSignal(mediaSignals) &&
+    !hasProblemSignal(staffTypedPayload);
+  if (suppressIssueFromClarifyMedia) {
+    fastDraft.issueText = "";
+    fastDraft.structuredIssues = null;
+    if (fastDraft.openerNext === "SCHEDULE") fastDraft.openerNext = "";
   }
   if (isMaintenanceDraftComplete(fastDraft)) {
     await appendEventLog({
@@ -912,6 +956,7 @@ async function handleInboundCore(o) {
     propertiesList,
     parsedDraft: fastDraft,
     attachClarifyOutcome: attachClarifyOutcomePass || undefined,
+    suppressIssueCapture: suppressIssueFromClarifyMedia,
   });
 
   if (merged.attachDecision === "clarify_attach_vs_new") {
@@ -1383,13 +1428,21 @@ async function handleInboundCore(o) {
   }
 
   const replyText = buildMaintenancePrompt(next, propertiesList);
+  const staffPhotoClarify =
+    isStaffCapture &&
+    next === "ISSUE" &&
+    hasClarifyingStaffMediaSignal(mediaSignals);
   return {
     ok: true,
     brain: "core_draft_pending",
     draft: merged,
     expected: next,
-    replyText,
-    ...staffMeta(), ...outgateMeta(maintenanceTemplateKeyForNext(next)),
+    replyText: staffPhotoClarify
+      ? buildStaffPhotoIssueClarification(merged)
+      : replyText,
+    ...staffMeta(), ...outgateMeta(maintenanceTemplateKeyForNext(next), {
+      staff_photo_clarify: staffPhotoClarify || undefined,
+    }),
   };
 }
 

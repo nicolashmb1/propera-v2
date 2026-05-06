@@ -88,21 +88,35 @@ async function ocrTelegramImageItem(item, tg) {
   const fileId = String(item && item.file_id ? item.file_id : "").trim();
   if (!fileId) return "";
 
-  const path = await getTelegramFilePath(fileId, tg.botToken);
-  if (!path) return "";
-  const fileUrl = `https://api.telegram.org/file/bot${tg.botToken}/${path}`;
-  const fr = await fetch(fileUrl);
-  if (!fr.ok) return "";
-  const resolvedMime = String(fr.headers.get("content-type") || "image/jpeg").trim();
-  const ab = await fr.arrayBuffer();
-  if (!ab || ab.byteLength < 8) return "";
-  const dataUrl = `data:${resolvedMime};base64,${b64FromArrayBuffer(ab)}`;
+  const dataUrl = await fetchTelegramMediaAsDataUrl(
+    fileId,
+    tg.botToken,
+    item.mime_type || item.contentType || item.mimeType
+  );
+  if (!dataUrl) return "";
   return openaiVisionOcrFromDataUrl(dataUrl, {
     apiKey: tg.apiKey,
     model: tg.model,
     timeoutMs: OCR_TIMEOUT_MS,
     maxRetries: 2,
   });
+}
+
+async function fetchTelegramMediaAsDataUrl(fileId, botToken, hintedMime) {
+  const fid = String(fileId || "").trim();
+  const token = String(botToken || "").trim();
+  if (!fid || !token) return "";
+  const path = await getTelegramFilePath(fid, token);
+  if (!path) return "";
+  const fileUrl = `https://api.telegram.org/file/bot${token}/${path}`;
+  const fr = await fetch(fileUrl);
+  if (!fr.ok) return "";
+  const resolvedMime = String(
+    fr.headers.get("content-type") || hintedMime || "image/jpeg"
+  ).trim();
+  const ab = await fr.arrayBuffer();
+  if (!ab || ab.byteLength < 8) return "";
+  return `data:${resolvedMime};base64,${b64FromArrayBuffer(ab)}`;
 }
 
 /**
@@ -155,4 +169,5 @@ async function enrichInboundMediaWithOcr(mediaList, opts) {
 module.exports = {
   enrichInboundMediaWithOcr,
   normalizeInboundMediaProvider,
+  fetchTelegramMediaAsDataUrl,
 };

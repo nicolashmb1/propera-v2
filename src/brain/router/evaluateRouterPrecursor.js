@@ -10,6 +10,13 @@ const { normMsg } = require("./normMsg");
 const { complianceIntent } = require("./complianceIntent");
 const { detectTenantCommand } = require("./detectTenantCommand");
 
+function stripStaffAliasFromHashPayload(stripped) {
+  return String(stripped || "")
+    .trim()
+    .replace(/^staff\b\s*[:\-]?\s*/i, "")
+    .trim();
+}
+
 /**
  * @param {object} opts
  * @param {Record<string, string | undefined>} opts.parameter — RouterParameter / e.parameter
@@ -31,7 +38,9 @@ function evaluateRouterPrecursor(opts) {
   const staffCtx = opts && opts.staffContext;
 
   if (bodyTrim && bodyTrim.charAt(0) === "#") {
-    const stripped = bodyTrim.replace(/^#\s*/, "").trim();
+    const stripped = stripStaffAliasFromHashPayload(
+      bodyTrim.replace(/^#\s*/, "").trim()
+    );
     return {
       outcome: "STAFF_CAPTURE_HASH",
       staffCapture: {
@@ -79,4 +88,4 @@ function evaluateRouterPrecursor(opts) {
   };
 }
 
-module.exports = { evaluateRouterPrecursor };
+module.exports = { evaluateRouterPrecursor, stripStaffAliasFromHashPayload };

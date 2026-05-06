@@ -130,6 +130,16 @@ function intakeMediaOcrEnabled() {
   return envFlagTrue("INTAKE_MEDIA_OCR_ENABLED", false);
 }
 
+/** Optional visual media signal extraction during intake (facts only, no decisions). */
+function intakeMediaSignalEnabled() {
+  return envFlagTrue("INTAKE_MEDIA_SIGNAL_ENABLED", false);
+}
+
+/** Enables live provider calls for media signal extraction. Requires `OPENAI_API_KEY`. */
+function intakeMediaVisionEnabled() {
+  return envFlagTrue("INTAKE_MEDIA_VISION_ENABLED", false);
+}
+
 /** Vision-capable model for OCR extraction from images. */
 function openaiModelVision() {
   return String(env("OPENAI_MODEL_VISION", "gpt-4o-mini")).trim() || "gpt-4o-mini";
@@ -191,6 +201,8 @@ module.exports = {
   openaiApiKey,
   openaiModelExtract,
   intakeMediaOcrEnabled,
+  intakeMediaSignalEnabled,
+  intakeMediaVisionEnabled,
   openaiModelVision,
   dashboardEnabled,
   dashboardToken,

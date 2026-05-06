@@ -66,6 +66,13 @@ describe("evaluateRouterPrecursor ordering", () => {
     assert.equal(p.staffCapture.stripped, "capture test");
     assert.equal(p.staffCapture.mode, "MANAGER");
   });
+  test("#staff alias strips only the command word", () => {
+    const p = evaluateRouterPrecursor({
+      parameter: { Body: "#staff Penn 403", From: "TG:1" },
+    });
+    assert.equal(p.outcome, "STAFF_CAPTURE_HASH");
+    assert.equal(p.staffCapture.stripped, "Penn 403");
+  });
   test("staff sender → lifecycle gate before compliance (GAS 300–312 before 382+)", () => {
     const p = evaluateRouterPrecursor({
       parameter: { Body: "help", From: "TG:99", _channel: "TELEGRAM" },

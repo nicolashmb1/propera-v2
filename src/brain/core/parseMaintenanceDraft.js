@@ -68,7 +68,7 @@ function parseMaintenanceDraft(bodyTrim, knownPropertyCodesUpper, propertiesList
 /**
  * @param {string} bodyTrim
  * @param {Set<string>} knownPropertyCodesUpper
- * @param {{ traceId?: string, traceStartMs?: number, propertiesList?: Array<{ code: string, display_name: string }> }} [opts]
+ * @param {{ traceId?: string, traceStartMs?: number, propertiesList?: Array<{ code: string, display_name: string }>, mediaSignals?: object[] }} [opts]
  * @returns {Promise<{ propertyCode: string, unitLabel: string, issueText: string, scheduleRaw: string, openerNext: string, locationType: string }>}
  */
 async function parseMaintenanceDraftAsync(bodyTrim, knownPropertyCodesUpper, opts) {
@@ -139,6 +139,8 @@ async function parseMaintenanceDraftAsync(bodyTrim, knownPropertyCodesUpper, opt
         opts && Array.isArray(opts.propertiesList) ? opts.propertiesList : [],
       traceId,
       traceStartMs,
+      mediaSignals:
+        opts && Array.isArray(opts.mediaSignals) ? opts.mediaSignals : [],
     }
   );
   const code =

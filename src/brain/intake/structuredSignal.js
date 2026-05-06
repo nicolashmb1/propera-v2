@@ -16,6 +16,7 @@ function properaStructuredSignalEmpty() {
     statusQueryType: "NONE",
     conversationalReply: "",
     issues: [],
+    mediaSignals: [],
     schedule: null,
     actionSignals: {},
     queryType: "",

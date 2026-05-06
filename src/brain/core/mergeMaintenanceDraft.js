@@ -56,12 +56,14 @@ function resolvePropertyFromReply(bodyTrim, propertiesList) {
  * @param {Set<string>} o.knownPropertyCodesUpper
  * @param {Array<{ code: string, display_name: string }>} o.propertiesList
  * @param {string} [o.attachClarifyOutcome] — see `intakeAttachClassifyDeterministic`
+ * @param {boolean} [o.suppressIssueCapture] — caller already determined this turn carries no usable issue text
  */
 function mergeMaintenanceDraftTurn(o) {
   const bodyText = String(o.bodyText || "").trim();
   const exp = String(o.expected || "ISSUE").toUpperCase();
   const known = o.knownPropertyCodesUpper || new Set();
   const propertiesList = o.propertiesList || [];
+  const suppressIssueCapture = o.suppressIssueCapture === true;
 
   let issue = String(o.draft_issue != null ? o.draft_issue : "").trim();
   let prop = String(o.draft_property != null ? o.draft_property : "").trim();
@@ -130,6 +132,7 @@ function mergeMaintenanceDraftTurn(o) {
   }
 
   function maybeCaptureIssueFromTurn() {
+    if (suppressIssueCapture) return;
     if (attachDec.suppressRawIssueForMerge) return;
     const candidate = parsed.issueText;
     if (!candidate) return;
@@ -147,7 +150,7 @@ function mergeMaintenanceDraftTurn(o) {
 
   if (issue) pushIssueBuffer(issue);
 
-  if (!attachDec.suppressRawIssueForMerge && !issue && parsed.issueText)
+  if (!suppressIssueCapture && !attachDec.suppressRawIssueForMerge && !issue && parsed.issueText)
     issue = parsed.issueText;
   if (!prop && parsed.propertyCode) prop = parsed.propertyCode;
   // Hydrate unit from the same parse as property/issue (compile turn / regex). Matches fast-path
@@ -158,7 +161,7 @@ function mergeMaintenanceDraftTurn(o) {
   }
 
   if (exp === "ISSUE" || exp === "") {
-    if (!attachDec.suppressRawIssueForMerge) {
+    if (!suppressIssueCapture && !attachDec.suppressRawIssueForMerge) {
       if (hasParsedDraft && parsed.issueText) {
         issue = parsed.issueText;
         pushIssueBuffer(parsed.issueText);

@@ -176,6 +176,7 @@ function locationPackFromIssue(issueHead, bodyForText, issuesArr) {
  * @param {object|null} [opts.cigContext]
  * @param {Set<string>} opts.knownPropertyCodesUpper
  * @param {Array<{ code: string, display_name?: string }>} [opts.propertiesList]
+ * @param {object[]} [opts.mediaSignals]
  * @param {string} [opts.traceId] — request trace for structured logs
  * @param {number} [opts.traceStartMs] — HTTP entry time for `elapsed_ms` on log lines
  * @returns {Promise<object>} — intake package (input to `compileTurn`)
@@ -193,6 +194,9 @@ async function properaBuildIntakePackage(opts) {
   const lang = String(opts.lang || "en").toLowerCase();
   const known = opts.knownPropertyCodesUpper;
   const cigContext = opts.cigContext || null;
+  const mediaSignals = Array.isArray(opts.mediaSignals)
+    ? opts.mediaSignals.filter((x) => x && typeof x === "object")
+    : [];
 
   let sig = null;
   let parsedIssueDeterministic = null;
@@ -277,6 +281,7 @@ async function properaBuildIntakePackage(opts) {
     sig = built.sig;
     parsedIssueDeterministic = built.parsedIssueDeterministic;
   }
+  sig.mediaSignals = mediaSignals;
 
   const em = evaluateEmergencySignal_(tRaw);
   if (em && em.isEmergency) {
@@ -427,7 +432,7 @@ async function properaBuildIntakePackage(opts) {
     langConfidence: sig.confidence != null ? Math.min(1, Math.max(0, sig.confidence)) : 0.8,
     originalText: tRaw,
     semanticTextEnglish: tRaw,
-    media: [],
+    media: mediaSignals,
     assetHint: "",
     mediaVisionInterpreted: false,
     mediaVisionConfidence: 0,
