@@ -55,7 +55,11 @@ const {
 const { reconcileFinalizeTicketRows } = require("./finalizeTicketGroups");
 const { parseMediaJson, composeInboundTextWithMedia } = require("../shared/mediaPayload");
 const { parseMediaSignalsJson } = require("../shared/mediaSignalRuntime");
-const { resolveStaffCaptureTenantPhone } = require("../../dal/tenantRoster");
+const {
+  resolveStaffCaptureTenantPhone,
+  isPhoneOnRosterForUnit,
+} = require("../../dal/tenantRoster");
+const { normalizePhoneE164 } = require("../../utils/phone");
 const {
   afterTenantScheduleApplied,
 } = require("../lifecycle/afterTenantScheduleApplied");
@@ -107,13 +111,33 @@ async function resolveManagerTenantIfNeeded(
     return { tenantPhoneE164: "", tenantLookupMeta: null };
   }
   const p = routerParameter || {};
-  const explicitTenant = String(p._tenantPhoneE164 || "").trim();
-  if (explicitTenant) {
-    return {
-      tenantPhoneE164: explicitTenant,
-      tenantLookupMeta: { portal_explicit_tenant: true },
+  const explicitRaw = String(p._tenantPhoneE164 || "").trim();
+  const explicitNorm = explicitRaw ? normalizePhoneE164(explicitRaw) : "";
+  let portalTenantAudit = null;
+  if (explicitNorm) {
+    const rosterOk = await isPhoneOnRosterForUnit(
+      sb,
+      propertyCode,
+      unitLabel,
+      explicitNorm
+    );
+    if (rosterOk) {
+      return {
+        tenantPhoneE164: explicitNorm,
+        tenantLookupMeta: {
+          portal_explicit_tenant: true,
+          roster_validated: true,
+        },
+      };
+    }
+    portalTenantAudit = {
+      portal_explicit_tenant_rejected: true,
+      portal_explicit_tenant_phone_attempted: explicitNorm,
     };
+  } else if (explicitRaw) {
+    portalTenantAudit = { portal_explicit_tenant_invalid_format: true };
   }
+
   const merged = composeInboundTextWithMedia(
     bodyText,
     parseMediaJson(p._mediaJson),
@@ -127,9 +151,13 @@ async function resolveManagerTenantIfNeeded(
     bodyText: merged || bodyText,
     _mediaJson: p._mediaJson,
   });
+  const mergedMeta =
+    portalTenantAudit || r.meta
+      ? { ...(r.meta || {}), ...(portalTenantAudit || {}) }
+      : null;
   return {
     tenantPhoneE164: r.phoneE164 || "",
-    tenantLookupMeta: r.meta || null,
+    tenantLookupMeta: mergedMeta && Object.keys(mergedMeta).length ? mergedMeta : null,
   };
 }
 

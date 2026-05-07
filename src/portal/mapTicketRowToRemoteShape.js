@@ -24,6 +24,11 @@ function mapTicketRowToRemoteShape(row) {
     ? attachmentsRaw.split(/[\n|]+/).map((s) => s.trim()).filter(Boolean)
     : [];
 
+  const phoneE164 = String(r.tenant_phone_e164 || "").trim();
+  const tenantNameRaw = String(r.tenant_name || r.tenant_display_name || "").trim();
+  /** Never show a resident name without a ticket phone — avoids bogus joins when phone is blank. */
+  const tenantName = phoneE164 ? tenantNameRaw : "";
+
   return {
     ticketId: String(r.ticket_id || "").trim(),
     property: prop,
@@ -41,14 +46,16 @@ function mapTicketRowToRemoteShape(row) {
     createdAt: created,
     closedAt: closed,
     tenant: {
-      name: String(r.tenant_name || r.tenant_display_name || "").trim(),
-      phone: String(r.tenant_phone_e164 || "").trim(),
+      name: tenantName,
+      phone: phoneE164,
       email: "",
     },
     attachments: attachmentsList.length ? attachmentsList : undefined,
-    /** Portal merge layer — not part of legacy GAS shape; consumers may strip. */
-    source: "v2",
+    /** Portal merge layer — historical imports use `gas` so app keeps legacy id display (no `v2:` prefix). */
+    source: r.is_imported_history ? "gas" : "v2",
     ticket_key: String(r.ticket_key || "").trim(),
+    /** Historical Sheet1 import — PM mutations must be blocked in app/V2. */
+    isImportedHistory: !!r.is_imported_history,
   };
 }
 

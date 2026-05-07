@@ -20,6 +20,37 @@ const { parseMediaJson, mediaTextHints } = require("../brain/shared/mediaPayload
  * @param {string} queryName — optional name hint (empty = match unit occupants only)
  * @returns {Promise<Array<{ phone: string, name: string, score: number }>>}
  */
+/**
+ * Portal / staff must not attach a tenant phone unless that number is on `tenant_roster`
+ * for the same property + unit (normalized). No cross-asset or contacts fallback.
+ * @param {import("@supabase/supabase-js").SupabaseClient} sb
+ * @param {string} propertyCode
+ * @param {string} unitLabel
+ * @param {string} phoneE164
+ */
+async function isPhoneOnRosterForUnit(sb, propertyCode, unitLabel, phoneE164) {
+  const want = normalizePhoneE164(String(phoneE164 || ""));
+  if (!want || !sb) return false;
+  const code = String(propertyCode || "").trim().toUpperCase();
+  const u = normalizeUnit_(String(unitLabel || ""));
+  if (!code || !u) return false;
+
+  const { data, error } = await sb
+    .from("tenant_roster")
+    .select("phone_e164, unit_label")
+    .eq("property_code", code)
+    .eq("active", true);
+
+  if (error || !data || !data.length) return false;
+
+  for (const row of data) {
+    if (normalizeUnit_(String(row.unit_label || "")) !== u) continue;
+    const ph = normalizePhoneE164(String(row.phone_e164 || ""));
+    if (ph && ph === want) return true;
+  }
+  return false;
+}
+
 async function findTenantCandidates(sb, propertyCode, unitLabel, queryName) {
   const u = normalizeUnit_(String(unitLabel || ""));
   if (!u || !propertyCode || !sb) return [];
@@ -159,7 +190,8 @@ async function resolveStaffCaptureTenantPhone(o) {
     unitLabel,
     finalHint
   );
-  const picked = pickResolvedTenantPhone(candidates, finalHint);
+  let picked = pickResolvedTenantPhone(candidates, finalHint);
+  let phoneE164 = picked.phoneE164 || "";
 
   const meta = {
     tenantNameHint: finalHint,
@@ -171,8 +203,26 @@ async function resolveStaffCaptureTenantPhone(o) {
     meta.tenantLookupMultiCandidateCount = picked.multiCandidateCount;
   }
 
+  const hintNonEmpty = String(finalHint || "").trim().length > 0;
+  if (hintNonEmpty && !phoneE164 && picked.status !== "AMBIGUOUS") {
+    const unitOnly = await findTenantCandidates(sb, propertyCode, unitLabel, "");
+    const pickedUnit = pickResolvedTenantPhone(unitOnly, "");
+    if (pickedUnit.phoneE164) {
+      phoneE164 = pickedUnit.phoneE164;
+      meta.tenantNameHintResolution = picked.status;
+      meta.tenantLookupStatus = pickedUnit.status;
+      meta.tenantLookupMatchedName = pickedUnit.matchedName;
+      meta.tenantLookupUsedUnitOnlyFallback = true;
+      if (pickedUnit.multiCandidateCount != null && pickedUnit.multiCandidateCount > 1) {
+        meta.tenantLookupMultiCandidateCount = pickedUnit.multiCandidateCount;
+      } else if (meta.tenantLookupMultiCandidateCount != null) {
+        delete meta.tenantLookupMultiCandidateCount;
+      }
+    }
+  }
+
   return {
-    phoneE164: picked.phoneE164,
+    phoneE164,
     meta,
   };
 }
@@ -181,4 +231,5 @@ module.exports = {
   findTenantCandidates,
   pickResolvedTenantPhone,
   resolveStaffCaptureTenantPhone,
+  isPhoneOnRosterForUnit,
 };

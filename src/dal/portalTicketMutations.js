@@ -421,7 +421,9 @@ async function fetchTicketByHumanId(sb, humanTicketId) {
   if (!id) return null;
   const { data, error } = await sb
     .from("tickets")
-    .select("ticket_id, ticket_key, property_code, status, message_raw, attachments")
+    .select(
+      "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history"
+    )
     .eq("ticket_id", id)
     .maybeSingle();
   if (error || !data) return null;
@@ -438,7 +440,9 @@ async function fetchTicketForPortalMutation(sb, lookupHint) {
   if (TICKET_ROW_UUID_RE.test(hint)) {
     const { data, error } = await sb
       .from("tickets")
-      .select("ticket_id, ticket_key, property_code, status, message_raw, attachments")
+      .select(
+        "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history"
+      )
       .eq("id", hint)
       .maybeSingle();
     if (error || !data) return null;
@@ -523,6 +527,25 @@ async function tryPortalPmTicketMutation(o) {
   const resolvedTicketId = String(ticket.ticket_id || "").trim();
   const now = new Date().toISOString();
   const ticketKey = String(ticket.ticket_key || "").trim();
+
+  if (ticket.is_imported_history === true) {
+    await appendEventLog({
+      traceId,
+      log_kind: "portal",
+      event: "PORTAL_PM_TICKET_IMPORTED_READ_ONLY",
+      payload: { ticket_id: resolvedTicketId, kind: parsed.kind },
+    });
+    return {
+      ok: false,
+      brain: "portal_ticket_mutation",
+      replyText:
+        "This ticket is historical (imported from GAS) and cannot be changed.",
+      resolution: {
+        error: "imported_history_read_only",
+        humanTicketId: resolvedTicketId,
+      },
+    };
+  }
 
   if (parsed.kind === "soft_delete") {
     const { error: tErr } = await sb

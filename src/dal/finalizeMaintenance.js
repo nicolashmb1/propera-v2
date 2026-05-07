@@ -290,6 +290,13 @@ async function finalizeMaintenanceDraft(o) {
     owner_action_at: null,
     // Create path: no tenant window yet. `scheduled_end_at` set later by `applyPreferredWindowByTicketKey` (parsed.end).
     scheduled_end_at: null,
+
+    is_imported_history: false,
+    source_system: "",
+    source_ticket_id: "",
+    source_row_hash: "",
+    imported_at: null,
+    import_batch_id: "",
   };
 
   const { data: ticket, error: tErr } = await sb
