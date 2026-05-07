@@ -23,6 +23,7 @@ function normUnit(u) {
  * @param {string} opts.bodyTrim
  * @param {{ pending_work_item_id?: string, active_work_item_id?: string } | null} opts.ctx
  * @param {Set<string>} opts.knownPropertyCodesUpper
+ * @param {Array<{ code: string, display_name?: string, ticket_prefix?: string, short_name?: string, address?: string, aliases?: string[] }>} [opts.propertiesList] — `listPropertiesForMenu()` so "Murray" / short names resolve like tenant intake
  * @param {string} [opts.staffId] — for CTX fallback owner check when pending WI not in openWis
  * @param {{ status?: string, owner_id?: string } | null} [opts.ctxPendingWi] — DB row when pending id missing from open list
  */
@@ -33,6 +34,7 @@ function resolveTargetWorkItemForStaff(opts) {
   const known = opts.knownPropertyCodesUpper || new Set();
   const staffId = String(opts.staffId || "").trim();
   const ctxPendingWi = opts.ctxPendingWi || null;
+  const propertiesList = Array.isArray(opts.propertiesList) ? opts.propertiesList : [];
 
   if (openWis.length === 0) {
     return { wiId: "", reason: "CLARIFICATION", suggestedPrompts: [] };
@@ -56,7 +58,7 @@ function resolveTargetWorkItemForStaff(opts) {
   }
 
   const unitFromBody = extractUnitFromBody(body);
-  const propertyHint = extractPropertyHintFromBody(body, known);
+  const propertyHint = extractPropertyHintFromBody(body, known, propertiesList);
 
   let candidates = openWis;
   if (propertyHint) {

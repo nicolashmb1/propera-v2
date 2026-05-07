@@ -139,8 +139,9 @@ function buildNonMaintenanceLaneStub(lane) {
  * @param {object | null} o.suppressedRun
  * @param {string | null | undefined} o.effectiveCompliance — blocks core when truthy (SMS keyword matched)
  * @param {{ outcome: string, tenantCommand?: string | null }} o.precursor
- * @param {string} [o.transportChannel] — when `portal`, core (LLM intake) is off except `#` staff capture
- * @param {{ isStaff?: boolean }} [o.staffContext] — when true, tenant maintenance core is forbidden except `#` staff capture
+ * @param {string} [o.transportChannel] — when `portal`, core is off except `#` staff capture and structured `create_ticket`
+ * @param {{ isStaff?: boolean }} [o.staffContext] — when true, tenant maintenance core is forbidden except `#` staff capture (and portal `create_ticket`)
+ * @param {string} [o.portalAction] — `routerParameter._portalAction` (e.g. `create_ticket`)
  */
 function computeCanEnterCore(o) {
   const {
@@ -154,18 +155,25 @@ function computeCanEnterCore(o) {
     precursor,
     transportChannel,
     staffContext,
+    portalAction,
   } = o || {};
   if (!laneAllowsMaintenanceCore(laneDecision)) return false;
 
   const transport = String(transportChannel || "").toLowerCase();
   const outcome = String((precursor && precursor.outcome) || "");
+  const portalAct = String(portalAction || "").trim().toLowerCase();
+  const portalStructuredCreate = portalAct === "create_ticket";
+
   if (transport === "portal" && outcome !== "STAFF_CAPTURE_HASH") {
-    return false;
+    if (!portalStructuredCreate) return false;
   }
 
-  /** Staff identity must not open tenant intake (`TENANT` mode); only `#` staff capture uses core. */
+  /**
+   * Staff must not open tenant maintenance intake (`TENANT` mode). Allowed: `#` staff capture,
+   * portal `create_ticket` (structured MANAGER path).
+   */
   if (staffContext && staffContext.isStaff && outcome !== "STAFF_CAPTURE_HASH") {
-    return false;
+    if (!(transport === "portal" && portalStructuredCreate)) return false;
   }
 
   return (

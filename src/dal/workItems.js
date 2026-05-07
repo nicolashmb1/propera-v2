@@ -2,6 +2,9 @@
  * Work item reads/writes — GAS WorkItems sheet parity (minimal columns).
  */
 const { getSupabase } = require("../db/supabase");
+const {
+  cancelPendingLifecycleTimersForWorkItem,
+} = require("./lifecycleTimers");
 
 /**
  * Open items owned by this staff id (owner_id stores sheet-style STAFF_* id).
@@ -113,6 +116,17 @@ async function applyStaffOutcomeUpdate(workItemId, normalizedOutcome, rawBodySni
     .eq("work_item_id", workItemId);
 
   if (error) return { ok: false, error: error.message };
+
+  const stUp = String(status || "").toUpperCase();
+  const stateUp = String(state || "").trim().toUpperCase();
+  if (stUp === "COMPLETED" || stateUp === "DONE") {
+    await cancelPendingLifecycleTimersForWorkItem(
+      sb,
+      workItemId,
+      "work_item_completed"
+    );
+  }
+
   return { ok: true, status, state, substate };
 }
 

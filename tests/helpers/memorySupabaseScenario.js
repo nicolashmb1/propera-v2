@@ -254,6 +254,37 @@ function createScenarioMemorySupabase(seed) {
 /** Canonical tenant actor for `scenarioMaintenanceSeedPenn()` scenarios */
 const SCENARIO_TENANT_E164 = "+15551234001";
 
+/** Staff actor for `#` capture scenarios (distinct from {@link SCENARIO_TENANT_E164}). */
+const SCENARIO_STAFF_E164 = "+15551234002";
+
+/**
+ * PENN maintenance seed plus one active staff row linked to `staffPhoneE164` (contacts + staff).
+ * @param {string} staffPhoneE164
+ */
+function scenarioMaintenanceSeedPennWithStaffPhone(staffPhoneE164) {
+  const phone = String(staffPhoneE164 || "").trim();
+  const base = scenarioMaintenanceSeedPenn();
+  return {
+    ...base,
+    contacts: [
+      {
+        id: "scen-contact-staff",
+        phone_e164: phone,
+      },
+    ],
+    staff: [
+      {
+        id: "scen-staff-row",
+        staff_id: "scen-staff-uuid",
+        contact_id: "scen-contact-staff",
+        display_name: "Staff Scenario",
+        role: "manager",
+        active: true,
+      },
+    ],
+  };
+}
+
 /** Minimal seeds: PENN building + lifecycle off + permissive schedule policy for in-memory schedule replies */
 function scenarioMaintenanceSeedPenn() {
   return {
@@ -310,5 +341,7 @@ function scenarioMaintenanceSeedPenn() {
 module.exports = {
   createScenarioMemorySupabase,
   scenarioMaintenanceSeedPenn,
+  scenarioMaintenanceSeedPennWithStaffPhone,
   SCENARIO_TENANT_E164,
+  SCENARIO_STAFF_E164,
 };

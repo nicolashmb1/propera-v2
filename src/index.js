@@ -51,6 +51,19 @@ app.post("/internal/cron/lifecycle-timers", async (req, res) => {
   if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
   try {
     const out = await processDueLifecycleTimers(sb, { traceId: req.traceId });
+    emit({
+      level: "info",
+      trace_id: req.traceId,
+      trace_start_ms: req.traceStartMs,
+      log_kind: "cron",
+      event: "lifecycle_timers_tick",
+      data: {
+        due: out.due,
+        claimed: out.claimed,
+        processed: out.processed,
+        skipped: out.skipped,
+      },
+    });
     return res.json({ ok: true, ...out });
   } catch (err) {
     return res.status(500).json({

@@ -7,6 +7,38 @@
 
 ---
 
+## 2026-05-06 — `handleInboundCore` Phase 2: mechanical extractions
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`handleInboundCoreMechanics.js`** | Shared **`outgateMeta`**, **`coreInboundResult`**, **`finalizeTicketRowGroups`** (reconcile rows → `finalizeMaintenanceDraft` + same error shape), **`appendCoreFinalizedFlightRecorder`**, **`enterScheduleWaitAndLogTicketCreatedAskSchedule`** (schedule wait + pending expected + WI substate + `TICKET_CREATED_ASK_SCHEDULE` logs). |
+| **`handleInboundCore.js`** | Fast + multi-turn finalize loops and duplicate schedule-wait blocks replaced; two returns use **`coreInboundResult`**. Removed direct **`finalizeMaintenanceDraft`** / **`setPendingExpectedSchedule`** / **`setWorkItemSubstate`** imports where inlined only. |
+| **`loadCoreContext`** | Not extracted in this step (closure / `staffMeta` timing); see **`HANDLE_INBOUND_CORE_REFACTOR_PLAN.md`** Phase 2 status. |
+
+### Continue
+
+Phase 3 (gates before dispatch) or finish Phase 2 with context load when touching dispatcher shape.
+
+---
+
+## 2026-05-06 — `handleInboundCore` Phase 1: scenario regression net
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **Scenarios** | New files under **`tests/scenarios/`**: tenant fast path, common area, emergency, schedule-after-receipt, attach clarify + resolve, start-new mid draft, multi-issue split, staff capture (fast / multi-turn / no schedule prompt), portal structured **`create_ticket`**. All use **`PROPERA_TEST_INJECT_SB`** + **`createScenarioMemorySupabase`** + **`runInboundPipeline`** (portal scenario same). |
+| **Helpers** | **`memorySupabaseScenario.js`**: **`SCENARIO_STAFF_E164`**, **`scenarioMaintenanceSeedPennWithStaffPhone`**. |
+| **Router** | **`computeCanEnterCore`**: allow **`transportChannel === "portal"`** + **`_portalAction === "create_ticket"`** + staff **`managerLane`** so structured PM create can reach core without relying on `#` precursor only; **`runInboundPipeline`** passes **`portalAction`**. **`routeInboundDecision.test.js`** + **`ORCHESTRATOR_ROUTING.md`** updated. |
+
+### Continue
+
+Phase 2 of **`docs/HANDLE_INBOUND_CORE_REFACTOR_PLAN.md`** — mechanical extractions behind this net.
+
+---
+
 ## 2026-05-02 — Preventive / program runs: preview, scope subset, FLOOR_BASED + commons, app UX
 
 ### Done

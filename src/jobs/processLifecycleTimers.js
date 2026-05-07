@@ -16,11 +16,11 @@ async function processDueLifecycleTimers(sb, o) {
   o = o || {};
   const traceId = o.traceId ? String(o.traceId) : "";
   const due = await listDueLifecycleTimers(sb, 40);
-  let fired = 0;
+  let claimedCount = 0;
   for (const row of due) {
     const claimed = await claimLifecycleTimer(sb, row.id);
     if (!claimed) continue;
-    fired += 1;
+    claimedCount += 1;
     const tid = claimed.trace_id ? String(claimed.trace_id).trim() : traceId;
     const r = await handleLifecycleSignal(
       sb,
@@ -52,7 +52,14 @@ async function processDueLifecycleTimers(sb, o) {
       },
     });
   }
-  return { due: due.length, claimed: fired };
+  const skipped = Math.max(0, due.length - claimedCount);
+  return {
+    due: due.length,
+    claimed: claimedCount,
+    processed: claimedCount,
+    skipped,
+    trace_id: traceId ? traceId : null,
+  };
 }
 
 module.exports = { processDueLifecycleTimers };

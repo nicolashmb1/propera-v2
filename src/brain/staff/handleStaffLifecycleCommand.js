@@ -12,6 +12,7 @@ const {
   listOpenWorkItemsForOwner,
   getWorkItemByWorkItemId,
 } = require("../../dal/workItems");
+const { listPropertiesForMenu } = require("../../dal/intakeSession");
 const { MIN_SCHEDULE_LEN } = require("../../dal/ticketPreferredWindow");
 const { handleLifecycleSignal } = require("../lifecycle/handleLifecycleSignal");
 const { parsePreferredWindowShared } = require("../gas/parsePreferredWindowShared");
@@ -130,6 +131,7 @@ async function handleStaffLifecycleCommand(o) {
   });
 
   const known = await loadPropertyCodesUpper(sb);
+  const propertiesList = await listPropertiesForMenu();
   const ctx = await getConversationCtx(staffActorKey);
   const rawRows = await listOpenWorkItemsForOwner(staffId);
   const openWis = rawRows.map((r) => ({
@@ -154,6 +156,7 @@ async function handleStaffLifecycleCommand(o) {
     bodyTrim: body,
     ctx,
     knownPropertyCodesUpper: known,
+    propertiesList,
     staffId,
     ctxPendingWi,
   });
@@ -235,7 +238,7 @@ async function handleStaffLifecycleCommand(o) {
 
   if (!hasDoneOrStatus && ticketKey) {
     const unitFromBody = extractUnitFromBody(body);
-    const propertyHint = extractPropertyHintFromBody(body, known);
+    const propertyHint = extractPropertyHintFromBody(body, known, propertiesList);
     const scheduleRemainder = staffExtractScheduleRemainderFromTarget(
       body,
       unitFromBody,
@@ -412,7 +415,7 @@ async function handleStaffLifecycleCommand(o) {
 
   if (!hasDoneOrStatus && !ticketKey) {
     const unitFromBody = extractUnitFromBody(body);
-    const propertyHint = extractPropertyHintFromBody(body, known);
+    const propertyHint = extractPropertyHintFromBody(body, known, propertiesList);
     const scheduleRemainder = staffExtractScheduleRemainderFromTarget(
       body,
       unitFromBody,

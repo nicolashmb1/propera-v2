@@ -6,7 +6,7 @@ const { applyPreferredWindowByTicketKey } = require("../../dal/ticketPreferredWi
 const { getWorkItemByWorkItemId } = require("../../dal/workItems");
 const {
   insertLifecycleTimer,
-  cancelLifecycleTimersForWorkItem,
+  cancelPendingLifecycleTimersForWorkItem,
 } = require("../../dal/lifecycleTimers");
 const { wiEnterState } = require("./wiEnterState");
 const { maybeSnapLifecycleTimerRunAt } = require("./lifecycleTimerRunAt");
@@ -44,7 +44,11 @@ async function executeLifecycleDecision(sb, decision, facts, signal, o) {
   }
 
   if (decision.action === "WRITE_TIMER") {
-    await cancelLifecycleTimersForWorkItem(sb, facts.wiId);
+    await cancelPendingLifecycleTimersForWorkItem(
+      sb,
+      facts.wiId,
+      "lifecycle_timer_replaced"
+    );
     const tt = decision.timerType || "PING_STAFF_UPDATE";
     let runAtW = decision.runAt;
     if (runAtW) {
@@ -152,7 +156,11 @@ async function executeLifecycleDecision(sb, decision, facts, signal, o) {
   }
 
   if (decision.action === "APPLY_SCHEDULE_SET") {
-    await cancelLifecycleTimersForWorkItem(sb, facts.wiId);
+    await cancelPendingLifecycleTimersForWorkItem(
+      sb,
+      facts.wiId,
+      "lifecycle_schedule_apply"
+    );
     const ticketKey = facts.ticketKey;
     const scheduleText = String(
       (signal && (signal.scheduleText || signal.rawText)) || ""

@@ -1,7 +1,7 @@
 /**
  * Single-turn extraction of property / unit / issue from free text.
  *
- * **Legacy (sync):** regex helpers — `extractPropertyHintFromBody` / `extractUnitFromBody`.
+ * **Legacy (sync):** `extractPropertyHintFromBody` (DB menu when provided) / `extractUnitFromBody`.
  * **GAS path (async):** `INTAKE_COMPILE_TURN=1` → `properaBuildIntakePackage` + `compileTurn_` shape
  * (`src/brain/intake/`). Optional `OPENAI_API_KEY` + `INTAKE_LLM_ENABLED=1` for structured JSON LLM.
  *
@@ -9,7 +9,6 @@
  */
 const {
   extractUnitFromBody,
-  detectPropertyFromBody,
   extractPropertyHintFromBody,
 } = require("../staff/lifecycleExtract");
 const {
@@ -39,9 +38,11 @@ function parseMaintenanceDraft(bodyTrim, knownPropertyCodesUpper, propertiesList
     };
   }
 
-  const propertyCode =
-    detectPropertyFromBody(t, propertiesList || [], knownPropertyCodesUpper) ||
-    extractPropertyHintFromBody(t, knownPropertyCodesUpper);
+  const propertyCode = extractPropertyHintFromBody(
+    t,
+    knownPropertyCodesUpper,
+    propertiesList || []
+  );
   const unitLabel = extractUnitFromBody(t);
 
   let issue = t;

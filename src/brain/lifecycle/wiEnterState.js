@@ -7,7 +7,7 @@ const { syncTicketRowWhenWorkItemDone } = require("../../dal/ticketLifecycleSync
 const { appendEventLog } = require("../../dal/appendEventLog");
 const {
   insertLifecycleTimer,
-  cancelLifecycleTimersForWorkItem,
+  cancelPendingLifecycleTimersForWorkItem,
 } = require("../../dal/lifecycleTimers");
 const { maybeSnapLifecycleTimerRunAt } = require("./lifecycleTimerRunAt");
 const { sendTenantVerifyResolutionOrDefer } = require("./tenantVerifyOutbound");
@@ -39,10 +39,6 @@ async function wiEnterState(sb, wiId, newState, substate, opts) {
   opts = opts || {};
   const wi = await getWorkItemByWorkItemId(wiId);
   if (!wi) return false;
-
-  if (opts.cancelTimers !== false) {
-    await cancelLifecycleTimersForWorkItem(sb, wiId);
-  }
 
   const fromState = String(wi.state || "").trim().toUpperCase();
   const toState = String(newState || "").trim().toUpperCase();
@@ -88,6 +84,14 @@ async function wiEnterState(sb, wiId, newState, substate, opts) {
   const { error } = await sb.from("work_items").update(patch).eq("work_item_id", wiId);
 
   if (error) return false;
+
+  if (opts.cancelTimers !== false) {
+    const cancelReason =
+      toState === "DONE"
+        ? "work_item_completed"
+        : "lifecycle_state_transition";
+    await cancelPendingLifecycleTimersForWorkItem(sb, wiId, cancelReason);
+  }
 
   await appendEventLog({
     traceId: opts.traceId || "",

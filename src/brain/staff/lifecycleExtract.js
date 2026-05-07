@@ -230,15 +230,25 @@ function detectPropertyFromBody(body, propertiesList, knownUpper) {
 }
 
 /**
- * Fallback when `propertiesList` is unavailable: `detectPropertyFromBody` with `knownUpper` only,
- * then regex heuristics for `CODE 12` / token patterns.
+ * Property hint from free text — **DB menu first** (`detectPropertyFromBody_` class behavior).
+ *
+ * When `propertiesList` is non-empty (e.g. `listPropertiesForMenu()`): **only** menu-driven
+ * detection + `knownUpper` compact match inside `detectPropertyFromBody` — no separate
+ * “token must equal a bare code” regex pass (avoids forcing operators to type canonical codes).
+ *
+ * When `propertiesList` is empty (tests / bootstrap): legacy regex tail matches tokens that
+ * appear in `knownUpper` (still typically loaded from DB, not hardcoded in source).
  *
  * @param {string} body
- * @param {Set<string>} knownUpper — property codes / tokens
+ * @param {Set<string>} knownUpper — property codes from DB (`properties.code`)
+ * @param {Array<{ code: string, display_name?: string, ticket_prefix?: string, short_name?: string, address?: string, aliases?: string[] }>} [propertiesList]
  */
-function extractPropertyHintFromBody(body, knownUpper) {
-  const fromDetect = detectPropertyFromBody(body, [], knownUpper);
+function extractPropertyHintFromBody(body, knownUpper, propertiesList) {
+  const menu = Array.isArray(propertiesList) ? propertiesList : [];
+  const fromDetect = detectPropertyFromBody(body, menu, knownUpper);
   if (fromDetect) return fromDetect;
+  if (menu.length > 0) return "";
+
   const t = String(body || "").trim();
   if (!knownUpper || knownUpper.size === 0) return "";
 

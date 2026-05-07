@@ -90,8 +90,7 @@ function signalFromDeterministic(tRaw, phone, known, propertiesList) {
   const explicitCode = resolvePropertyExplicitOnly(tRaw, propertiesList || []);
   const propertyCode =
     explicitCode ||
-    detectPropertyFromBody(tRaw, propertiesList || [], known) ||
-    extractPropertyHintFromBody(tRaw, known);
+    extractPropertyHintFromBody(tRaw, known, propertiesList || []);
   sig.propertyCode = propertyCode || "";
   sig.unit = String(extractUnitFromBody(tRaw) || "").trim();
 

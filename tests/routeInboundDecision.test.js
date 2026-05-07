@@ -123,6 +123,31 @@ test("computeCanEnterCore — portal skips maintenance core (no LLM) except # st
   );
 });
 
+test("computeCanEnterCore — portal create_ticket + staff MANAGER lane may enter core (structured path)", () => {
+  const managerLane = {
+    lane: "managerLane",
+    reason: "staff_identity",
+    mode: "MANAGER",
+    trace: "lane_v1",
+  };
+  assert.equal(
+    computeCanEnterCore({
+      laneDecision: managerLane,
+      coreEnabledFlag: true,
+      dbConfigured: true,
+      staffRun: null,
+      complianceRun: null,
+      suppressedRun: null,
+      effectiveCompliance: null,
+      precursor: { outcome: "PRECURSOR_EVALUATED", tenantCommand: null },
+      transportChannel: "portal",
+      portalAction: "create_ticket",
+      staffContext: { isStaff: true },
+    }),
+    true
+  );
+});
+
 test("computeCanEnterCore — blocked by compliance keyword on SMS", () => {
   const precursor = { outcome: "PRECURSOR_EVALUATED", tenantCommand: null };
   assert.equal(

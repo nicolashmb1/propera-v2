@@ -1,0 +1,28 @@
+# Wakes V2 only — no lifecycle logic here. POST /internal/cron/lifecycle-timers runs processDueLifecycleTimers in propera-v2.
+name: Lifecycle Cron
+
+on:
+  schedule:
+    # GitHub allows short cadence but execution may drift; 5–10 min typical for timer slack.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping-lifecycle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call lifecycle timer endpoint
+        env:
+          CRON_URL: ${{ secrets.PROPERA_LIFECYCLE_CRON_URL }}
+          CRON_SECRET: ${{ secrets.LIFECYCLE_CRON_SECRET }}
+        run: |
+          test -n "$CRON_URL"
+          test -n "$CRON_SECRET"
+          response="$(curl -sS -w '\n%{http_code}' -X POST "$CRON_URL" \
+            -H "x-propera-cron-secret: $CRON_SECRET" \
+            -H "ngrok-skip-browser-warning: true")"
+          body="$(echo "$response" | sed '$d')"
+          status="$(echo "$response" | tail -n1)"
+          echo "HTTP status: $status"
+          echo "Response body: $body"
+          test "$status" -ge 200 -a "$status" -lt 300

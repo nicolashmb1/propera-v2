@@ -357,6 +357,7 @@ async function runInboundPipeline(o) {
     effectiveCompliance,
     precursor,
     transportChannel,
+    portalAction: String(routerParameter._portalAction || ""),
     staffContext: {
       isStaff: staffContext && staffContext.isStaff === true,
     },

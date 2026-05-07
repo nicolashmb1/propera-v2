@@ -7,6 +7,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { randomUUID } = require("crypto");
 
 const { setSupabaseClientForTests, clearSupabaseClientForTests } = require("../src/db/supabase");
 const { handleLifecycleSignal } = require("../src/brain/lifecycle/handleLifecycleSignal");
@@ -40,6 +41,17 @@ function policyRowsForProp() {
 /**
  * @param {{ wiRow: object, policies?: object[] }} opts
  */
+function applyLifecycleTimerFilters(rows, filters) {
+  return rows.filter((row) =>
+    filters.every((f) => {
+      if (f.op === "eq") return String(row[f.col]) === String(f.val);
+      if (f.op === "lte")
+        return new Date(row[f.col]).getTime() <= new Date(f.val).getTime();
+      return true;
+    })
+  );
+}
+
 function createMockSb(opts) {
   const wiRow = opts.wiRow;
   const policies = opts.policies || policyRowsForProp();
@@ -92,20 +104,77 @@ function createMockSb(opts) {
       if (table === "lifecycle_timers") {
         return {
           insert(row) {
-            lifecycleTimers.push({ ...row });
+            lifecycleTimers.push({
+              ...row,
+              id: row.id || randomUUID(),
+              status: row.status || "pending",
+            });
             return Promise.resolve({ error: null });
+          },
+          select(_sel) {
+            /** @type {{ op: string, col: string, val: unknown }[]} */
+            const filters = [];
+            /** @type {{ ascending?: boolean }} */
+            let orderOpts = { ascending: true };
+            const chain = {
+              eq(col, val) {
+                filters.push({ op: "eq", col, val });
+                return chain;
+              },
+              lte(col, val) {
+                filters.push({ op: "lte", col, val });
+                return chain;
+              },
+              order(_col, o) {
+                orderOpts = o || { ascending: true };
+                return chain;
+              },
+              limit(n) {
+                let rows = applyLifecycleTimerFilters(lifecycleTimers, filters);
+                rows = [...rows].sort((a, b) =>
+                  orderOpts.ascending !== false
+                    ? new Date(a.run_at).getTime() - new Date(b.run_at).getTime()
+                    : new Date(b.run_at).getTime() - new Date(a.run_at).getTime()
+                );
+                const lim = Number(n) > 0 ? Number(n) : 25;
+                return Promise.resolve({ data: rows.slice(0, lim), error: null });
+              },
+              maybeSingle() {
+                const rows = applyLifecycleTimerFilters(lifecycleTimers, filters);
+                return Promise.resolve({ data: rows[0] || null, error: null });
+              },
+              then(resolve, reject) {
+                const rows = applyLifecycleTimerFilters(lifecycleTimers, filters);
+                Promise.resolve({ data: rows, error: null }).then(resolve, reject);
+              },
+            };
+            return chain;
           },
           update(patch) {
             return {
-              eq(col1, wiId) {
+              eq(col1, v1) {
                 return {
-                  eq(_col2, prevStatus) {
+                  eq(col2, v2) {
+                    let matched = null;
                     for (const t of lifecycleTimers) {
-                      if (t.work_item_id === wiId && t.status === prevStatus) {
+                      if (
+                        String(t[col1]) === String(v1) &&
+                        String(t[col2]) === String(v2)
+                      ) {
                         Object.assign(t, patch);
+                        matched = { ...t };
                       }
                     }
-                    return Promise.resolve({ error: null });
+                    return {
+                      select() {
+                        return {
+                          maybeSingle: async () => ({
+                            data: matched,
+                            error: null,
+                          }),
+                        };
+                      },
+                    };
                   },
                 };
               },

@@ -10,6 +10,7 @@ const {
   listOpenWorkItemsForOwner,
   getWorkItemByWorkItemId,
 } = require("./workItems");
+const { listPropertiesForMenu } = require("./intakeSession");
 const { resolveTargetWorkItemForStaff } = require("../brain/staff/resolveTargetWorkItemForStaff");
 const {
   parseFieldsFromUpdateRest,
@@ -110,6 +111,7 @@ async function resolveHumanTicketIdForStaffAmend(sb, o) {
   }
 
   const known = await loadPropertyCodesUpper(sb);
+  const propertiesList = await listPropertiesForMenu();
   const ctx = await getConversationCtx(staffActorKey);
   const rawRows = await listOpenWorkItemsForOwner(staffId);
   const openWis = rawRows.map((r) => ({
@@ -134,6 +136,7 @@ async function resolveHumanTicketIdForStaffAmend(sb, o) {
     bodyTrim: body,
     ctx,
     knownPropertyCodesUpper: known,
+    propertiesList,
     staffId,
     ctxPendingWi,
   });

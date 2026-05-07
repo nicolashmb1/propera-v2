@@ -5,6 +5,9 @@
 
 const { getSupabase } = require("../db/supabase");
 const { appendEventLog } = require("./appendEventLog");
+const {
+  cancelPendingLifecycleTimersForTicketKey,
+} = require("./lifecycleTimers");
 const { extractUnit, normalizeUnit_ } = require("../brain/shared/extractUnitGas");
 
 /** Matches `formatHumanTicketId` — PREFIX-MMDDYY-4digits */
@@ -579,6 +582,7 @@ async function tryPortalPmTicketMutation(o) {
         resolution: { error: wiRes.error },
       };
     }
+    await cancelPendingLifecycleTimersForTicketKey(sb, ticketKey, "ticket_deleted");
     await appendEventLog({
       traceId,
       log_kind: "portal",
@@ -735,6 +739,11 @@ async function tryPortalPmTicketMutation(o) {
         replyText: "Ticket updated but work item save failed: " + wiRes2.error,
         resolution: { error: wiRes2.error },
       };
+    }
+    if (canonicalStatus === "Completed") {
+      await cancelPendingLifecycleTimersForTicketKey(sb, ticketKey, "ticket_completed");
+    } else if (canonicalStatus === "Deleted") {
+      await cancelPendingLifecycleTimersForTicketKey(sb, ticketKey, "ticket_deleted");
     }
   }
 

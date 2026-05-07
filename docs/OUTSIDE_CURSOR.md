@@ -79,6 +79,16 @@ Production **Twilio → GAS** stays as-is until you intentionally change it.
 
 ---
 
+## Lifecycle timer cron (outside V2 process)
+
+**Timestamps in Postgres do not run lifecycle.** Someone must periodically **`POST /internal/cron/lifecycle-timers`** on the V2 instance that uses your Supabase DB, with header **`x-propera-cron-secret`** matching **`LIFECYCLE_CRON_SECRET`** (must be non-empty in prod).
+
+- **Interval:** every 1–5 minutes is typical.
+- **Dev / ngrok:** point the caller at your tunnel URL; ngrok hostnames are temporary.
+- **Prod:** use a stable V2 URL plus GitHub Actions (workflow in-repo), Google Cloud Scheduler, or another HTTPS cron — see **`docs/LIFECYCLE_CRON_SCHEDULER.md`** for secrets (`PROPERA_LIFECYCLE_CRON_URL`, `LIFECYCLE_CRON_SECRET`), PowerShell smoke test, and alternatives.
+
+---
+
 ## What stays on GAS until you switch
 
 - Live **Sheets** and **Apps Script** deployment for real tenants — unchanged by Supabase alone.

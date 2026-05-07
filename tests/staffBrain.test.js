@@ -29,6 +29,40 @@ describe("resolveTargetWorkItemForStaff", () => {
     assert.equal(r.reason, "OWNER_MATCH");
   });
 
+  test("short_name / friendly building name + unit (properties menu, parity with intake)", () => {
+    const openWis = [
+      {
+        workItemId: "WI_M1",
+        unitId: "204",
+        propertyId: "MURR",
+        metadata_json: {},
+      },
+      {
+        workItemId: "WI_M2",
+        unitId: "305",
+        propertyId: "MURR",
+        metadata_json: {},
+      },
+    ];
+    const menu = [
+      {
+        code: "MURR",
+        display_name: "Murray Commons",
+        short_name: "Murray",
+        ticket_prefix: "MURR",
+      },
+    ];
+    const r = resolveTargetWorkItemForStaff({
+      openWis,
+      bodyTrim: "Murray 204 scheduled for tomorrow 11am",
+      ctx: null,
+      knownPropertyCodesUpper: new Set(["MURR"]),
+      propertiesList: menu,
+    });
+    assert.equal(r.wiId, "WI_M1");
+    assert.equal(r.reason, "PROPERTY_UNIT_MATCH");
+  });
+
   test("WI_ hint wins among many", () => {
     const openWis = [
       { workItemId: "WI_X1", unitId: "1", propertyId: "PENN", metadata_json: {} },

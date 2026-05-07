@@ -9,7 +9,6 @@
 const { getSupabase } = require("../../db/supabase");
 const { appendEventLog } = require("../../dal/appendEventLog");
 const { emitTimed } = require("../../logging/structuredLog");
-const { finalizeMaintenanceDraft } = require("../../dal/finalizeMaintenance");
 const {
   getIntakeSession,
   upsertIntakeSession,
@@ -22,17 +21,13 @@ const {
   MIN_SCHEDULE_LEN,
   schedulePolicyRejectMessage,
 } = require("../../dal/ticketPreferredWindow");
-const {
-  setPendingExpectedSchedule,
-  clearPendingExpected,
-} = require("../../dal/conversationCtxSchedule");
+const { clearPendingExpected } = require("../../dal/conversationCtxSchedule");
 const {
   setPendingAttachClarify,
   getConversationCtxAttach,
   clearAttachClarifyLatch,
 } = require("../../dal/conversationCtxAttach");
 const { parseAttachClarifyReply } = require("../gas/parseAttachClarifyReply");
-const { setWorkItemSubstate } = require("../../dal/workItemSubstate");
 const {
   parseMaintenanceDraftAsync,
   isMaintenanceDraftComplete,
@@ -88,6 +83,13 @@ const {
 } = require("./handleInboundCoreDraftHelpers");
 const { appendPortalStaffScheduleNote } = require("./appendPortalStaffScheduleNote");
 const { hasProblemSignal } = require("./splitIssueGroups");
+const {
+  outgateMeta,
+  coreInboundResult,
+  finalizeTicketRowGroups,
+  appendCoreFinalizedFlightRecorder,
+  enterScheduleWaitAndLogTicketCreatedAskSchedule,
+} = require("./handleInboundCoreMechanics");
 
 /**
  * GAS `enrichStaffCapTenantIdentity_` / `findTenantCandidates_` — resident phone for staff #capture only.
@@ -169,11 +171,6 @@ async function loadPropertyCodesUpper(sb) {
     if (r && r.code) set.add(String(r.code).toUpperCase());
   });
   return set;
-}
-
-/** Outgate hints — templateKey is stable; text still built by brain until MessageSpec bind. */
-function outgateMeta(templateKey, extra) {
-  return { outgate: { templateKey, ...(extra || {}) } };
 }
 
 function hasClarifyingStaffMediaSignal(mediaSignals) {
@@ -764,9 +761,9 @@ async function handleInboundCore(o) {
       issueBufferLines: [],
       effectiveBody,
     });
-    const finsFast = [];
-    for (const g of groupsFast) {
-      const f = await finalizeMaintenanceDraft({
+    const frFast = await finalizeTicketRowGroups({
+      groups: groupsFast,
+      buildFinalizeParams: (g) => ({
         traceId,
         propertyCode: fastDraft.propertyCode,
         unitLabel: commonAreaFast ? "" : fastDraft.unitLabel,
@@ -782,62 +779,22 @@ async function handleInboundCore(o) {
         routerParameter: p,
         tenantPhoneE164: trFast.tenantPhoneE164,
         tenantLookupMeta: trFast.tenantLookupMeta,
-      });
-      if (!f.ok) {
-        return {
-          ok: false,
-          brain: "core_finalize_failed",
-          draft: fastDraft,
-          replyText: "Could not save ticket: " + (f.error || "error"),
-          ...staffMeta(), ...outgateMeta("MAINTENANCE_ERROR_FINALIZE", {
-            path: "fast",
-          }),
-        };
-      }
-      finsFast.push(f);
-    }
-    const fin = finsFast[0];
+      }),
+      staffMetaFn: staffMeta,
+      draftOnError: fastDraft,
+      path: "fast",
+    });
+    if (frFast.error) return frFast.error;
+    const finsFast = frFast.fins;
+    const fin = frFast.fin;
 
-    await appendEventLog({
+    await appendCoreFinalizedFlightRecorder(
       traceId,
-      event: fin.ok ? "CORE_FINALIZED" : "CORE_FINALIZE_FAILED",
-      payload: fin.ok
-        ? {
-            ticket_id: fin.ticketId,
-            ticket_ids: finsFast.map((x) => x.ticketId),
-            work_item_id: fin.workItemId,
-            work_item_ids: finsFast.map((x) => x.workItemId),
-            ticket_key: fin.ticketKey,
-            ticket_keys: finsFast.map((x) => x.ticketKey),
-            path: "fast",
-          }
-        : { error: fin.error },
-    });
-    emitTimed(traceStartMs, {
-      level: "info",
-      trace_id: traceId,
-      log_kind: "brain",
-      event: fin.ok ? "CORE_FINALIZED" : "CORE_FINALIZE_FAILED",
-      data: fin.ok
-        ? {
-            ticket_id: fin.ticketId,
-            ticket_ids: finsFast.map((x) => x.ticketId),
-            work_item_id: fin.workItemId,
-            path: "fast",
-            crumb: "core_finalized_fast",
-          }
-        : { error: fin.error, crumb: "core_finalize_failed" },
-    });
-
-    if (!fin.ok) {
-      return {
-        ok: false,
-        brain: "core_finalize_failed",
-        draft: fastDraft,
-        replyText: "Could not save ticket: " + (fin.error || "error"),
-        ...staffMeta(), ...outgateMeta("MAINTENANCE_ERROR_FINALIZE", { path: "fast" }),
-      };
-    }
+      traceStartMs,
+      finsFast,
+      "fast",
+      "core_finalized_fast"
+    );
 
     let receiptFast =
       finsFast.length > 1
@@ -927,44 +884,34 @@ async function handleInboundCore(o) {
       };
     }
 
-    await setScheduleWaitLike({
-      ticketKey: fin.ticketKey,
-      draft_issue: fastDraft.issueText,
-      draft_property: fastDraft.propertyCode,
-      draft_unit: fastDraft.unitLabel,
-    });
-    await setPendingExpectedSchedule(canonicalBrainActorKey, fin.workItemId);
-    await setWorkItemSubstate(fin.workItemId, "SCHEDULE");
-
-    await appendEventLog({
-      traceId,
-      event: "TICKET_CREATED_ASK_SCHEDULE",
-      payload: { ticket_key: fin.ticketKey, path: "fast" },
-    });
-    emitTimed(traceStartMs, {
-      level: "info",
-      trace_id: traceId,
-      log_kind: "brain",
-      event: "TICKET_CREATED_ASK_SCHEDULE",
-      data: {
-        ticket_key: fin.ticketKey,
-        path: "fast",
-        crumb: "ticket_created_ask_schedule",
+    await enterScheduleWaitAndLogTicketCreatedAskSchedule({
+      setScheduleWaitLike,
+      canonicalBrainActorKey,
+      fin,
+      waitOpts: {
+        ticketKey: fin.ticketKey,
+        draft_issue: fastDraft.issueText,
+        draft_property: fastDraft.propertyCode,
+        draft_unit: fastDraft.unitLabel,
       },
+      traceId,
+      traceStartMs,
+      path: "fast",
     });
 
-    return {
-      ok: true,
-      brain: "core_finalized",
-      draft: fastDraft,
-      finalize: fin,
-      path: "fast",
-      replyText: receiptFast + "\n\n" + buildMaintenancePrompt("SCHEDULE", propertiesList),
-      ...staffMeta(), ...outgateMeta(maintenanceTemplateKeyForNext("SCHEDULE"), {
-        promptComposite: "after_receipt",
+    return coreInboundResult(
+      staffMeta,
+      maintenanceTemplateKeyForNext("SCHEDULE"),
+      { promptComposite: "after_receipt", path: "fast" },
+      {
+        ok: true,
+        brain: "core_finalized",
+        draft: fastDraft,
+        finalize: fin,
         path: "fast",
-      }),
-    };
+        replyText: receiptFast + "\n\n" + buildMaintenancePrompt("SCHEDULE", propertiesList),
+      }
+    );
   }
 
   const session = sessionAtStart;
@@ -1247,9 +1194,9 @@ async function handleInboundCore(o) {
         : [],
       effectiveBody,
     });
-    const finsMt = [];
-    for (const g of groupsMt) {
-      const f = await finalizeMaintenanceDraft({
+    const frMt = await finalizeTicketRowGroups({
+      groups: groupsMt,
+      buildFinalizeParams: (g) => ({
         traceId,
         propertyCode: merged.draft_property,
         unitLabel: commonAreaDraft ? "" : merged.draft_unit,
@@ -1265,60 +1212,22 @@ async function handleInboundCore(o) {
         routerParameter: p,
         tenantPhoneE164: trMt.tenantPhoneE164,
         tenantLookupMeta: trMt.tenantLookupMeta,
-      });
-      if (!f.ok) {
-        return {
-          ok: false,
-          brain: "core_finalize_failed",
-          draft: merged,
-          replyText: "Could not save ticket: " + (f.error || "error"),
-          ...staffMeta(), ...outgateMeta("MAINTENANCE_ERROR_FINALIZE", { path: "multi_turn" }),
-        };
-      }
-      finsMt.push(f);
-    }
-    const fin = finsMt[0];
+      }),
+      staffMetaFn: staffMeta,
+      draftOnError: merged,
+      path: "multi_turn",
+    });
+    if (frMt.error) return frMt.error;
+    const finsMt = frMt.fins;
+    const fin = frMt.fin;
 
-    await appendEventLog({
+    await appendCoreFinalizedFlightRecorder(
       traceId,
-      event: fin.ok ? "CORE_FINALIZED" : "CORE_FINALIZE_FAILED",
-      payload: fin.ok
-        ? {
-            ticket_id: fin.ticketId,
-            ticket_ids: finsMt.map((x) => x.ticketId),
-            work_item_id: fin.workItemId,
-            work_item_ids: finsMt.map((x) => x.workItemId),
-            ticket_key: fin.ticketKey,
-            ticket_keys: finsMt.map((x) => x.ticketKey),
-            path: "multi_turn",
-          }
-        : { error: fin.error },
-    });
-    emitTimed(traceStartMs, {
-      level: "info",
-      trace_id: traceId,
-      log_kind: "brain",
-      event: fin.ok ? "CORE_FINALIZED" : "CORE_FINALIZE_FAILED",
-      data: fin.ok
-        ? {
-            ticket_id: fin.ticketId,
-            ticket_ids: finsMt.map((x) => x.ticketId),
-            work_item_id: fin.workItemId,
-            path: "multi_turn",
-            crumb: "core_finalized_multi",
-          }
-        : { error: fin.error, crumb: "core_finalize_failed" },
-    });
-
-    if (!fin.ok) {
-      return {
-        ok: false,
-        brain: "core_finalize_failed",
-        draft: merged,
-        replyText: "Could not save ticket: " + (fin.error || "error"),
-        ...staffMeta(), ...outgateMeta("MAINTENANCE_ERROR_FINALIZE", { path: "multi_turn" }),
-      };
-    }
+      traceStartMs,
+      finsMt,
+      "multi_turn",
+      "core_finalized_multi"
+    );
 
     let receiptMt =
       finsMt.length > 1
@@ -1414,45 +1323,35 @@ async function handleInboundCore(o) {
       };
     }
 
-    await setScheduleWaitLike({
-      ticketKey: fin.ticketKey,
-      draft_issue: merged.draft_issue,
-      issue_buf_json: merged.draft_issue_buf_json,
-      draft_property: merged.draft_property,
-      draft_unit: merged.draft_unit,
-    });
-    await setPendingExpectedSchedule(canonicalBrainActorKey, fin.workItemId);
-    await setWorkItemSubstate(fin.workItemId, "SCHEDULE");
-
-    await appendEventLog({
-      traceId,
-      event: "TICKET_CREATED_ASK_SCHEDULE",
-      payload: { ticket_key: fin.ticketKey, path: "multi_turn" },
-    });
-    emitTimed(traceStartMs, {
-      level: "info",
-      trace_id: traceId,
-      log_kind: "brain",
-      event: "TICKET_CREATED_ASK_SCHEDULE",
-      data: {
-        ticket_key: fin.ticketKey,
-        path: "multi_turn",
-        crumb: "ticket_created_ask_schedule",
+    await enterScheduleWaitAndLogTicketCreatedAskSchedule({
+      setScheduleWaitLike,
+      canonicalBrainActorKey,
+      fin,
+      waitOpts: {
+        ticketKey: fin.ticketKey,
+        draft_issue: merged.draft_issue,
+        issue_buf_json: merged.draft_issue_buf_json,
+        draft_property: merged.draft_property,
+        draft_unit: merged.draft_unit,
       },
+      traceId,
+      traceStartMs,
+      path: "multi_turn",
     });
 
-    return {
-      ok: true,
-      brain: "core_finalized",
-      draft: merged,
-      finalize: fin,
-      path: "multi_turn",
-      replyText: receiptMt + "\n\n" + buildMaintenancePrompt("SCHEDULE", propertiesList),
-      ...staffMeta(), ...outgateMeta(maintenanceTemplateKeyForNext("SCHEDULE"), {
-        promptComposite: "after_receipt",
+    return coreInboundResult(
+      staffMeta,
+      maintenanceTemplateKeyForNext("SCHEDULE"),
+      { promptComposite: "after_receipt", path: "multi_turn" },
+      {
+        ok: true,
+        brain: "core_finalized",
+        draft: merged,
+        finalize: fin,
         path: "multi_turn",
-      }),
-    };
+        replyText: receiptMt + "\n\n" + buildMaintenancePrompt("SCHEDULE", propertiesList),
+      }
+    );
   }
 
   const replyText = buildMaintenancePrompt(next, propertiesList);

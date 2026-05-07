@@ -42,7 +42,7 @@ This document is the **reviewer-facing** map of **order**, **guards**, and **lan
 | No SMS compliance keyword path | `!effectiveCompliance` (SMS STOP/START/HELP path) |
 | No tenant command | `!precursor.tenantCommand` |
 | Precursor allows core | `STAFF_CAPTURE_HASH` **or** `PRECURSOR_EVALUATED` |
-| **Not staff tenant-intake** | `computeCanEnterCore`: if `staffContext.isStaff` and precursor is **not** `STAFF_CAPTURE_HASH` → **false** (staff never opens `handleInboundCore` in `TENANT` mode; non-`#` traffic is lifecycle / PM amend, not tenant lane) |
+| **Not staff tenant-intake** | `computeCanEnterCore`: if `staffContext.isStaff` and precursor is **not** `STAFF_CAPTURE_HASH` → **false**, **except** `transportChannel === "portal"` and `_portalAction === "create_ticket"` (structured PM create — `handleInboundCore` MANAGER branch + `buildStructuredPortalCreateDraft`; no `compileTurn` on synthetic `Body`). Staff non-`#` SMS/TG/WA remains lifecycle / PM amend only. |
 
 If any fails → core does not run.
 
