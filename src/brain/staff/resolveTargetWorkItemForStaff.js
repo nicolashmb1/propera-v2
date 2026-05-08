@@ -98,6 +98,49 @@ function resolveTargetWorkItemForStaff(opts) {
     };
   }
 
+  /**
+   * Property + unit filters can yield **zero** rows when `property_id` on a WI is empty/legacy
+   * or does not match menu-detected code, while **unit** (and issue text) still identify the row.
+   * Without this, `unitFromBody && !propertyHint` never runs and staff NL amends stall on clarify.
+   */
+  if (candidates.length === 0 && (propertyHint || unitFromBody)) {
+    const unitNorm = unitFromBody ? normUnit(unitFromBody) : "";
+    let relaxed = openWis;
+    if (unitFromBody) {
+      relaxed = openWis.filter((w) => normUnit(w.unitId) === unitNorm);
+    }
+    if (propertyHint && relaxed.length > 1) {
+      const byProp = relaxed.filter(
+        (w) => String(w.propertyId || "").toUpperCase() === propertyHint
+      );
+      if (byProp.length >= 1) relaxed = byProp;
+    }
+    if (relaxed.length === 1) {
+      return {
+        wiId: relaxed[0].workItemId,
+        reason: "UNIT_MATCH_RELAXED_PROPERTY",
+      };
+    }
+    if (relaxed.length > 1) {
+      const scored = scoreCandidatesByIssueHints(relaxed, body);
+      if (scored.best) {
+        return {
+          wiId: scored.best.workItemId,
+          reason: "ISSUE_HINT_MATCH",
+        };
+      }
+      const prompts = buildSuggestedPromptsForCandidates(relaxed, relaxed);
+      if (prompts.length === 1) {
+        return { wiId: relaxed[0].workItemId, reason: "SINGLE_PROMPT_AUTO_PICK" };
+      }
+      return {
+        wiId: "",
+        reason: "CLARIFICATION_MULTI_MATCH",
+        suggestedPrompts: prompts,
+      };
+    }
+  }
+
   if (unitFromBody && !propertyHint) {
     const unitNorm = normUnit(unitFromBody);
     const unitOnly = openWis.filter(

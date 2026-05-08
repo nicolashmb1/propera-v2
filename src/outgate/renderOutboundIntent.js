@@ -13,13 +13,21 @@ function renderOutboundIntent(o) {
   const intent = o.intent;
   const messageSpec = o.messageSpec || null;
 
+  /** Non-empty intent body wins (e.g. lifecycle staff pings with ticket/property context). */
+  const intentText = String(intent.replyText || "").trim();
+  const specText =
+    messageSpec && String(messageSpec.fallbackText || "").trim()
+      ? String(messageSpec.fallbackText).trim()
+      : "";
+
   let body = "";
   let renderSource = "intent_reply_text";
-  if (messageSpec && String(messageSpec.fallbackText || "").trim()) {
-    body = String(messageSpec.fallbackText).trim();
+  if (intentText) {
+    body = intentText;
+    renderSource = "intent_reply_text";
+  } else if (specText) {
+    body = specText;
     renderSource = "message_spec_fallback";
-  } else {
-    body = String(intent.replyText || "").trim();
   }
 
   const co =

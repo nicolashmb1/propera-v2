@@ -21,15 +21,26 @@ test("buildOutboundIntent fills defaults", () => {
   assert.equal(i.audience, "unknown");
 });
 
-test("renderOutboundIntent uses MessageSpec fallback when present", () => {
+test("renderOutboundIntent prefers intent.replyText over MessageSpec when both set", () => {
   const intent = buildOutboundIntent({
     intentType: "COMPLIANCE_STOP",
-    replyText: "legacy duplicate text",
+    replyText: "custom override body",
+    traceId: "t1",
+  });
+  const r = renderOutboundIntent({ intent, messageSpec: COMPLIANCE_STOP });
+  assert.equal(r.body, "custom override body");
+  assert.equal(r.meta.templateKey, "COMPLIANCE_STOP");
+  assert.equal(r.meta.renderSource, "intent_reply_text");
+});
+
+test("renderOutboundIntent uses MessageSpec fallback when intent reply empty", () => {
+  const intent = buildOutboundIntent({
+    intentType: "COMPLIANCE_STOP",
+    replyText: "",
     traceId: "t1",
   });
   const r = renderOutboundIntent({ intent, messageSpec: COMPLIANCE_STOP });
   assert.ok(r.body.includes("unsubscribed"));
-  assert.notEqual(r.body, "legacy duplicate text");
   assert.equal(r.meta.templateKey, "COMPLIANCE_STOP");
   assert.equal(r.meta.renderSource, "message_spec_fallback");
 });

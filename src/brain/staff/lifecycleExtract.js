@@ -368,6 +368,8 @@ function extractIssueHintsForStaff(bodyTrim) {
   if (/\b(fridge|refrigerator)\b/.test(t)) addOnce(fixtures, "REFRIGERATOR");
   if (/\btoilet\b/.test(t)) addOnce(fixtures, "TOILET");
   if (/\b(tub|bathtub)\b/.test(t)) addOnce(fixtures, "BATHTUB");
+  /** "Tube clogged" / drain tube — `\btub\b` does not match "tube" (GAS-adjacent NL). */
+  if (/\btube\b/.test(t)) addOnce(fixtures, "TUBE");
   if (/\bshower\b/.test(t)) addOnce(fixtures, "SHOWER");
   if (/\boutlet\b/.test(t)) addOnce(fixtures, "OUTLET");
   if (/\bwasher\b/.test(t)) addOnce(fixtures, "WASHER");

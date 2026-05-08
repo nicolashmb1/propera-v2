@@ -78,6 +78,74 @@ describe("resolveTargetWorkItemForStaff", () => {
     assert.equal(r.reason, "WI_ID_MATCH");
   });
 
+  test("empty property_id on WI: Murray + unit still resolves (relaxed filter)", () => {
+    const openWis = [
+      {
+        workItemId: "WI_319",
+        unitId: "319",
+        propertyId: "",
+        metadata_json: { issueSummary: "Tube clogged" },
+      },
+      {
+        workItemId: "WI_204",
+        unitId: "204",
+        propertyId: "MURR",
+        metadata_json: {},
+      },
+    ];
+    const menu = [
+      {
+        code: "MURR",
+        display_name: "Murray Commons",
+        short_name: "Murray",
+        ticket_prefix: "MURR",
+      },
+    ];
+    const r = resolveTargetWorkItemForStaff({
+      openWis,
+      bodyTrim: "Murray 319, Tube clogged schedule for tomorrow afternoon",
+      ctx: null,
+      knownPropertyCodesUpper: new Set(["MURR"]),
+      propertiesList: menu,
+    });
+    assert.equal(r.wiId, "WI_319");
+    assert.equal(r.reason, "UNIT_MATCH_RELAXED_PROPERTY");
+  });
+
+  test("two WIs same property+unit — Tube in body disambiguates (not only tub)", () => {
+    const openWis = [
+      {
+        workItemId: "WI_TUBE",
+        unitId: "319",
+        propertyId: "MURR",
+        metadata_json: { issueSummary: "Tube clogged in bathroom" },
+      },
+      {
+        workItemId: "WI_SINK",
+        unitId: "319",
+        propertyId: "MURR",
+        metadata_json: { issueSummary: "Kitchen sink leak" },
+      },
+    ];
+    const menu = [
+      {
+        code: "MURR",
+        display_name: "Murray Commons",
+        short_name: "Murray",
+        ticket_prefix: "MURR",
+      },
+    ];
+    const r = resolveTargetWorkItemForStaff({
+      openWis,
+      bodyTrim: "Murray 319, Tube clogged schedule tomorrow afternoon",
+      ctx: null,
+      knownPropertyCodesUpper: new Set(["MURR"]),
+      propertiesList: menu,
+    });
+    assert.equal(r.wiId, "WI_TUBE");
+    assert.equal(r.reason, "ISSUE_HINT_MATCH");
+  });
+
   test("multi candidate — issue hint match (GAS scoreCandidatesByIssueHints_)", () => {
     const openWis = [
       {

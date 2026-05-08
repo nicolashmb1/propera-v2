@@ -133,6 +133,8 @@ return dispatchMaintenanceTurn(ctx)
 
 **Exit criterion:** Main file reads as **setup → gates → dispatch**; tests still green.
 
+**Status (2026-05):** Implemented in `handleInboundCoreGates.js` — `resolveTenantVerificationIfPending`, `resolveAttachClarifyIfPending`, `handleScheduleReplyIfExpected` — wired from `handleInboundCore.js` immediately after `staffMeta` / `clearIntakeLike` / `saveIntakeLike` / `setScheduleWaitLike` setup. **`loadCoreContext`** still not a single function; **`dispatchMaintenanceTurn`** remains inline (Phase 4). Staff `start_new` after attach clarify returns **`staffDraftSeq`** from the newly allocated draft (same as post-assignment `staffMeta()` in the old inline code).
+
 ---
 
 ### Phase 4 — Dispatch by policy (the real win)
