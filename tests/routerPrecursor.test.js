@@ -92,6 +92,28 @@ describe("evaluateRouterPrecursor ordering", () => {
     assert.equal(p.compliance, null);
     assert.equal(p.tenantCommand, null);
   });
+  test("staff empty body + enriched media narrative → maintenance media intake (Telegram)", () => {
+    const p = evaluateRouterPrecursor({
+      parameter: {
+        Body: "",
+        From: "TG:99",
+        _channel: "TELEGRAM",
+        _mediaJson: JSON.stringify([
+          {
+            kind: "image",
+            provider: "telegram",
+            file_id: "AgACAgIAAxkBAAIB",
+            ocr_text: "Shower glass off track unit 409 please visit today",
+          },
+        ]),
+      },
+      staffContext: { isStaff: true, staffActorKey: "TG:99" },
+      transportChannel: "telegram",
+    });
+    assert.equal(p.outcome, "STAFF_MAINTENANCE_MEDIA_INTAKE");
+    assert.equal(p.compliance, null);
+    assert.equal(p.tenantCommand, null);
+  });
   test("non-staff help → compliance HELP unchanged", () => {
     const p = evaluateRouterPrecursor({
       parameter: { Body: "help", From: "TG:1" },

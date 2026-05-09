@@ -9,6 +9,27 @@
 const { normMsg } = require("./normMsg");
 const { complianceIntent } = require("./complianceIntent");
 const { detectTenantCommand } = require("./detectTenantCommand");
+const {
+  parseMediaJson,
+  composeInboundTextWithMedia,
+} = require("../shared/mediaPayload");
+const { parseMediaSignalsJson } = require("../shared/mediaSignalRuntime");
+
+/** Min chars for staff empty-body photo path to enter maintenance core via OCR / media signals. */
+const STAFF_MEDIA_INTAKE_MIN_LEN = 8;
+
+function transportAllowsStaffMediaIntake(transportChannel) {
+  const t = String(transportChannel || "").trim().toLowerCase();
+  return t === "telegram" || t === "whatsapp" || t === "sms";
+}
+
+function staffMediaMaintenanceComposedBody(parameter) {
+  const p = parameter || {};
+  const media = parseMediaJson(p._mediaJson);
+  if (!media.length) return "";
+  const signals = parseMediaSignalsJson(p._mediaSignalsJson);
+  return composeInboundTextWithMedia("", media, 1400, signals).trim();
+}
 
 function stripStaffAliasFromHashPayload(stripped) {
   return String(stripped || "")
@@ -22,6 +43,7 @@ function stripStaffAliasFromHashPayload(stripped) {
  * @param {Record<string, string | undefined>} opts.parameter — RouterParameter / e.parameter
  * @param {string} [opts.bodyOverride] — global __bodyOverride analog (ATTACHMENT_ONLY)
  * @param {{ isStaff: boolean, staffActorKey?: string }} [opts.staffContext] — from resolveStaffContextFromRouterParameter
+ * @param {string} [opts.transportChannel] — `telegram` | `whatsapp` | `sms` gates empty-body media OCR intake
  * @returns {object}
  */
 function evaluateRouterPrecursor(opts) {
@@ -49,6 +71,32 @@ function evaluateRouterPrecursor(opts) {
       },
       bodyTrim,
       norm: normMsg(bodyTrim),
+      compliance: null,
+      tenantCommand: null,
+    };
+  }
+
+  /**
+   * Photo/screenshot with empty caption/text: OCR runs before this precursor; `Body` is still empty,
+   * so without this branch staff would hit `STAFF_LIFECYCLE_GATE` and core would stay closed — no reply.
+   * When enriched `_mediaJson` / `_mediaSignalsJson` yield a composed narrative, open MANAGER core like `#` capture.
+   */
+  let staffMediaComposed = "";
+  if (
+    staffCtx &&
+    staffCtx.isStaff &&
+    !bodyTrim &&
+    transportAllowsStaffMediaIntake(opts && opts.transportChannel)
+  ) {
+    staffMediaComposed = staffMediaMaintenanceComposedBody(p);
+  }
+  if (staffMediaComposed.length >= STAFF_MEDIA_INTAKE_MIN_LEN) {
+    return {
+      outcome: "STAFF_MAINTENANCE_MEDIA_INTAKE",
+      staffMaintenanceMedia: { composedPreviewLen: staffMediaComposed.length },
+      bodyTrim: "",
+      bodyLower: "",
+      norm: normMsg(staffMediaComposed.slice(0, 240)),
       compliance: null,
       tenantCommand: null,
     };

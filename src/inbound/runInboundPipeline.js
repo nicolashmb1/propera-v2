@@ -44,6 +44,7 @@ const {
   shouldEvaluateSmsSuppress,
   computeCanEnterCore,
   isStaffCaptureHash,
+  isStaffMaintenanceMediaIntake,
   resolveDefaultBrain,
 } = require("./routeInboundDecision");
 const { previewText } = require("../logging/inboundLogContext");
@@ -141,6 +142,7 @@ async function runInboundPipeline(o) {
 
   const precursor = evaluateRouterPrecursor({
     parameter: routerParameter,
+    transportChannel,
     staffContext: {
       isStaff: staffContext.isStaff,
       staffActorKey: staffContext.staffActorKey,
@@ -365,6 +367,7 @@ async function runInboundPipeline(o) {
 
   if (canEnterCore) {
     const isStaffCapture = isStaffCaptureHash(precursor);
+    const isStaffMediaIntake = isStaffMaintenanceMediaIntake(precursor);
     const bodyBase = isStaffCapture
       ? String(
           (precursor.staffCapture && precursor.staffCapture.stripped) || ""
@@ -390,7 +393,7 @@ async function runInboundPipeline(o) {
       traceId,
       traceStartMs,
       routerParameter,
-      mode: isStaffCapture ? "MANAGER" : "TENANT",
+      mode: isStaffCapture || isStaffMediaIntake ? "MANAGER" : "TENANT",
       bodyText: bodyForCore,
       staffActorKey: staffContext.staffActorKey,
       staffRow: staffContext.staff || null,

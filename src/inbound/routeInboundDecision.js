@@ -31,6 +31,14 @@ function buildLaneDecision(precursor, inbound, staffContext) {
       trace: "lane_v1",
     };
   }
+  if (precursor.outcome === "STAFF_MAINTENANCE_MEDIA_INTAKE") {
+    return {
+      lane: "staffMaintenanceMedia",
+      reason: "staff_media_ocr_intake",
+      mode: "MANAGER",
+      trace: "lane_v1",
+    };
+  }
   if (precursor.outcome === "STAFF_LIFECYCLE_GATE") {
     return {
       lane: "staffOperational",
@@ -99,6 +107,7 @@ function shouldEvaluateSmsSuppress(o) {
 function laneAllowsMaintenanceCore(laneDecision) {
   const lane = laneDecision && String(laneDecision.lane || "");
   if (lane === "staffCapture") return true;
+  if (lane === "staffMaintenanceMedia") return true;
   if (lane === "tenantLane") return true;
   if (lane === "managerLane") return true;
   return false;
@@ -170,9 +179,14 @@ function computeCanEnterCore(o) {
 
   /**
    * Staff must not open tenant maintenance intake (`TENANT` mode). Allowed: `#` staff capture,
-   * portal `create_ticket` (structured MANAGER path).
+   * OCR/media-only MANAGER intake on messaging transports, portal `create_ticket` (structured MANAGER path).
    */
-  if (staffContext && staffContext.isStaff && outcome !== "STAFF_CAPTURE_HASH") {
+  if (
+    staffContext &&
+    staffContext.isStaff &&
+    outcome !== "STAFF_CAPTURE_HASH" &&
+    outcome !== "STAFF_MAINTENANCE_MEDIA_INTAKE"
+  ) {
     if (!(transport === "portal" && portalStructuredCreate)) return false;
   }
 
@@ -185,6 +199,7 @@ function computeCanEnterCore(o) {
     !effectiveCompliance &&
     !precursor.tenantCommand &&
     (precursor.outcome === "STAFF_CAPTURE_HASH" ||
+      precursor.outcome === "STAFF_MAINTENANCE_MEDIA_INTAKE" ||
       precursor.outcome === "PRECURSOR_EVALUATED")
   );
 }
@@ -194,6 +209,10 @@ function computeCanEnterCore(o) {
  */
 function isStaffCaptureHash(precursor) {
   return precursor.outcome === "STAFF_CAPTURE_HASH";
+}
+
+function isStaffMaintenanceMediaIntake(precursor) {
+  return precursor && precursor.outcome === "STAFF_MAINTENANCE_MEDIA_INTAKE";
 }
 
 /**
@@ -215,6 +234,9 @@ function resolveDefaultBrain(o) {
   if (stubRun && stubRun.brain) return stubRun.brain;
   if (coreRun && coreRun.brain) return coreRun.brain;
   if (precursor.outcome === "STAFF_CAPTURE_HASH") return "staff_capture_pending_core";
+  if (precursor.outcome === "STAFF_MAINTENANCE_MEDIA_INTAKE") {
+    return "staff_media_intake_pending_core";
+  }
   if (precursor.outcome === "STAFF_LIFECYCLE_GATE") {
     return staffContext.staff ? "staff_gate_no_handler" : "staff_gate_missing_staff_row";
   }
@@ -243,5 +265,6 @@ module.exports = {
   shouldEvaluateSmsSuppress,
   computeCanEnterCore,
   isStaffCaptureHash,
+  isStaffMaintenanceMediaIntake,
   resolveDefaultBrain,
 };

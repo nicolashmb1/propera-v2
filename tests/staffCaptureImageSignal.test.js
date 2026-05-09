@@ -209,6 +209,30 @@ describe("staff capture image signal path", { concurrency: false }, () => {
     assert.match(r.coreRun.replyText, /received the photo for PENN 403/i);
   });
 
+  test("staff empty Body + image OCR enters MANAGER core without # (SMS/MMS parity)", async () => {
+    const mem = createMemorySupabase(seedBase());
+    setSupabaseClientForTests(mem);
+    const { runInboundPipeline } = require("../src/inbound/runInboundPipeline");
+
+    const r = await runInboundPipeline({
+      traceId: "staff-mms-ocr-only",
+      transportChannel: "sms",
+      routerParameter: twilioImageRouterParameter(""),
+      mediaSignalDeps: depsForOcr(
+        "Penn 409 shower glass off track please stop by today afternoon"
+      ),
+    });
+
+    assert.ok(r.coreRun && r.coreRun.ok, "core should run from OCR-only staff media");
+    assert.equal(mem._state.tickets.length, 1);
+    assert.equal(mem._state.tickets[0].property_code, "PENN");
+    assert.equal(mem._state.tickets[0].unit_label, "409");
+    assert.match(
+      mem._state.tickets[0].message_raw,
+      /shower glass off track/i
+    );
+  });
+
   test("multiple photos stay one staff draft/ticket and preserve both refs", async () => {
     const mem = createMemorySupabase(seedBase());
     setSupabaseClientForTests(mem);
