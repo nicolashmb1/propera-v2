@@ -1,21 +1,22 @@
 # `handleInboundCore` refactor plan (living doc)
 
-This document **reflects the consensus from the recovery-branch / refactor thread** (early 2026), **merged with the safer ordering** (cross-cutting gates before policy splits). It is the **stabilization** track for maintenance brain code—not a blocker for GAS cutover, portal, or other product work.
+This document **reflects the consensus from the recovery-branch / refactor thread** (early 2026), **merged with the safer ordering** (cross-cutting gates before policy splits). It described the **stabilization** track for maintenance brain code.
+
+**Track status (2026-05-09):** Phases **1–5** described below are **implemented** in-repo (scenario net + extractions + gates + policy modules + load context + boundary logs). Treat this file as **historical / rationale**; current layout lives under `src/brain/core/` (see **Ground truth**).
 
 ---
 
 ## Ground truth (repo snapshot)
 
-| Item | Value |
+| Item | Value (2026-05-09) |
 |------|--------|
-| File | `src/brain/core/handleInboundCore.js` |
-| Total lines | **1,477** |
-| `async function handleInboundCore` | starts **~line 217**; body is **~1,260 lines** in one function |
-| `return {` (rough) | **~36** exit shapes in this file |
-| `await` (rough) | **~71** |
-| `appendEventLog` / `emitTimed` (rough) | **~38** combined |
-
-Older thread estimates (e.g. 48 `if/else if` branches, 31 returns, 49 awaits) were from a **point-in-time audit**; re-count after edits. The **qualitative** point stands: **one function encodes many policies** with **high cyclomatic complexity** and **I/O interleaved with control flow**.
+| Entry | `src/brain/core/handleInboundCore.js` — **~107 lines** (`try`/`catch`, dispatch only) |
+| Load + gates + draft | `src/brain/core/coreMaintenanceLoadContext.js` — **`buildMaintenanceCoreDispatchContext`** (~349 lines) |
+| Fast / multi policy | `coreMaintenanceFastPath.js`, `coreMaintenanceMultiTurn.js` |
+| Portal / staff session / shared / finalize receipt | `coreMaintenancePortalDraft.js`, `coreMaintenanceStaffCapture.js`, `coreMaintenanceShared.js`, `coreMaintenanceStaffFinalizeReceipt.js` |
+| Mechanics / gates | `handleInboundCoreMechanics.js`, `handleInboundCoreGates.js` |
+| Boundary logs | `coreMaintenanceBoundaryLog.js` — **`CORE_EXIT`**, **`CORE_ERROR`** (after **`CORE_ENTER`** in load context) |
+| Baseline (pre-track) | Monolith **~1,477** lines — see Phase 1–4 narrative below |
 
 ---
 
@@ -101,7 +102,9 @@ Do in **small commits**, each green on Phase 1 + existing tests.
 
 **Exit criterion:** `handleInboundCore` is shorter; **zero** intentional behavior change.
 
-**Status (2026-05):** Items **1–3** implemented in `handleInboundCoreMechanics.js` (`coreInboundResult`, `finalizeTicketRowGroups`, `appendCoreFinalizedFlightRecorder`, `enterScheduleWaitAndLogTicketCreatedAskSchedule`, shared `outgateMeta`). **`loadCoreContext`** deferred: staff draft resolution + `staffMeta` / `clearIntakeLike` closures make a clean early-load extraction better paired with Phase 3 dispatcher prep.
+**Status (2026-05):** Items **1–3** implemented in `handleInboundCoreMechanics.js` (`coreInboundResult`, `finalizeTicketRowGroups`, `appendCoreFinalizedFlightRecorder`, `enterScheduleWaitAndLogTicketCreatedAskSchedule`, shared `outgateMeta`).
+
+**Status (2026-05-09, complete):** Item **4** — **`buildMaintenanceCoreDispatchContext`** in **`coreMaintenanceLoadContext.js`** (async load through gates + `fastDraft`; closures **`clearIntakeLike` / `saveIntakeLike` / `setScheduleWaitLike`** + mutable **`draftSeqActive`** preserved).
 
 ---
 
@@ -133,7 +136,7 @@ return dispatchMaintenanceTurn(ctx)
 
 **Exit criterion:** Main file reads as **setup → gates → dispatch**; tests still green.
 
-**Status (2026-05):** Implemented in `handleInboundCoreGates.js` — `resolveTenantVerificationIfPending`, `resolveAttachClarifyIfPending`, `handleScheduleReplyIfExpected` — wired from `handleInboundCore.js` immediately after `staffMeta` / `clearIntakeLike` / `saveIntakeLike` / `setScheduleWaitLike` setup. **`loadCoreContext`** still not a single function; **`dispatchMaintenanceTurn`** remains inline (Phase 4). Staff `start_new` after attach clarify returns **`staffDraftSeq`** from the newly allocated draft (same as post-assignment `staffMeta()` in the old inline code).
+**Status (2026-05):** Implemented in `handleInboundCoreGates.js` — `resolveTenantVerificationIfPending`, `resolveAttachClarifyIfPending`, `handleScheduleReplyIfExpected` — invoked from **`buildMaintenanceCoreDispatchContext`** after intake helpers exist. Staff `start_new` after attach clarify returns **`staffDraftSeq`** from the newly allocated draft (unchanged).
 
 ---
 
@@ -155,13 +158,23 @@ Only after Phases 1–3:
 
 `handleInboundCore.js` becomes a **thin dispatcher** (~80–120 lines) + re-exports if needed.
 
+**Status (2026-05-09):** First **safe slice** landed without changing behavior: after Phase 3 gates + `fastDraft` build, **`runCoreMaintenanceFastPath`** lives in **`coreMaintenanceFastPath.js`** (single-turn complete / `path: "fast"`) and **`runCoreMaintenanceMultiTurn`** in **`coreMaintenanceMultiTurn.js`** (`path: "multi_turn"` + pending prompts). Shared **`resolveManagerTenantIfNeeded`**, property load, and staff media clarify helpers → **`coreMaintenanceShared.js`**.
+
+**Status (2026-05-09, second slice):** **`coreMaintenanceStaffCapture.js`** — **`resolveStaffCaptureBodyAndSession`** (canonical invariant + `STAFF_CAPTURE_CANONICAL_*` logs + draft turn resolve vs **`getIntakeSession`**). **`coreMaintenancePortalDraft.js`** — **`buildFastDraftForMaintenanceCore`** (portal structured **`create_ticket`** validation failure logging + **`buildStructuredPortalCreateDraft`**, else **`parseMaintenanceDraftAsync`**). **`handleInboundCore.js`** wires these before clarify-media tweak and fast vs multi dispatch.
+
+**Status (2026-05-09, third slice):** **`coreMaintenanceStaffFinalizeReceipt.js`** — **`finalizeReceiptStaffCaptureScheduleBranch`** (shared **`STAFF_CAPTURE_INLINE_SCHEDULE`** / **`STAFF_CAPTURE_NO_SCHEDULE_PROMPT`** + receipt shapes). **`coreMaintenanceFastPath`** / **`coreMaintenanceMultiTurn`** call it with path-specific `staffSchedHint` / `draft` payloads.
+
+**Completion:** Thin **`handleInboundCore`** delegates load → fast vs multi; original four **named policy files** from the sketch map to **staff session**, **portal draft**, **fast path**, **multi-turn** modules above (staff finalize receipt shared).
+
 ---
 
-### Phase 5 — Logging at the boundary (optional cleanup)
+### Phase 5 — Logging at the boundary
 
-- Wrapper e.g. `withCoreLogging(inner)` for **CORE_ENTER / CORE_EXIT / CORE_ERROR** (duration + `brain`).
-- Inner code keeps **domain-specific** logs only.
-- Removes a chunk of repetitive `appendEventLog` / `emitTimed` noise.
+- **`CORE_ENTER`** remains in **`buildMaintenanceCoreDispatchContext`** (same payload as before).
+- **`emitMaintenanceCoreExit`** / **`emitMaintenanceCoreError`** in **`coreMaintenanceBoundaryLog.js`** — **`CORE_EXIT`** fires for every return **after** **`CORE_ENTER`** (early gate returns + successful dispatch); **`CORE_ERROR`** on thrown errors before rethrow.
+- Domain-specific logs stay in policy modules (`CORE_FAST_PATH_COMPLETE`, `EXPECT_RECOMPUTED`, etc.).
+
+**Status (2026-05-09):** Implemented and **`npm test`** green.
 
 ---
 
@@ -188,10 +201,10 @@ Only after Phases 1–3:
 
 ## Verdict (plain English)
 
-The function is **overloaded but not junk**: it is the **working engine**. Treat the refactor as a **transmission rebuild**: **characterization tests first**, then **extract helpers → gates → policies**, not a replacement engine overnight.
+The function was **overloaded but not junk**: it was the **working engine**. The stabilization track delivered **characterization tests**, **mechanical helpers**, **gates**, **policy modules**, **explicit load context**, and **boundary exit/error logs** without changing intake semantics (locked by CI). Further splits are **optional polish**, not required for this plan.
 
 ---
 
-*Last updated: aligns thread proposal + repo snapshot; update line counts/metrics when `handleInboundCore.js` changes materially.*
+*Last updated: 2026-05-09 — plan phases 1–5 marked complete; metrics reflect modular layout.*
 
 **See also:** [TESTING_STRATEGY.md](./TESTING_STRATEGY.md) — overall test layers, in-memory seams, and milestone table.

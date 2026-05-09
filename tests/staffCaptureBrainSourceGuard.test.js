@@ -8,6 +8,7 @@ const fs = require("fs");
 const path = require("path");
 
 const CORE = path.join(__dirname, "../src/brain/core/handleInboundCore.js");
+const LOAD_CTX = path.join(__dirname, "../src/brain/core/coreMaintenanceLoadContext.js");
 
 test("handleInboundCore — no removed DAL resolver for draft owner", () => {
   const src = fs.readFileSync(CORE, "utf8");
@@ -17,8 +18,8 @@ test("handleInboundCore — no removed DAL resolver for draft owner", () => {
   );
 });
 
-test("handleInboundCore — staff capture draft owner uses explicit canonical only", () => {
-  const src = fs.readFileSync(CORE, "utf8");
+test("maintenance core load context — staff capture draft owner uses explicit canonical only", () => {
+  const src = fs.readFileSync(LOAD_CTX, "utf8");
   assert.match(
     src,
     /const draftOwnerKey = isStaffCapture \? explicitCanonical/s,

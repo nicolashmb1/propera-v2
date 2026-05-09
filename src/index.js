@@ -277,6 +277,25 @@ app.post("/webhooks/twilio", twilioForm, handleTwilioWebhook);
 app.post("/webhooks/sms", twilioForm, handleTwilioWebhook);
 
 /**
+ * Serialize pipeline JSON for HTTP — avoids Express `res.json()` throwing on BigInt / cycles
+ * (would otherwise yield HTML error pages and break propera-app `postV2PortalWebhook` JSON parse).
+ * @param {unknown} obj
+ * @returns {string}
+ */
+function stringifyPortalPipelineJson(obj) {
+  try {
+    return JSON.stringify(obj, (_k, v) => (typeof v === "bigint" ? String(v) : v));
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return JSON.stringify({
+      ok: false,
+      error: "portal_response_serialisation_failed",
+      detail: msg,
+    });
+  }
+}
+
+/**
  * Portal / PM structured ingress — same brain as messaging; replies in JSON (no SMS/TG send).
  */
 app.post("/webhooks/portal", async (req, res) => {
@@ -328,7 +347,8 @@ app.post("/webhooks/portal", async (req, res) => {
             : null,
       },
     });
-    return res.status(logicalOk ? 200 : 422).json(result.json);
+    const responseBody = stringifyPortalPipelineJson(result.json);
+    return res.status(logicalOk ? 200 : 422).type("application/json").send(responseBody);
   } catch (err) {
     emit({
       level: "error",

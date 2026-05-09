@@ -21,7 +21,7 @@ Logs are not only for developers — they are the **evidence bundle** when the b
 
 **Implementation bar:** Anything that changes user-visible behavior or could explain a support ticket **must** leave a structured line: **`event` + `reason` + minimal context**. Plumbing-only steps can stay quiet; **“no message sent”** never should be quiet.
 
-**Brain (core) examples:** `EXPECT_RECOMPUTED` (draft slot flags + next stage), `TURN_SUMMARY` (lane/stage path), `CORE_FAST_PATH_COMPLETE` (single-message parse), `CORE_FINALIZED`, **`ATTACH_CLARIFY_REQUIRED`** (unit mismatch / ambiguous attach — `conversation_ctx.pending_expected=ATTACH_CLARIFY`), **`INTAKE_START_NEW`** (explicit new-issue restart) — see `handleInboundCore.js` + `appendEventLog` / `emit` pairs.
+**Brain (core) examples:** **`CORE_ENTER`** / **`CORE_EXIT`** / **`CORE_ERROR`** (maintenance core boundary — `handleInboundCore.js` + `coreMaintenanceBoundaryLog.js`; exit carries `brain` from result when known), `EXPECT_RECOMPUTED` (draft slot flags + next stage), `TURN_SUMMARY` (lane/stage path), `CORE_FAST_PATH_COMPLETE` (single-message parse), `CORE_FINALIZED`, **`ATTACH_CLARIFY_REQUIRED`** (unit mismatch / ambiguous attach — `conversation_ctx.pending_expected=ATTACH_CLARIFY`), **`INTAKE_START_NEW`** (explicit new-issue restart) — see `coreMaintenanceLoadContext.js` / policy modules + `appendEventLog` / `emitTimed` pairs.
 
 ---
 

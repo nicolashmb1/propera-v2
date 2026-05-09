@@ -7,6 +7,72 @@
 
 ---
 
+## 2026-05-09 — `handleInboundCore` refactor plan **complete** (Phases 2–5 closure)
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`coreMaintenanceLoadContext.js`** | **`buildMaintenanceCoreDispatchContext`** — everything through gates + `fastDraft` + clarify-media tweak (formerly inline in `handleInboundCore`). |
+| **`coreMaintenanceBoundaryLog.js`** | **`CORE_EXIT`** (after **`CORE_ENTER`**, includes gate early returns) + **`CORE_ERROR`** + rethrow. |
+| **`handleInboundCore.js`** | ~**107** lines: load → fast \| multi → boundary log. |
+| **Tests** | **`staffCaptureBrainSourceGuard.test.js`** — draft-owner regex moved to **`coreMaintenanceLoadContext.js`**. **`npm test`** green. |
+| **Docs** | **`HANDLE_INBOUND_CORE_REFACTOR_PLAN.md`** marked complete; **`STRUCTURED_LOGS.md`**, **`BRAIN_PORT_MAP.md`** updated. |
+
+### Continue
+
+Normal product work; no remaining items from that stabilization plan unless you open a **new** polish ticket.
+
+---
+
+## 2026-05-09 — `handleInboundCore` Phase 4 (third slice): staff finalize receipt dedupe
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`coreMaintenanceStaffFinalizeReceipt.js`** | **`finalizeReceiptStaffCaptureScheduleBranch`** — one implementation for inline schedule vs no-schedule-prompt after finalize (`fast` / `multi_turn`). |
+| **Fast / multi runners** | Delegate staff branch to helper; **`npm test`** green. |
+
+### Continue
+
+**`loadCoreContext`** (Phase 2 deferral) or Phase 5 **`withCoreLogging`** when touching core entry again.
+
+---
+
+## 2026-05-09 — `handleInboundCore` Phase 4 (second slice): staff session + portal draft builders
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`coreMaintenanceStaffCapture.js`** | **`resolveStaffCaptureBodyAndSession`** — replaces inline canonical checks + **`resolveStaffCaptureDraftTurn`** vs tenant **`getIntakeSession`**. |
+| **`coreMaintenancePortalDraft.js`** | **`buildFastDraftForMaintenanceCore`** — portal structured create validation + parse fallback in one async helper. |
+| **`handleInboundCore.js`** | Thinner: delegates session + initial **`fastDraft`** build; **`npm test`** green. |
+
+### Continue
+
+Dedupe staff **post-finalize** receipt branches shared by **`coreMaintenanceFastPath`** / **`coreMaintenanceMultiTurn`**; or **`loadCoreContext`** when touching dispatcher again.
+
+---
+
+## 2026-05-09 — `handleInboundCore` Phase 4 (first slice): fast vs multi-turn dispatch
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`coreMaintenanceShared.js`** | **`resolveManagerTenantIfNeeded`**, **`loadPropertyCodesUpper`**, **`hasClarifyingStaffMediaSignal`** (moved from monolith). |
+| **`coreMaintenanceFastPath.js`** | **`runCoreMaintenanceFastPath`** — verbatim former “fast path” body (`path: "fast"`). |
+| **`coreMaintenanceMultiTurn.js`** | **`runCoreMaintenanceMultiTurn`** — verbatim former multi-turn body; **`setDraftSeqActive`** callback preserves staff **`start_new`** draft seq mutation + **`staffMeta()`** closure semantics. |
+| **`handleInboundCore.js`** | Setup, gates, portal validation + **`parseMaintenanceDraftAsync`**, then **`dispatch`** = fast runner vs multi-turn runner. **No intentional behavior change**; **`npm test`** green. |
+
+### Continue
+
+Optional: extract **`coreStaffCapture.js`** / **`corePortalCreate.js`** as separate top-level policies (plan’s original four-file split); **`loadCoreContext`** still deferred per Phase 2 notes.
+
+---
+
 ## 2026-05-06 — `handleInboundCore` Phase 2: mechanical extractions
 
 ### Done
