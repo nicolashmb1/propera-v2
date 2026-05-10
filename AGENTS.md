@@ -14,7 +14,8 @@ If the user says **“keep working on V2”** or **“continue Propera V2”**, 
 6. **`docs/ORCHESTRATOR_ROUTING.md`** — **execution order**, **what blocks maintenance core**, **lane stubs** (vendor/system vs tenant/manager).  
 7. **`docs/ADAPTER_ONBOARDING.md`** — when adding channels, follow adapter-only boundary + shared media contract.  
 8. **`docs/PROPERA_V2_GAS_EXIT_PLAN.md`** — phases / cutover narrative (when relevant).  
-9. **`docs/OUTSIDE_CURSOR.md`** — SQL/env steps operators run outside the editor.
+9. **`docs/OUTSIDE_CURSOR.md`** — SQL/env steps operators run outside the editor.  
+10. **`docs/TICKET_TIMELINE.md`** — portal **Activity** / `ticket_timeline_events`: V1 trigger contract, **`timeline_json`** shape, duplicate rule vs **Timeline V2** semantic writers, migrations **`034`–`037`**, app mapping (`propera-app` `timelineMapping.ts`).
 
 Optional: **`docs/GAS_ENGINE_PORT_PROGRAM.md`** (phased port for engines 10/12/14/20), **`docs/TESTING_STRATEGY.md`**, **`docs/STRUCTURED_LOGS.md`**, **`docs/HANDOFF_LOG.md`** (what changed recently — read **latest dated section** before deep-diving).
 
@@ -65,6 +66,7 @@ Conversations **drift**: freeze lifts, scope shifts, priorities change, a port l
 | Freeze lifted, new priority (e.g. parity-only → new paths), or agent instructions | **`AGENTS.md`** (this file) — **especially “Current stance”** |
 | Test strategy / what to run for regression | **`docs/TESTING_STRATEGY.md`** (if testing expectations changed) |
 | Portal preventive / program expansion or building-profile contract | **`docs/PM_PROGRAM_ENGINE_V1.md`** (+ **`docs/BRAIN_PORT_MAP.md`** portal PM row if routes/files move) |
+| Ticket Activity timeline (trigger kinds, view contract, V2 event kinds, duplicate rule) | **`docs/TICKET_TIMELINE.md`**, **`supabase/migrations/`** (new migration if SQL contract changes), **`propera-app/src/lib/timelineMapping.ts`**, **`tests/ticketTimelineV1Kinds.test.js`** (or successor) |
 
 **Rule:** Stale docs are a bug. **Do not** end a meaningful direction change with only chat context updated.
 
@@ -85,6 +87,7 @@ Conversations **drift**: freeze lifts, scope shifts, priorities change, a port l
 | Portal PM / preventive (program runs, expansion) | `docs/PM_PROGRAM_ENGINE_V1.md`; code: `src/dal/programRuns.js`, `src/pm/expandProgramLines.js`, `src/portal/registerPortalRoutes.js` |
 | Unit tests | `propera-v2/tests/` |
 | Supabase SQL | `propera-v2/supabase/migrations/` |
+| Portal ticket Activity / timeline V1+V2 contract | **`docs/TICKET_TIMELINE.md`**; SQL: `034`–`037` ticket timeline migrations; app: `propera-app/src/lib/timelineMapping.ts` |
 | Env template | `propera-v2/.env.example` |
 | Intake attach classify (deterministic slice) | `src/brain/core/intakeAttachClassify.js` (used by `mergeMaintenanceDraft.js`) |
 | Attach clarify latch (DB) | `src/dal/conversationCtxAttach.js` — sets `conversation_ctx.pending_expected = ATTACH_CLARIFY` |
