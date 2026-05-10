@@ -146,6 +146,35 @@ function openaiModelVision() {
 }
 
 /**
+ * Vision model for batch utility-meter photo extraction only (`meterRuns/extractMeterReading`).
+ * When unset, uses {@link openaiModelVision} (intake default). Set e.g. `gpt-4o` for higher digit/OCR accuracy vs cost.
+ */
+function openaiModelMeterBatch() {
+  const explicit = String(env("PROPERA_METER_BATCH_VISION_MODEL", "")).trim();
+  if (explicit) return explicit;
+  return openaiModelVision();
+}
+
+/**
+ * Meter batch OCR: when true (`PROPERA_METER_REGISTER_LAST_DIGIT_ZERO=1`), post-process may append a trailing 0 when
+ * `registerDigitCount` implies a dropped last wheel. Prompt always nudges whole-tens; this gates numeric correction.
+ */
+function meterRegisterLastDigitZero() {
+  return envFlagTrue("PROPERA_METER_REGISTER_LAST_DIGIT_ZERO", false);
+}
+
+/**
+ * Optional: expected number of visible billing-register positions (wheels) for this portfolio; injected into the refinement extract pass.
+ */
+function meterExpectedRegisterDigits() {
+  const raw = String(env("PROPERA_METER_EXPECTED_REGISTER_DIGITS", "")).trim();
+  if (!raw) return null;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1 || n > 24) return null;
+  return n;
+}
+
+/**
  * `GET /dashboard` + `GET /api/ops/event-log` — flight recorder UI.
  * - `DASHBOARD_ENABLED=0` → always off.
  * - `DASHBOARD_ENABLED=1` → always on (if token passes when set).
@@ -204,6 +233,9 @@ module.exports = {
   intakeMediaSignalEnabled,
   intakeMediaVisionEnabled,
   openaiModelVision,
+  openaiModelMeterBatch,
+  meterRegisterLastDigitZero,
+  meterExpectedRegisterDigits,
   dashboardEnabled,
   dashboardToken,
   lifecycleCronSecret,

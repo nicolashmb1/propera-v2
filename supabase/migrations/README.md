@@ -21,6 +21,7 @@ Run SQL files in **numeric order** in the Supabase SQL Editor (same project as `
 | **019_properties_program_expansion_profile.sql** | `properties.program_expansion_profile` (jsonb) — per-property PM expansion hints | **`expandProgramLines.js`**: `FLOOR_BASED` uses **`floor_paint_scopes`** then **`common_paint_scopes`**; `UNIT_PLUS_COMMON` appends **`common_paint_scopes`** (or one **Common Area**); `COMMON_AREA_ONLY` uses **`common_paint_scopes`** only — see **`docs/PM_PROGRAM_ENGINE_V1.md`** |
 | **020_program_lines_scope_type_common_area_only.sql** | `program_lines`: migrate `SITE` → `COMMON_AREA`; constraint allows only `UNIT`, `COMMON_AREA`, `FLOOR` | **`expandProgramLines.js`** (`COMMON_AREA_ONLY` lines use `COMMON_AREA`) |
 | **021_portal_auth_allowlist.sql** | `portal_auth_allowlist` — pre-approved emails, `portal_role`, optional `staff_id` FK | **`propera-app`** `POST /api/auth/register`, **`POST /api/auth/login`**, **`portalMeFromSupabase`** (`/api/me`); service role bypasses RLS |
+| **031_batch_media_meter_billing.sql** | `batch_media_runs`, `batch_media_assets`, `utility_meters`, `utility_meter_readings`; Storage bucket **`utility-meter-runs`** | **`meterBillingRuns.js`**, **`registerMeterRunRoutes.js`** (`/api/portal/meter-runs`, `utility-meters`); **`propera-app`** `/api/utility-meter-runs/*`, `/api/utility-meter-runs/upload` |
 
 ### Minimum paths
 
