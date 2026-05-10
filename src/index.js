@@ -82,7 +82,7 @@ app.post("/internal/cron/lifecycle-timers", async (req, res) => {
 
 app.get("/", (_req, res) => {
   res.type("text/plain").send(
-    "Propera V2 — GET /health | POST /webhooks/telegram | POST /webhooks/twilio | POST /webhooks/sms | POST /webhooks/portal | POST /internal/cron/lifecycle-timers | GET /api/portal/gas-compat?path=tickets|properties|tenants | GET /api/portal/tenants (+ POST PATCH DELETE roster) | GET /api/portal/program-templates program-runs POST program-runs PATCH program-lines/:id/complete|reopen | GET/POST /api/portal/meter-runs utility-meters | GET /dashboard + GET /api/ops/event-log + GET /api/ops/lifecycle-timers | dev: GET /api/dev/resolve-actor?phone=+1..."
+    "Propera V2 — GET /health | POST /webhooks/telegram | POST /webhooks/twilio | POST /webhooks/sms | POST /webhooks/portal | POST /internal/cron/lifecycle-timers | GET /api/portal/gas-compat?path=tickets|properties|tenants | GET /api/portal/tenants (+ POST PATCH DELETE roster) | GET /api/portal/turnovers (+ items / mark-ready / create-ticket) | GET /api/portal/program-templates program-runs POST program-runs PATCH program-lines/:id/complete|reopen | GET/POST /api/portal/meter-runs utility-meters | GET /dashboard + GET /api/ops/event-log + GET /api/ops/lifecycle-timers | dev: GET /api/dev/resolve-actor?phone=+1..."
   );
 });
 

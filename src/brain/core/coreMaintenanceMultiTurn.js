@@ -47,6 +47,7 @@ const {
 const {
   finalizeReceiptStaffCaptureScheduleBranch,
 } = require("./coreMaintenanceStaffFinalizeReceipt");
+const { readTurnoverIdsFromPortalPayload } = require("../../dal/turnovers");
 
 /**
  * @param {object} x
@@ -399,6 +400,7 @@ async function runCoreMaintenanceMultiTurn(x) {
     const mergedMt = String(
       issueForFinalize || merged.draft_issue || ""
     ).trim();
+    const turnoverIdsMt = readTurnoverIdsFromPortalPayload(p);
     const { rows: groupsMt } = reconcileFinalizeTicketRows({
       structuredIssues: fastDraft.structuredIssues,
       mergedIssueText: mergedMt || String(effectiveBody || "").trim(),
@@ -430,6 +432,8 @@ async function runCoreMaintenanceMultiTurn(x) {
         routerParameter: p,
         tenantPhoneE164: trMt.tenantPhoneE164,
         tenantLookupMeta: trMt.tenantLookupMeta,
+        turnoverId: turnoverIdsMt.turnoverId || undefined,
+        turnoverItemId: turnoverIdsMt.turnoverItemId || undefined,
       }),
       staffMetaFn: staffMeta,
       draftOnError: merged,

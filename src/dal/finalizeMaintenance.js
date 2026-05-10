@@ -103,6 +103,8 @@ function buildTicketAttachmentsFromRouterParameter(routerParameter) {
  * @param {string} [o.unitCatalogId] — optional `public.units.id`
  * @param {string} [o.reportSourceUnit] — report context only (not persisted as `unit_label` for common-area)
  * @param {string} [o.reportSourcePhone] — report context only (not persisted as tenant phone for common-area)
+ * @param {string} [o.turnoverId] — optional `public.turnovers.id`
+ * @param {string} [o.turnoverItemId] — optional `public.turnover_items.id`
  */
 async function finalizeMaintenanceDraft(o) {
   const sb = getSupabase();
@@ -303,6 +305,9 @@ async function finalizeMaintenanceDraft(o) {
     source_row_hash: "",
     imported_at: null,
     import_batch_id: "",
+
+    turnover_id: o.turnoverId || null,
+    turnover_item_id: o.turnoverItemId || null,
   };
 
   const { data: ticket, error: tErr } = await sb
@@ -342,6 +347,7 @@ async function finalizeMaintenanceDraft(o) {
     location_id: o.locationId || null,
     location_label_snapshot: String(o.locationLabelSnapshot || "").trim(),
     unit_catalog_id: o.unitCatalogId || null,
+    turnover_id: o.turnoverId || null,
   });
 
   if (wErr) return { ok: false, error: "work_item:" + wErr.message };

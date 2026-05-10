@@ -207,6 +207,11 @@ function portalApiToken() {
   ).trim();
 }
 
+/** Turnover Engine `/api/portal/turnovers*` — opt-in until GA (`PROPERA_TURNOVER_ENGINE_ENABLED=1`). */
+function turnoverEngineEnabled() {
+  return env("PROPERA_TURNOVER_ENGINE_ENABLED", "") === "1";
+}
+
 module.exports = {
   env,
   nodeEnv: env("NODE_ENV", "development"),
@@ -240,4 +245,5 @@ module.exports = {
   dashboardToken,
   lifecycleCronSecret,
   portalApiToken,
+  turnoverEngineEnabled,
 };

@@ -24,8 +24,21 @@ const {
 } = require("../dal/savedPrograms");
 const { patchPropertyProgramExpansionProfile } = require("../dal/portalPropertyProgramProfile");
 const { listPropertyLocationsForPortal } = require("../dal/propertyLocations");
+const {
+  listTurnovers,
+  getTurnoverById,
+  startTurnover,
+  patchTurnover,
+  addTurnoverItem,
+  updateTurnoverItem,
+  reorderTurnoverItems,
+  linkTicketToTurnoverItem,
+  createTicketFromTurnoverItem,
+  markTurnoverReady,
+} = require("../dal/turnovers");
 const { getSupabase } = require("../db/supabase");
 const { verifyPortalRequest } = require("./portalAuth");
+const { turnoverEngineEnabled } = require("../config/env");
 
 function registerPortalReadRoutes(app) {
   async function sendTickets(_req, res) {
@@ -71,6 +84,16 @@ function registerPortalReadRoutes(app) {
       }
       return handler(req, res, next);
     };
+  }
+
+  /** Portal token + opt-in turnover flag (`PROPERA_TURNOVER_ENGINE_ENABLED=1`). */
+  function gateTurnover(handler) {
+    return gate(async (req, res, next) => {
+      if (!turnoverEngineEnabled()) {
+        return res.status(404).json({ ok: false, error: "turnover_engine_disabled" });
+      }
+      return handler(req, res, next);
+    });
   }
 
   /** GAS web-app style: `baseUrl?path=tickets` (propera-app remote mode). */
@@ -290,6 +313,227 @@ function registerPortalReadRoutes(app) {
         return res.status(code).json({ ok: false, error: out.error || "archive_failed" });
       }
       return res.status(200).json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  /** Turnover Engine V1 — unit walkthrough + readiness */
+  app.get("/api/portal/turnovers", gateTurnover(async (req, res) => {
+    try {
+      const property_code = req.query.property_code != null ? String(req.query.property_code) : "";
+      const unit_catalog_id =
+        req.query.unit_catalog_id != null ? String(req.query.unit_catalog_id) : "";
+      const out = await listTurnovers({ property_code, unit_catalog_id });
+      if (!out.ok) {
+        return res.status(500).json({ ok: false, error: out.error || "list_failed" });
+      }
+      return res.status(200).json({ ok: true, turnovers: out.turnovers });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.post("/api/portal/turnovers", gateTurnover(async (req, res) => {
+    try {
+      const body = req.body || {};
+      const out = await startTurnover({
+        property_code: body.property_code ?? body.propertyCode,
+        unit_catalog_id: body.unit_catalog_id ?? body.unitCatalogId,
+        target_ready_date: body.target_ready_date ?? body.targetReadyDate,
+        summary: body.summary,
+        created_by: body.created_by ?? body.createdBy ?? "",
+        traceId: req.traceId,
+      });
+      if (!out.ok) {
+        const code =
+          out.error === "active_turnover_exists"
+            ? 409
+            : out.error === "unit_property_mismatch" || out.error === "unknown_unit"
+              ? 400
+              : 400;
+        return res.status(code).json({
+          ok: false,
+          error: out.error || "start_failed",
+          existing_turnover_id: out.existing_turnover_id,
+        });
+      }
+      return res.status(201).json({
+        ok: true,
+        turnover_id: out.turnover_id,
+        turnover: out.turnover,
+        items: out.items,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.get("/api/portal/turnovers/:id", gateTurnover(async (req, res) => {
+    try {
+      const out = await getTurnoverById(req.params.id, true);
+      if (!out.ok) {
+        const code = out.error === "not_found" ? 404 : 500;
+        return res.status(code).json({ ok: false, error: out.error || "get_failed" });
+      }
+      return res.status(200).json({ ok: true, turnover: out.turnover, items: out.items });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.patch("/api/portal/turnovers/:id", gateTurnover(async (req, res) => {
+    try {
+      const body = req.body || {};
+      const out = await patchTurnover(req.params.id, body, { traceId: req.traceId });
+      if (!out.ok) {
+        const code = out.error === "not_found" ? 404 : 400;
+        return res.status(code).json({ ok: false, error: out.error || "patch_failed" });
+      }
+      return res.status(200).json({ ok: true, turnover: out.turnover, items: out.items });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.post("/api/portal/turnovers/:id/mark-ready", gateTurnover(async (req, res) => {
+    try {
+      const out = await markTurnoverReady(req.params.id, { traceId: req.traceId });
+      if (!out.ok) {
+        const code = out.error === "not_found" ? 404 : 422;
+        return res.status(code).json({
+          ok: false,
+          error: out.error || "mark_ready_failed",
+          reasons: out.reasons || [],
+        });
+      }
+      return res.status(200).json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.post("/api/portal/turnovers/:id/items", gateTurnover(async (req, res) => {
+    try {
+      const out = await addTurnoverItem(req.params.id, req.body || {}, { traceId: req.traceId });
+      if (!out.ok) {
+        const code =
+          out.error === "not_found"
+            ? 404
+            : out.error === "turnover_not_active"
+              ? 409
+              : 400;
+        return res.status(code).json({ ok: false, error: out.error || "add_item_failed" });
+      }
+      return res.status(201).json({ ok: true, item_id: out.item_id });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.patch("/api/portal/turnovers/:id/items/:itemId", gateTurnover(async (req, res) => {
+    try {
+      const out = await updateTurnoverItem(req.params.id, req.params.itemId, req.body || {}, {
+        traceId: req.traceId,
+      });
+      if (!out.ok) {
+        const code = out.error === "not_found" ? 404 : 400;
+        return res.status(code).json({ ok: false, error: out.error || "update_item_failed" });
+      }
+      return res.status(200).json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.post("/api/portal/turnovers/:id/items/reorder", gateTurnover(async (req, res) => {
+    try {
+      const body = req.body || {};
+      const ordered =
+        body.ordered_ids || body.orderedIds || body.ids || [];
+      const out = await reorderTurnoverItems(req.params.id, ordered, { traceId: req.traceId });
+      if (!out.ok) {
+        const code = out.error === "unknown_item" ? 400 : 400;
+        return res.status(code).json({ ok: false, error: out.error || "reorder_failed" });
+      }
+      return res.status(200).json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.post("/api/portal/turnovers/:id/items/:itemId/create-ticket", gateTurnover(async (req, res) => {
+    try {
+      const body = req.body || {};
+      const out = await createTicketFromTurnoverItem({
+        turnoverId: req.params.id,
+        itemId: req.params.itemId,
+        actorPhoneE164: body.actor_phone_e164 ?? body.actorPhoneE164 ?? "",
+        traceId: req.traceId,
+      });
+      if (!out.ok) {
+        const code =
+          out.error === "item_not_found" || out.error === "turnover_not_found"
+            ? 404
+            : out.error === "item_already_linked"
+              ? 409
+              : 400;
+        return res.status(code).json({ ok: false, error: out.error || "create_ticket_failed" });
+      }
+      return res.status(201).json({
+        ok: true,
+        ticket_id: out.ticket_id,
+        work_item_id: out.work_item_id,
+        ticket_key: out.ticket_key,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.post("/api/portal/turnovers/:id/items/:itemId/link-ticket", gateTurnover(async (req, res) => {
+    try {
+      const body = req.body || {};
+      const hint = body.ticket_id ?? body.ticketId ?? body.human_ticket_id ?? "";
+      const out = await linkTicketToTurnoverItem(req.params.id, req.params.itemId, hint, {
+        traceId: req.traceId,
+      });
+      if (!out.ok) {
+        const code =
+          out.error === "item_not_found" ? 404 : out.error === "ticket_not_found" ? 404 : 400;
+        return res.status(code).json({ ok: false, error: out.error || "link_failed" });
+      }
+      return res.status(200).json({ ok: true, ticket_id: out.ticket_id });
     } catch (err) {
       return res.status(500).json({
         ok: false,

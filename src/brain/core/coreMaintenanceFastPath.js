@@ -33,6 +33,7 @@ const { resolveManagerTenantIfNeeded } = require("./coreMaintenanceShared");
 const {
   finalizeReceiptStaffCaptureScheduleBranch,
 } = require("./coreMaintenanceStaffFinalizeReceipt");
+const { readTurnoverIdsFromPortalPayload } = require("../../dal/turnovers");
 
 /**
  * @param {object} x
@@ -174,6 +175,7 @@ async function runCoreMaintenanceFastPath(x) {
 
   const mergedFast =
     String(fastDraft.issueText || "").trim() || String(effectiveBody || "").trim();
+  const turnoverIdsFast = readTurnoverIdsFromPortalPayload(p);
   const { rows: groupsFast } = reconcileFinalizeTicketRows({
     structuredIssues: fastDraft.structuredIssues,
     mergedIssueText: mergedFast,
@@ -203,6 +205,8 @@ async function runCoreMaintenanceFastPath(x) {
       routerParameter: p,
       tenantPhoneE164: trFast.tenantPhoneE164,
       tenantLookupMeta: trFast.tenantLookupMeta,
+      turnoverId: turnoverIdsFast.turnoverId || undefined,
+      turnoverItemId: turnoverIdsFast.turnoverItemId || undefined,
     }),
     staffMetaFn: staffMeta,
     draftOnError: fastDraft,

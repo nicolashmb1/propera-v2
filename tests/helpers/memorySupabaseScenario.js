@@ -41,6 +41,8 @@ function tableKey(tableName) {
     work_items: "work_items",
     units: "units",
     property_locations: "property_locations",
+    turnovers: "turnovers",
+    turnover_items: "turnover_items",
   };
   return map[tableName] || null;
 }
@@ -65,6 +67,8 @@ function createScenarioMemorySupabase(seed) {
     work_items: (seed.work_items || []).map((r) => ({ ...r })),
     units: (seed.units || []).map((r) => ({ ...r })),
     property_locations: (seed.property_locations || []).map((r) => ({ ...r })),
+    turnovers: (seed.turnovers || []).map((r) => ({ ...r })),
+    turnover_items: (seed.turnover_items || []).map((r) => ({ ...r })),
   };
 
   function rowsFor(tableName) {
@@ -177,37 +181,47 @@ function createScenarioMemorySupabase(seed) {
   }
 
   function insertThenable(tableName, row) {
-    const rows = rowsFor(tableName);
-    let consumed = false;
-    const o = Array.isArray(row) ? row[0] : row;
-    const copy = { ...o };
-
-    function push() {
-      if (consumed) return copy;
-      consumed = true;
-      if (!rows) return copy;
-      if (tableName === "tickets" && copy.id == null) {
+    const dest = rowsFor(tableName);
+    const sources = Array.isArray(row) ? row : [row];
+    const copies = sources.map((o) => {
+      const copy = { ...o };
+      if (
+        copy.id == null &&
+        (tableName === "tickets" ||
+          tableName === "turnovers" ||
+          tableName === "turnover_items")
+      ) {
         copy.id = crypto.randomUUID();
       }
-      rows.push(copy);
       return copy;
+    });
+
+    let consumed = false;
+    function pushAll() {
+      if (consumed) return copies;
+      consumed = true;
+      if (!dest) return copies;
+      for (const c of copies) dest.push(c);
+      return copies;
     }
 
     return {
       select(_cols) {
         return {
           maybeSingle: async () => {
-            const c = push();
-            return { data: { id: c.id }, error: null };
+            const arr = pushAll();
+            const first = arr[0] || {};
+            return { data: { id: first.id }, error: null };
           },
           single: async () => {
-            const c = push();
-            return { data: { id: c.id }, error: null };
+            const arr = pushAll();
+            const first = arr[0] || {};
+            return { data: { id: first.id }, error: null };
           },
         };
       },
       then(onFulfilled, onRejected) {
-        push();
+        pushAll();
         return Promise.resolve({ data: null, error: null }).then(onFulfilled, onRejected);
       },
     };
@@ -344,10 +358,33 @@ function scenarioMaintenanceSeedPenn() {
   };
 }
 
+/** PENN + one catalog unit for turnover DAL scenarios */
+function scenarioTurnoverSeedPenn316() {
+  const base = scenarioMaintenanceSeedPennWithStaffPhone(SCENARIO_STAFF_E164);
+  return {
+    ...base,
+    units: [
+      {
+        id: "aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee",
+        property_code: "PENN",
+        unit_label: "316",
+        floor: "",
+        bedrooms: "",
+        bathrooms: "",
+        status: "Vacant",
+        notes: "",
+      },
+    ],
+    turnovers: [],
+    turnover_items: [],
+  };
+}
+
 module.exports = {
   createScenarioMemorySupabase,
   scenarioMaintenanceSeedPenn,
   scenarioMaintenanceSeedPennWithStaffPhone,
+  scenarioTurnoverSeedPenn316,
   SCENARIO_TENANT_E164,
   SCENARIO_STAFF_E164,
 };

@@ -67,4 +67,39 @@ describe("scenarios — portal create_ticket structured (in-memory)", { concurre
       "issue text from structured message"
     );
   });
+
+  test("create_ticket may carry turnover_id / turnover_item_id into ticket row", async () => {
+    const mem = createScenarioMemorySupabase(
+      scenarioMaintenanceSeedPennWithStaffPhone(SCENARIO_STAFF_E164)
+    );
+    setSupabaseClientForTests(mem);
+    const { runInboundPipeline } = require("../../src/inbound/runInboundPipeline");
+
+    const turnoverId = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
+    const turnoverItemId = "cccccccc-cccc-4ccc-cccc-cccccccccccc";
+
+    const routerParameter = buildRouterParameterFromPortal({
+      action: "create_ticket",
+      actorPhoneE164: SCENARIO_STAFF_E164,
+      property: "PENN",
+      unit: "808",
+      category: "Plumbing",
+      message: "Leak under sink",
+      preferredWindow: "",
+      turnover_id: turnoverId,
+      turnover_item_id: turnoverItemId,
+    });
+
+    const r = await runInboundPipeline({
+      traceId: "sc-portal-turnover-1",
+      transportChannel: "portal",
+      routerParameter,
+    });
+
+    assert.ok(r.coreRun);
+    assert.equal(r.coreRun.brain, "core_finalized");
+    assert.equal(mem._state.tickets.length, 1);
+    assert.equal(String(mem._state.tickets[0].turnover_id || ""), turnoverId);
+    assert.equal(String(mem._state.tickets[0].turnover_item_id || ""), turnoverItemId);
+  });
 });
