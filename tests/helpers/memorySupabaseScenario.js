@@ -39,6 +39,8 @@ function tableKey(tableName) {
     intake_sessions: "intake_sessions",
     tickets: "tickets",
     work_items: "work_items",
+    units: "units",
+    property_locations: "property_locations",
   };
   return map[tableName] || null;
 }
@@ -61,6 +63,8 @@ function createScenarioMemorySupabase(seed) {
     intake_sessions: (seed.intake_sessions || []).map((r) => ({ ...r })),
     tickets: (seed.tickets || []).map((r) => ({ ...r })),
     work_items: (seed.work_items || []).map((r) => ({ ...r })),
+    units: (seed.units || []).map((r) => ({ ...r })),
+    property_locations: (seed.property_locations || []).map((r) => ({ ...r })),
   };
 
   function rowsFor(tableName) {
@@ -297,6 +301,8 @@ function scenarioMaintenanceSeedPenn() {
     intake_sessions: [],
     tickets: [],
     work_items: [],
+    units: [],
+    property_locations: [],
     property_aliases: [],
     properties: [
       {

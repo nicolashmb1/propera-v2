@@ -23,6 +23,7 @@ const {
   archiveSavedProgram,
 } = require("../dal/savedPrograms");
 const { patchPropertyProgramExpansionProfile } = require("../dal/portalPropertyProgramProfile");
+const { listPropertyLocationsForPortal } = require("../dal/propertyLocations");
 const { getSupabase } = require("../db/supabase");
 const { verifyPortalRequest } = require("./portalAuth");
 
@@ -140,6 +141,27 @@ function registerPortalReadRoutes(app) {
 
   app.get("/api/portal/tickets", gate(sendTickets));
   app.get("/api/portal/properties", gate(sendProperties));
+
+  app.get(
+    "/api/portal/properties/:code/property-locations",
+    gate(async (req, res) => {
+      try {
+        const code = String(req.params.code || "").trim();
+        const out = await listPropertyLocationsForPortal(code);
+        if (!out.ok) {
+          const status =
+            out.error === "invalid_property_code" ? 400 : 500;
+          return res.status(status).json({ ok: false, error: out.error || "list_failed" });
+        }
+        return res.status(200).json({ ok: true, locations: out.locations });
+      } catch (err) {
+        return res.status(500).json({
+          ok: false,
+          error: String(err && err.message ? err.message : err),
+        });
+      }
+    })
+  );
 
   app.patch(
     "/api/portal/properties/:code/program-expansion-profile",

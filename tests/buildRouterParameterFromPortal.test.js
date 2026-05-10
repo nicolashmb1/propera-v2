@@ -18,8 +18,24 @@ test("create_ticket composes Body with Preferred line", () => {
   });
   assert.equal(p._channel, "PORTAL");
   assert.ok(p.Body.includes("PENN"));
+  assert.ok(p.Body.includes("apt"));
   assert.ok(p.Body.includes("Preferred:"));
   assert.ok(p.Body.includes("tomorrow afternoon"));
+});
+
+test("create_ticket common_area Body omits apt fragment", () => {
+  const p = buildRouterParameterFromPortal({
+    action: "create_ticket",
+    actorPhoneE164: "+19085550101",
+    property: "PENN",
+    location_kind: "common_area",
+    unit: "",
+    category: "Safety",
+    message: "Wet floor",
+    preferredWindow: "",
+  });
+  assert.ok(!/\bapt\b/i.test(p.Body));
+  assert.ok(p.Body.includes("Wet floor"));
 });
 
 test("staff_command passes body through", () => {

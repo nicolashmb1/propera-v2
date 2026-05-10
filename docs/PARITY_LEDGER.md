@@ -73,6 +73,8 @@ Use this to see **what exists in GAS** and whether **V2 has a row** in §§1–6
 
 **Portal `action: create_ticket` (V2 policy):** Validated structured signal — `buildStructuredPortalCreateDraft` + `finalizeMaintenance.readPortalCreateTicketPresentation`. Does **not** run `compileTurn` / regex intake on synthetic `Body`; **no** emergency inference or `localCategoryFromText` on issue text; **category / urgency / status / serviceNote** come from `_portalPayloadJson`; only **preferredWindow** is parsed for lifecycle schedule (`applyPreferredWindowByTicketKey`). PARITY GAP vs GAS portal pipeline (intentional).
 
+**Canonical location (V2, 2026):** `_portalPayloadJson` may include **`location_kind`** (`unit` \| `common_area` \| `property`), optional **`location_id`**, **`location_label_snapshot`**, **`unit_catalog_id`**, **`report_source_unit`**. **`resolveLocationTarget`** runs before finalize on the maintenance fast path (portal structured + NL); **`finalizeMaintenanceDraft`** persists **`location_id`**, **`location_label_snapshot`**, **`unit_catalog_id`** on tickets/work_items when migration **`032_canonical_location_target_columns.sql`** is applied. Common-area / property-wide portal tickets do **not** require tenant phone on the propera-app route. **GAS:** new fields are **not** mirrored until portal parity is explicitly extended.
+
 Requires migration **`011_sms_opt_out.sql`** for opt-out persistence. See [PROPERTY_POLICY_PARITY.md](./PROPERTY_POLICY_PARITY.md) for policy rows.
 
 ---

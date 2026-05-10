@@ -8,8 +8,8 @@ const { emitTimed } = require("../../logging/structuredLog");
 const {
   normalizeLocationType,
   isCommonAreaLocation,
-  resolveMaintenanceDraftLocationType,
 } = require("../shared/commonArea");
+const { resolveLocationTarget } = require("../location/resolveLocationTarget");
 const { inferEmergency } = require("../../dal/ticketDefaults");
 const {
   isPortalCreateTicketRouter,
@@ -58,12 +58,83 @@ async function runCoreMaintenanceFastPath(x) {
     setScheduleWaitLike,
   } = x;
 
+  let portalPayload = {};
+  try {
+    portalPayload = JSON.parse(String(p._portalPayloadJson || "{}"));
+  } catch (_) {
+    portalPayload = {};
+  }
+
+  const locSource =
+    mode === "MANAGER" && isPortalCreateTicketRouter(p)
+      ? "structured_portal"
+      : "draft_hints";
+
+  const locRes = await resolveLocationTarget({
+    sb,
+    source: locSource,
+    propertyCode: fastDraft.propertyCode,
+    portalPayload: locSource === "structured_portal" ? portalPayload : undefined,
+    fastDraft,
+    effectiveBody,
+    issueText: fastDraft.issueText,
+  });
+
+  if (!locRes.ok) {
+    await appendEventLog({
+      traceId,
+      event: "LOCATION_TARGET_RESOLVE_FAILED",
+      payload: { error_code: locRes.error_code, source: locSource },
+    });
+    emitTimed(traceStartMs, {
+      level: "warn",
+      trace_id: traceId,
+      log_kind: "brain",
+      event: "LOCATION_TARGET_RESOLVE_FAILED",
+      data: { error_code: locRes.error_code, crumb: "location_target_resolve_failed" },
+    });
+    const human =
+      locRes.error_code === "unknown_property"
+        ? "Unknown property for ticket location."
+        : locRes.error_code === "target_required"
+          ? "Unit or location target is required."
+          : locRes.error_code === "unknown_target"
+            ? "Unknown unit or location reference."
+            : locRes.error_code === "ambiguous_target"
+              ? "Ambiguous unit; please clarify."
+              : locRes.error_code === "invalid_target_kind"
+                ? "Invalid location kind."
+                : "Could not resolve ticket location.";
+    const portalFail = mode === "MANAGER" && isPortalCreateTicketRouter(p);
+    const brain = portalFail ? "portal_create_invalid" : "location_target_invalid";
+    return {
+      ok: false,
+      brain,
+      replyText: portalFail
+        ? "Portal create_ticket failed validation: " + human
+        : human,
+      ...staffMeta(),
+      ...outgateMeta(
+        portalFail
+          ? "MAINTENANCE_ERROR_PORTAL_VALIDATION"
+          : "MAINTENANCE_ERROR_LOCATION_TARGET",
+        { error_code: locRes.error_code }
+      ),
+    };
+  }
+
+  const tgt = locRes.target;
+  const fastLocationType = normalizeLocationType(tgt.locationType);
+  const commonAreaFast = isCommonAreaLocation(fastLocationType);
+  const unitLabelResolved = String(tgt.unit_label_snapshot || "").trim();
+
   await appendEventLog({
     traceId,
     event: "CORE_FAST_PATH_COMPLETE",
     payload: {
       propertyCode: fastDraft.propertyCode,
-      unitLabel: fastDraft.unitLabel,
+      unitLabel: unitLabelResolved,
+      location_kind: tgt.kind,
       reason:
         mode === "MANAGER" && isPortalCreateTicketRouter(p)
           ? "portal_structured_create"
@@ -82,14 +153,6 @@ async function runCoreMaintenanceFastPath(x) {
     mode === "MANAGER" && isPortalCreateTicketRouter(p)
       ? { emergency: "No", emergencyType: "" }
       : inferEmergency(fastDraft.issueText);
-  const fastLocationType = normalizeLocationType(
-    resolveMaintenanceDraftLocationType(
-      fastDraft,
-      effectiveBody,
-      fastDraft.issueText
-    )
-  );
-  const commonAreaFast = isCommonAreaLocation(fastLocationType);
   const scheduleHintPortalFast =
     mode === "MANAGER" && isPortalCreateTicketRouter(p)
       ? extractScheduleHintPortalStaff(fastDraft, effectiveBody, p)
@@ -103,7 +166,7 @@ async function runCoreMaintenanceFastPath(x) {
     sb,
     mode,
     fastDraft.propertyCode,
-    fastDraft.unitLabel,
+    unitLabelResolved,
     fastLocationType,
     effectiveBody,
     p
@@ -122,12 +185,17 @@ async function runCoreMaintenanceFastPath(x) {
     buildFinalizeParams: (g) => ({
       traceId,
       propertyCode: fastDraft.propertyCode,
-      unitLabel: commonAreaFast ? "" : fastDraft.unitLabel,
+      unitLabel: commonAreaFast ? "" : unitLabelResolved,
       issueText: g.issueText,
       actorKey: canonicalBrainActorKey,
       mode,
       locationType: fastLocationType,
-      reportSourceUnit: fastDraft.unitLabel,
+      locationId: tgt.location_id || undefined,
+      locationLabelSnapshot: tgt.location_label_snapshot || "",
+      unitCatalogId: tgt.unit_catalog_id || undefined,
+      reportSourceUnit: commonAreaFast
+        ? String(fastDraft.reportSourceUnit || "").trim()
+        : unitLabelResolved,
       reportSourcePhone:
         mode === "TENANT" ? String(canonicalBrainActorKey || "").trim() : "",
       staffActorKey: mode === "MANAGER" ? staffActorKey || canonicalBrainActorKey : undefined,
@@ -154,8 +222,8 @@ async function runCoreMaintenanceFastPath(x) {
 
   let receiptFast =
     finsFast.length > 1
-      ? `Tickets logged: ${finsFast.map((x) => x.ticketId).join(", ")} (${fastDraft.propertyCode} ${commonAreaFast ? "COMMON AREA" : fastDraft.unitLabel}).`
-      : `Ticket logged: ${fin.ticketId} (${fastDraft.propertyCode} ${commonAreaFast ? "COMMON AREA" : fastDraft.unitLabel}).`;
+      ? `Tickets logged: ${finsFast.map((x) => x.ticketId).join(", ")} (${fastDraft.propertyCode} ${commonAreaFast ? "COMMON AREA" : unitLabelResolved}).`
+      : `Ticket logged: ${fin.ticketId} (${fastDraft.propertyCode} ${commonAreaFast ? "COMMON AREA" : unitLabelResolved}).`;
 
   if (skipSchedulingFast) {
     if (scheduleHintPortalFast) {
@@ -211,7 +279,7 @@ async function runCoreMaintenanceFastPath(x) {
       ticketKey: fin.ticketKey,
       draft_issue: fastDraft.issueText,
       draft_property: fastDraft.propertyCode,
-      draft_unit: fastDraft.unitLabel,
+      draft_unit: commonAreaFast ? "" : unitLabelResolved,
     },
     traceId,
     traceStartMs,

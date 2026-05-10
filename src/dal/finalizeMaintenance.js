@@ -98,6 +98,9 @@ function buildTicketAttachmentsFromRouterParameter(routerParameter) {
  * @param {string} [o.tenantPhoneE164] — **MANAGER / staff #capture:** resident phone from `tenant_roster` lookup only; never staff phone
  * @param {object} [o.tenantLookupMeta] — merged into `work_items.metadata_json` (GAS `enrichStaffCapTenantIdentity_` fields)
  * @param {string} [o.locationType] — `UNIT|COMMON_AREA`
+ * @param {string} [o.locationId] — optional canonical location UUID (transition)
+ * @param {string} [o.locationLabelSnapshot] — human-readable location at create
+ * @param {string} [o.unitCatalogId] — optional `public.units.id`
  * @param {string} [o.reportSourceUnit] — report context only (not persisted as `unit_label` for common-area)
  * @param {string} [o.reportSourcePhone] — report context only (not persisted as tenant phone for common-area)
  */
@@ -270,6 +273,9 @@ async function finalizeMaintenanceDraft(o) {
 
     legacy_property_id: legacyPropId,
     legacy_unit_id: "",
+    location_id: o.locationId || null,
+    location_label_snapshot: String(o.locationLabelSnapshot || "").trim(),
+    unit_catalog_id: o.unitCatalogId || null,
     location_type: locationType,
     work_type: "MAINTENANCE",
     resident_id: "",
@@ -333,6 +339,9 @@ async function finalizeMaintenanceDraft(o) {
     ticket_key: uuidTicketKey,
     owner_id: ownerId || "",
     metadata_json: meta,
+    location_id: o.locationId || null,
+    location_label_snapshot: String(o.locationLabelSnapshot || "").trim(),
+    unit_catalog_id: o.unitCatalogId || null,
   });
 
   if (wErr) return { ok: false, error: "work_item:" + wErr.message };

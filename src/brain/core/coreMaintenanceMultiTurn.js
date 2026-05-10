@@ -18,6 +18,7 @@ const {
   isCommonAreaLocation,
   resolveMaintenanceDraftLocationType,
 } = require("../shared/commonArea");
+const { resolveLocationTarget } = require("../location/resolveLocationTarget");
 const {
   isPortalCreateTicketRouter,
   extractScheduleHintPortalStaffMulti,
@@ -341,12 +342,56 @@ async function runCoreMaintenanceMultiTurn(x) {
   });
 
   if (next === "FINALIZE_DRAFT") {
+    const locResMt = await resolveLocationTarget({
+      sb,
+      source: "draft_hints",
+      propertyCode: merged.draft_property,
+      fastDraft: {
+        ...(fastDraft && typeof fastDraft === "object" ? fastDraft : {}),
+        unitLabel: merged.draft_unit,
+        issueText: merged.draft_issue,
+        locationType: draftLocationType,
+      },
+      effectiveBody,
+      issueText: issueForFinalize,
+    });
+
+    if (!locResMt.ok) {
+      await appendEventLog({
+        traceId,
+        event: "LOCATION_TARGET_RESOLVE_FAILED",
+        payload: { error_code: locResMt.error_code, source: "draft_hints_multi" },
+      });
+      const hint =
+        locResMt.error_code === "target_required"
+          ? "missing unit or location."
+          : locResMt.error_code === "ambiguous_target"
+            ? "ambiguous unit."
+            : "location could not be resolved.";
+      return {
+        ok: false,
+        brain: "location_target_invalid",
+        draft: merged,
+        replyText: "Could not finalize ticket: " + hint,
+        ...staffMeta(),
+        ...outgateMeta("MAINTENANCE_ERROR_LOCATION_TARGET", {
+          path: "multi_turn",
+          error_code: locResMt.error_code,
+        }),
+      };
+    }
+
+    const tgtMt = locResMt.target;
+    const draftLocationTypeFinal = normalizeLocationType(tgtMt.locationType);
+    const commonAreaDraftFinal = isCommonAreaLocation(draftLocationTypeFinal);
+    const unitResolvedMt = String(tgtMt.unit_label_snapshot || "").trim();
+
     const trMt = await resolveManagerTenantIfNeeded(
       sb,
       mode,
       merged.draft_property,
-      merged.draft_unit,
-      draftLocationType,
+      unitResolvedMt,
+      draftLocationTypeFinal,
       effectiveBody,
       p
     );
@@ -367,12 +412,17 @@ async function runCoreMaintenanceMultiTurn(x) {
       buildFinalizeParams: (g) => ({
         traceId,
         propertyCode: merged.draft_property,
-        unitLabel: commonAreaDraft ? "" : merged.draft_unit,
+        unitLabel: commonAreaDraftFinal ? "" : unitResolvedMt,
         issueText: g.issueText,
         actorKey: canonicalBrainActorKey,
         mode,
-        locationType: draftLocationType,
-        reportSourceUnit: merged.draft_unit,
+        locationType: draftLocationTypeFinal,
+        locationId: tgtMt.location_id || undefined,
+        locationLabelSnapshot: tgtMt.location_label_snapshot || "",
+        unitCatalogId: tgtMt.unit_catalog_id || undefined,
+        reportSourceUnit: commonAreaDraftFinal
+          ? String(merged.draft_unit || "").trim()
+          : unitResolvedMt,
         reportSourcePhone:
           mode === "TENANT" ? String(canonicalBrainActorKey || "").trim() : "",
         staffActorKey: mode === "MANAGER" ? staffActorKey || canonicalBrainActorKey : undefined,
@@ -399,8 +449,8 @@ async function runCoreMaintenanceMultiTurn(x) {
 
     let receiptMt =
       finsMt.length > 1
-        ? `Tickets logged: ${finsMt.map((x) => x.ticketId).join(", ")} (${merged.draft_property} ${commonAreaDraft ? "COMMON AREA" : merged.draft_unit}).`
-        : `Ticket logged: ${fin.ticketId} (${merged.draft_property} ${commonAreaDraft ? "COMMON AREA" : merged.draft_unit}).`;
+        ? `Tickets logged: ${finsMt.map((x) => x.ticketId).join(", ")} (${merged.draft_property} ${commonAreaDraftFinal ? "COMMON AREA" : unitResolvedMt}).`
+        : `Ticket logged: ${fin.ticketId} (${merged.draft_property} ${commonAreaDraftFinal ? "COMMON AREA" : unitResolvedMt}).`;
 
     const scheduleHintPortalMt =
       mode === "MANAGER" && isPortalCreateTicketRouter(p)

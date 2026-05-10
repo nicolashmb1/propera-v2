@@ -106,7 +106,17 @@ function buildRouterParameterFromPortal(payload) {
     const cat = String(p.category || "").trim();
     const msg = String(p.message || "").trim();
     const pw = String(p.preferredWindow || "").trim();
-    body = `# ${prop} apt ${unit} ${cat}: ${msg}`.replace(/\s+/g, " ").trim();
+    const lk = String(
+      p.location_kind != null ? p.location_kind : p.locationKind != null ? p.locationKind : "unit"
+    )
+      .trim()
+      .toLowerCase();
+    const isCommonLike = lk === "common_area" || lk === "property" || lk === "commonarea";
+    if (isCommonLike) {
+      body = `# ${prop} ${cat}: ${msg}`.replace(/\s+/g, " ").trim();
+    } else {
+      body = `# ${prop} apt ${unit} ${cat}: ${msg}`.replace(/\s+/g, " ").trim();
+    }
     if (pw) body += "\nPreferred: " + pw.trim();
   } else {
     body = String(p.body || "").trim();

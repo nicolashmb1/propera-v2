@@ -2,8 +2,13 @@
  * PM portal `create_ticket` — structured signal only (no free-text intake / compileTurn).
  * Validates property against DB menu; uses JSON fields for issue/unit; preferredWindow is schedule raw only.
  *
+ * `location_kind`: `unit` (default) | `common_area` | `property` — common-area/property tickets omit unit.
+ * Optional: `unit_catalog_id`, `location_id`, `location_label_snapshot`, `report_source_unit`.
+ *
  * PARITY GAP: deliberate product divergence vs SMS tenant intake — see docs/PARITY_LEDGER.md (portal row).
  */
+
+const { normalizeTargetKindFromPortal, isUuid } = require("../location/resolveLocationTarget");
 
 function normalizePropToken(s) {
   return String(s || "")
@@ -49,7 +54,7 @@ function resolvePortalPropertyCode(inputRaw, knownPropertyCodesUpper, properties
  * @param {Record<string, unknown>} routerParameter
  * @param {Set<string>} knownPropertyCodesUpper
  * @param {Array<{ code: string, display_name?: string, ticket_prefix?: string, short_name?: string, aliases?: string[] }>} propertiesList
- * @returns {{ propertyCode: string, unitLabel: string, issueText: string, structuredIssues: null, scheduleRaw: string, openerNext: string, locationType: string } | null}
+ * @returns {{ propertyCode: string, unitLabel: string, issueText: string, structuredIssues: null, scheduleRaw: string, openerNext: string, locationType: string, portalLocationKind: string, reportSourceUnit: string } | null}
  */
 function buildStructuredPortalCreateDraft(
   routerParameter,
@@ -69,23 +74,47 @@ function buildStructuredPortalCreateDraft(
     knownPropertyCodesUpper,
     propertiesList
   );
+  const locationKind = normalizeTargetKindFromPortal(
+    j.location_kind != null ? j.location_kind : j.locationKind
+  );
   const unitLabel = String(j.unit != null ? j.unit : "").trim();
+  const unitCatalogRaw = String(
+    j.unit_catalog_id != null
+      ? j.unit_catalog_id
+      : j.unitCatalogId != null
+        ? j.unitCatalogId
+        : ""
+  ).trim();
   const issueText = String(j.message != null ? j.message : "").trim();
   const scheduleRaw = String(
     j.preferredWindow != null ? j.preferredWindow : ""
   ).trim();
+  const reportSourceUnit = String(
+    j.report_source_unit != null
+      ? j.report_source_unit
+      : j.reportSourceUnit != null
+        ? j.reportSourceUnit
+        : ""
+  ).trim();
 
   if (!propertyCode || issueText.length < 2) return null;
-  if (!unitLabel) return null;
+
+  if (locationKind === "unit") {
+    if (!unitLabel && !(unitCatalogRaw && isUuid(unitCatalogRaw))) return null;
+  }
+
+  const locationType = locationKind === "unit" ? "UNIT" : "COMMON_AREA";
 
   return {
     propertyCode,
-    unitLabel,
+    unitLabel: locationKind === "unit" ? unitLabel : "",
     issueText,
     structuredIssues: null,
     scheduleRaw,
     openerNext: "",
-    locationType: "UNIT",
+    locationType,
+    portalLocationKind: locationKind,
+    reportSourceUnit,
   };
 }
 

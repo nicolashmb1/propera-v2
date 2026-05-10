@@ -5,6 +5,7 @@
 const { getSupabase } = require("../db/supabase");
 const { appendEventLog } = require("./appendEventLog");
 const { normalizeExpansionProfile } = require("../pm/expandProgramLines");
+const { syncCommonAreaLocationsFromLabels } = require("./propertyLocations");
 
 const MAX_ARRAY_LEN = 50;
 const MAX_LABEL_LEN = 120;
@@ -124,6 +125,14 @@ async function patchPropertyProgramExpansionProfile(propertyCode, body, traceId)
     .eq("code", code);
 
   if (upErr) return { ok: false, error: upErr.message || "update_failed" };
+
+  if (parsed.keysChanged.includes("common_paint_scopes")) {
+    await syncCommonAreaLocationsFromLabels(
+      sb,
+      code,
+      Array.isArray(merged.common_paint_scopes) ? merged.common_paint_scopes : []
+    );
+  }
 
   await appendEventLog({
     traceId: String(traceId || ""),

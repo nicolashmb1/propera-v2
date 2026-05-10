@@ -44,7 +44,7 @@ test("buildStructuredPortalCreateDraft uses JSON fields and preferredWindow as s
   assert.equal(d.scheduleRaw, "Monday morning");
 });
 
-test("buildStructuredPortalCreateDraft returns null without unit", () => {
+test("buildStructuredPortalCreateDraft returns null for unit kind without unit or catalog id", () => {
   const known = new Set(["WGRA"]);
   const list = [{ code: "WGRA", display_name: "X", ticket_prefix: "", short_name: "", aliases: [] }];
   const rp = {
@@ -52,8 +52,29 @@ test("buildStructuredPortalCreateDraft returns null without unit", () => {
     _portalPayloadJson: JSON.stringify({
       property: "WGRA",
       unit: "",
-      message: "x",
+      message: "xx",
     }),
   };
   assert.equal(buildStructuredPortalCreateDraft(rp, known, list), null);
+});
+
+test("buildStructuredPortalCreateDraft allows common_area without unit", () => {
+  const known = new Set(["WGRA"]);
+  const list = [{ code: "WGRA", display_name: "X", ticket_prefix: "", short_name: "", aliases: [] }];
+  const rp = {
+    _portalAction: "create_ticket",
+    _portalPayloadJson: JSON.stringify({
+      property: "WGRA",
+      location_kind: "common_area",
+      location_label_snapshot: "Mail room",
+      unit: "",
+      message: "Broken lock",
+      preferredWindow: "",
+    }),
+  };
+  const d = buildStructuredPortalCreateDraft(rp, known, list);
+  assert.ok(d);
+  assert.equal(d.locationType, "COMMON_AREA");
+  assert.equal(d.unitLabel, "");
+  assert.equal(d.portalLocationKind, "common_area");
 });
