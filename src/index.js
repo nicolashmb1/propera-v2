@@ -32,6 +32,11 @@ const { runInboundPipeline } = require("./inbound/runInboundPipeline");
 const { registerDashboardRoutes } = require("./dashboard/registerDashboard");
 const { registerPortalReadRoutes } = require("./portal/registerPortalRoutes");
 const { registerMeterRunRoutes } = require("./meterRuns/registerMeterRunRoutes");
+const {
+  buildInboundKey,
+  isSeen,
+  commitSeen,
+} = require("./dal/inboundDedup");
 
 const app = express();
 
@@ -258,16 +263,56 @@ async function handleTwilioWebhook(req, res) {
   const isWa = from.toLowerCase().indexOf("whatsapp:") === 0;
   const transportChannel = isWa ? "whatsapp" : "sms";
   const inboundCtx = buildTwilioInboundCtx(routerParameter);
+  const logKind = isWa ? "whatsapp_webhook" : "sms_webhook";
+
+  const { key: dedupKey, channel: dedupChannel } = buildInboundKey({
+    messageSid: routerParameter.MessageSid,
+    from: routerParameter.From,
+    body: routerParameter.Body,
+  });
 
   return runWithInboundLogCtx(inboundCtx, async () => {
-    const result = await runInboundPipeline({
-      traceId,
-      traceStartMs: req.traceStartMs,
-      routerParameter,
-      transportChannel,
-      logKind: isWa ? "whatsapp_webhook" : "sms_webhook",
-    });
-    return res.status(200).type("application/json").send(JSON.stringify(result.json));
+    if (isDbConfigured() && dedupKey) {
+      const duplicate = await isSeen(dedupKey);
+      if (duplicate) {
+        emit({
+          level: "info",
+          trace_id: traceId,
+          trace_start_ms: req.traceStartMs,
+          log_kind: logKind,
+          event: "TWILIO_DUPLICATE_SKIPPED",
+          data: {
+            dedup_key: dedupKey,
+            channel: dedupChannel,
+            crumb: "twilio_duplicate_skipped",
+          },
+        });
+        return res.sendStatus(200);
+      }
+    }
+
+    let hadError = false;
+    try {
+      const result = await runInboundPipeline({
+        traceId,
+        traceStartMs: req.traceStartMs,
+        routerParameter,
+        transportChannel,
+        logKind,
+      });
+      return res.status(200).type("application/json").send(JSON.stringify(result.json));
+    } catch (err) {
+      hadError = true;
+      throw err;
+    } finally {
+      if (isDbConfigured() && dedupKey && !hadError) {
+        try {
+          await commitSeen(dedupKey, dedupChannel);
+        } catch (_) {
+          /* do not mask HTTP response */
+        }
+      }
+    }
   });
 }
 
