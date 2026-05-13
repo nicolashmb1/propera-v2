@@ -11,7 +11,7 @@
 
 ## Handoff status (for the next agent)
 
-**Latest session notes:** **[HANDOFF_LOG.md](./HANDOFF_LOG.md)** (dated blocks — ops dashboard, `event_log` expansion, `.env` path, intake flags).
+**Latest session notes:** **[HANDOFF_LOG.md](./HANDOFF_LOG.md)** (dated blocks — ops dashboard, `event_log` expansion, `.env` path, intake flags, **`portal_chat`** command bar).
 
 | Phase | Status |
 |-------|--------|
@@ -32,7 +32,7 @@
 |-------|----------|
 | Expansion (pure) | `src/pm/expandProgramLines.js` |
 | DAL (create, list, detail, preview, delete, line PATCH) | `src/dal/programRuns.js` |
-| Routes | `src/portal/registerPortalRoutes.js` — `GET/POST /api/portal/program-templates`, `GET/POST /api/portal/program-runs`, `POST /api/portal/program-runs/preview`, `GET/DELETE /api/portal/program-runs/:id`, `PATCH .../program-lines/:id/complete` & `reopen` |
+| Routes | `src/portal/registerPortalRoutes.js` — `GET/POST /api/portal/program-templates`, `GET/POST /api/portal/program-runs`, `POST /api/portal/program-runs/preview`, `GET/DELETE /api/portal/program-runs/:id`, `PATCH .../program-lines/:id/complete` (optional **`proofPhotoUrls`**) & `reopen` |
 
 **Canonical spec + UI contract:** **[PM_PROGRAM_ENGINE_V1.md](./PM_PROGRAM_ENGINE_V1.md)**. **Per-property building data:** `properties.program_expansion_profile` (migration **019**). **Roadmap** (tenant/staff/ops reuse of that structure): same doc, **Strategic reuse — building structure beyond preventive**.
 
@@ -52,6 +52,8 @@
    - Staff lifecycle / SMS compliance / opt-out suppress / **non-maintenance lane stub** (vendor/system) / **`handleInboundCore`**
    - **Outgate:** `renderOutboundIntent` → **`dispatchOutbound`** → `telegramSendMessage` **or** `twilioSendMessage` (transport only; **no** direct sends from core)
 4. **Ops:** `GET /dashboard`, `GET /api/ops/event-log` — `src/dashboard/` (not GAS)
+
+**Portal command bar (propera-app):** `POST /api/portal/command` (Next) → V2 `POST /webhooks/portal` with **`action: portal_chat`** — `buildRouterParameterFromPortal` maps body + `media[]` → `RouterParameter`; UI-only “New ticket” mode prepends `#` so precursors match Telegram staff capture (**`ADAPTER_ONBOARDING.md`**).
 
 **Routing truth:** **[ORCHESTRATOR_ROUTING.md](./ORCHESTRATOR_ROUTING.md)**.
 

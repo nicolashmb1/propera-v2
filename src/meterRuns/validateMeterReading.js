@@ -1,5 +1,17 @@
 /**
  * Deterministic reading status (MVP 1a — usage/reading gates; no dollar variance until policy exists).
+ *
+ * Usage jump: the old rule `usage > max(prev*10, 250k)` fails on large odometers (prev*10 is huge),
+ * so bogus extra-digit OCR (e.g. 6.5M → 6.6M reading) slipped through as AUTO_ACCEPTED.
+ */
+const METER_AUTO_ACCEPT_MAX_USAGE = 120_000; // gallons per billing period — above → review
+const METER_USAGE_FRAC_OF_PREV = 0.22; // usage must not exceed this × prior totalizer (when prev is meaningful)
+const METER_USAGE_REL_PREV_MIN = 5_000;
+/** Current reading this many × previous suggests digit-scale / concatenation error. */
+const METER_READING_SCALE_VS_PREV = 6;
+const METER_READING_SCALE_PREV_MIN = 10_000;
+
+/**
  * @param {object} input
  * @param {bigint|number|null|undefined} input.previousReading
  * @param {bigint|number|null|undefined} input.currentReading
@@ -27,14 +39,22 @@ function validateMeterReading(input) {
   let usage = null;
   if (prev != null && Number.isFinite(prev)) {
     usage = Math.round(cur - prev);
-    if (usage < 0) reasons.push("negative_usage");
-    else if (
-      prev >= 50 &&
-      usage != null &&
-      Number.isFinite(usage) &&
-      usage > Math.max(prev * 10, 250000)
-    ) {
-      reasons.push("usage_jump_vs_previous");
+    if (usage < 0) {
+      reasons.push("negative_usage");
+    } else if (prev >= 50 && usage != null && Number.isFinite(usage) && usage > 0) {
+      const absJump = usage > METER_AUTO_ACCEPT_MAX_USAGE;
+      const relJump =
+        prev >= METER_USAGE_REL_PREV_MIN && usage > prev * METER_USAGE_FRAC_OF_PREV;
+      if (absJump || relJump) {
+        reasons.push("usage_jump_vs_previous");
+      }
+      const scaleJump =
+        prev >= METER_READING_SCALE_PREV_MIN &&
+        Number.isFinite(cur) &&
+        cur > prev * METER_READING_SCALE_VS_PREV;
+      if (scaleJump) {
+        reasons.push("reading_scale_vs_previous");
+      }
     }
   }
 

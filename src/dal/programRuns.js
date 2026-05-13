@@ -12,6 +12,30 @@ const {
   EXPANSION_TYPES,
 } = require("./savedPrograms");
 
+/** Max images per line (portal preventive proof-of-work). */
+const MAX_PROOF_PHOTOS_PER_LINE = 12;
+
+/**
+ * @param {unknown} raw
+ * @returns {string[]}
+ */
+function normalizeProofPhotoUrls(raw) {
+  if (!raw || !Array.isArray(raw)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const x of raw) {
+    const u = String(x || "").trim();
+    if (u.length < 8 || u.length > 2048) continue;
+    const lower = u.toLowerCase();
+    if (!lower.startsWith("https://") && !lower.startsWith("http://")) continue;
+    if (seen.has(u)) continue;
+    seen.add(u);
+    out.push(u);
+    if (out.length >= MAX_PROOF_PHOTOS_PER_LINE) break;
+  }
+  return out;
+}
+
 /**
  * @param {string} propertyCode
  * @returns {Promise<string>}
@@ -353,7 +377,7 @@ async function createProgramRun(o) {
       .from("program_lines")
       .insert(rows)
       .select(
-        "id, program_run_id, scope_type, scope_label, sort_order, status, completed_by, completed_at, notes"
+        "id, program_run_id, scope_type, scope_label, sort_order, status, completed_by, completed_at, notes, proof_photo_urls"
       );
 
     if (linesErr) {
@@ -641,7 +665,7 @@ async function getProgramRunById(runId) {
   const { data: lines } = await sb
     .from("program_lines")
     .select(
-      "id, program_run_id, scope_type, scope_label, sort_order, status, completed_by, completed_at, notes"
+      "id, program_run_id, scope_type, scope_label, sort_order, status, completed_by, completed_at, notes, proof_photo_urls"
     )
     .eq("program_run_id", id)
     .order("sort_order", { ascending: true })
@@ -685,6 +709,7 @@ async function getProgramRunById(runId) {
  * @param {object} o
  * @param {string} [o.completedBy]
  * @param {string} [o.notes]
+ * @param {unknown} [o.proofPhotoUrls] — optional array of public http(s) image URLs
  * @param {string} [o.traceId]
  */
 async function completeProgramLine(lineId, o) {
@@ -704,6 +729,7 @@ async function completeProgramLine(lineId, o) {
 
   const completedBy = String(o?.completedBy || "PORTAL").slice(0, 200);
   const notes = String(o?.notes || "").slice(0, 2000);
+  const proofPhotoUrls = normalizeProofPhotoUrls(o?.proofPhotoUrls);
   const now = new Date().toISOString();
 
   const { error: upErr } = await sb
@@ -713,6 +739,7 @@ async function completeProgramLine(lineId, o) {
       completed_by: completedBy,
       completed_at: now,
       notes,
+      proof_photo_urls: proofPhotoUrls,
     })
     .eq("id", lid);
 
@@ -728,6 +755,7 @@ async function completeProgramLine(lineId, o) {
       program_line_id: lid,
       program_run_id: line.program_run_id,
       completed_by: completedBy,
+      proof_photo_count: proofPhotoUrls.length,
     },
   });
 
@@ -762,6 +790,7 @@ async function reopenProgramLine(lineId, o) {
       completed_by: "",
       completed_at: null,
       notes: "",
+      proof_photo_urls: [],
     })
     .eq("id", lid);
 

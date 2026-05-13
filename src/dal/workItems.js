@@ -31,6 +31,37 @@ async function listOpenWorkItemsForOwner(staffOwnerId) {
 }
 
 /**
+ * Batch-load human `tickets.ticket_id` (e.g. WGRA-042726-5381) by work_items.ticket_key.
+ * @param {import("@supabase/supabase-js").SupabaseClient | null} sb
+ * @param {string[]} ticketKeys
+ * @returns {Promise<Map<string, string>>}
+ */
+async function getTicketHumanIdByTicketKeys(sb, ticketKeys) {
+  const map = new Map();
+  const keys = [
+    ...new Set(
+      (ticketKeys || [])
+        .map((k) => String(k || "").trim())
+        .filter(Boolean)
+    ),
+  ];
+  if (!sb || keys.length === 0) return map;
+
+  const { data, error } = await sb
+    .from("tickets")
+    .select("ticket_key, ticket_id")
+    .in("ticket_key", keys);
+
+  if (error || !data) return map;
+  for (const row of data) {
+    const k = String(row.ticket_key || "").trim();
+    const id = String(row.ticket_id || "").trim();
+    if (k && id) map.set(k, id);
+  }
+  return map;
+}
+
+/**
  * @param {string} workItemId
  */
 async function getWorkItemByWorkItemId(workItemId) {
@@ -132,6 +163,7 @@ async function applyStaffOutcomeUpdate(workItemId, normalizedOutcome, rawBodySni
 
 module.exports = {
   listOpenWorkItemsForOwner,
+  getTicketHumanIdByTicketKeys,
   getWorkItemByWorkItemId,
   applyStaffOutcomeUpdate,
 };

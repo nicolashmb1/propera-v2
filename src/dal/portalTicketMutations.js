@@ -15,6 +15,9 @@ const HUMAN_ID = "([A-Za-z0-9]{2,12}-\\d{6}-\\d{4})";
 
 const HUMAN_TICKET_ID_RE = new RegExp(`^${HUMAN_ID}$`, "i");
 
+/** V2 composite inverse ids e.g. `PENN-031` from `v2:V2PENN:031` (not MMDDYY-####). */
+const SHORT_HUMAN_TICKET_ID_RE = /^[A-Za-z0-9]{2,12}-\d{1,6}$/i;
+
 /** Postgres `tickets.id` (uuid) from propera-app row payloads */
 const TICKET_ROW_UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -134,6 +137,12 @@ function pickTicketLookupHintFromFlat(j) {
     if (!s) continue;
     if (TICKET_ROW_UUID_RE.test(s)) return s.toLowerCase();
   }
+  for (const k of keys) {
+    if (!Object.prototype.hasOwnProperty.call(j, k) || j[k] == null) continue;
+    const s = String(j[k]).trim();
+    if (!s) continue;
+    if (SHORT_HUMAN_TICKET_ID_RE.test(s)) return s.toUpperCase();
+  }
   return "";
 }
 
@@ -182,6 +191,9 @@ function parseSoftDeleteFromBody(body) {
   const cancelRe = new RegExp(`^\\s*${HUMAN_ID}\\s+canceled\\s*$`, "i");
   const mCancel = raw.match(cancelRe);
   if (mCancel) return { kind: "soft_delete", humanTicketId: mCancel[1].toUpperCase() };
+  const cancelShort = /^\s*([A-Za-z0-9]{2,12}-\d{1,6})\s+canceled\s*$/i;
+  const mShort = raw.match(cancelShort);
+  if (mShort) return { kind: "soft_delete", humanTicketId: mShort[1].toUpperCase() };
   return null;
 }
 
@@ -286,7 +298,9 @@ function extractPortalPayloadTicketFields(routerParameter) {
   const humanTicketId = pickTicketLookupHintFromFlat(j);
   const idOk =
     !!humanTicketId &&
-    (HUMAN_TICKET_ID_RE.test(humanTicketId) || TICKET_ROW_UUID_RE.test(humanTicketId));
+    (HUMAN_TICKET_ID_RE.test(humanTicketId) ||
+      TICKET_ROW_UUID_RE.test(humanTicketId) ||
+      SHORT_HUMAN_TICKET_ID_RE.test(humanTicketId));
 
   const fields = {};
 
@@ -451,7 +465,7 @@ async function fetchTicketForPortalMutation(sb, lookupHint) {
     if (error || !data) return null;
     return data;
   }
-  if (HUMAN_TICKET_ID_RE.test(hint)) {
+  if (HUMAN_TICKET_ID_RE.test(hint) || SHORT_HUMAN_TICKET_ID_RE.test(hint)) {
     return fetchTicketByHumanId(sb, hint.toUpperCase());
   }
   return null;

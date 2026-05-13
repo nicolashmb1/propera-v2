@@ -11,6 +11,11 @@ const {
 const { validateMeterReading } = require("../meterRuns/validateMeterReading");
 const { extractMeterReadingFromImage } = require("../meterRuns/extractMeterReading");
 const { tryDecodeQrFromImageBuffer } = require("../meterRuns/decodeMeterQr");
+const {
+  normMeterKey,
+  buildMeterKeyCandidates,
+  findUniquePartialMeter,
+} = require("../meterRuns/meterKeyAliases");
 
 const BUCKET_DEFAULT = "utility-meter-runs";
 
@@ -29,13 +34,6 @@ function publicStorageObjectUrl(baseUrl, bucket, storagePath) {
 
 function normProp(code) {
   return String(code || "")
-    .trim()
-    .toUpperCase()
-    .replace(/\s+/g, "_");
-}
-
-function normMeterKey(key) {
-  return String(key || "")
     .trim()
     .toUpperCase()
     .replace(/\s+/g, "_");
@@ -254,32 +252,18 @@ async function matchMeterForProperty(sb, propertyCode, extraction, qrDecodedHint
     .eq("active", true);
 
   const meters = data || [];
+  const ex = extraction && typeof extraction === "object" ? extraction : {};
+  const candidates = buildMeterKeyCandidates(propertyCode, ex, qrDecodedHint);
 
-  if (qrDecodedHint) {
-    const qh = normMeterKey(String(qrDecodedHint).trim());
-    if (qh) {
-      const exactQr = meters.find((m) => normMeterKey(m.meter_key) === qh);
-      if (exactQr) return exactQr;
-      const partialQr = meters.find(
-        (m) =>
-          qh.includes(normMeterKey(m.meter_key)) || normMeterKey(m.meter_key).includes(qh)
-      );
-      if (partialQr) return partialQr;
-    }
+  for (const key of candidates) {
+    const exact = meters.find((m) => normMeterKey(m.meter_key) === key);
+    if (exact) return exact;
   }
-
-  const label = extraction.meterLabel || extraction.qrValue || extraction.rawDisplay;
-  const key = normMeterKey(label);
-  if (!key) return null;
-
-  const exact = meters.find((m) => normMeterKey(m.meter_key) === key);
-  if (exact) return exact;
-
-  const partial = meters.find(
-    (m) =>
-      key.includes(normMeterKey(m.meter_key)) || normMeterKey(m.meter_key).includes(key)
-  );
-  return partial || null;
+  for (const key of candidates) {
+    const partial = findUniquePartialMeter(meters, key);
+    if (partial) return partial;
+  }
+  return null;
 }
 
 async function processOneAsset(assetRow) {
@@ -468,6 +452,7 @@ async function processPendingAssets(runId, { limit = 100 } = {}) {
     .eq("run_id", runId)
     /* FAILED: allow re-running extract/match after fixes or transient errors; skip EXTRACTED/VALIDATED (already done). */
     .in("processing_status", ["UPLOADED", "QUEUED", "FAILED"])
+    .order("created_at", { ascending: true })
     .limit(limit);
 
   const results = [];

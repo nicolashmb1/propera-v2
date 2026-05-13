@@ -40,7 +40,8 @@ const {
 
 const app = express();
 
-app.use(express.json({ limit: "2mb" }));
+/** Portal webhook carries `portal_chat` + inline screenshot `dataUrl`s — keep above typical photo JSON. */
+app.use(express.json({ limit: "15mb" }));
 const twilioForm = express.urlencoded({ extended: true });
 app.use(requestContext);
 

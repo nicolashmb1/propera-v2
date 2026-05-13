@@ -8,6 +8,7 @@ const { appendEventLog } = require("./appendEventLog");
 const { getConversationCtx } = require("./conversationCtx");
 const {
   listOpenWorkItemsForOwner,
+  getTicketHumanIdByTicketKeys,
   getWorkItemByWorkItemId,
 } = require("./workItems");
 const { listPropertiesForMenu } = require("./intakeSession");
@@ -114,12 +115,17 @@ async function resolveHumanTicketIdForStaffAmend(sb, o) {
   const propertiesList = await listPropertiesForMenu();
   const ctx = await getConversationCtx(staffActorKey);
   const rawRows = await listOpenWorkItemsForOwner(staffId);
+  const ticketKeyToHuman = await getTicketHumanIdByTicketKeys(
+    sb,
+    rawRows.map((r) => String(r.ticket_key || "").trim())
+  );
   const openWis = rawRows.map((r) => ({
     workItemId: r.work_item_id,
     unitId: r.unit_id,
     propertyId: r.property_id,
     metadata_json: r.metadata_json,
     ticketKey: r.ticket_key ? String(r.ticket_key).trim() : "",
+    ticketHumanId: ticketKeyToHuman.get(String(r.ticket_key || "").trim()) || "",
   }));
 
   let ctxPendingWi = null;

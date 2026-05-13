@@ -679,6 +679,7 @@ function registerPortalReadRoutes(app) {
       const out = await completeProgramLine(req.params.id, {
         completedBy: body.completedBy,
         notes: body.notes,
+        proofPhotoUrls: body.proofPhotoUrls,
         traceId: req.traceId,
       });
       if (!out.ok) {

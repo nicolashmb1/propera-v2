@@ -133,7 +133,13 @@ function registerMeterRunRoutes(app) {
 
   app.post("/api/portal/meter-runs/:id/process", gate(async (req, res) => {
     try {
-      const out = await processPendingAssets(req.params.id, {});
+      const body = req.body || {};
+      const lim = body.limit;
+      let limit = 100;
+      if (lim != null && Number.isFinite(Number(lim))) {
+        limit = Math.max(1, Math.min(100, Math.floor(Number(lim))));
+      }
+      const out = await processPendingAssets(req.params.id, { limit });
       if (!out.ok) {
         return res.status(400).json({ ok: false, error: out.error || "process_failed" });
       }

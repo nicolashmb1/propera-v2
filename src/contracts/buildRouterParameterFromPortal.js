@@ -99,6 +99,8 @@ function buildRouterParameterFromPortal(payload) {
   }
 
   let body = "";
+  /** @type {string} */
+  let mediaJson = "";
 
   if (action === "create_ticket") {
     const prop = String(p.property || "").trim();
@@ -118,6 +120,30 @@ function buildRouterParameterFromPortal(payload) {
       body = `# ${prop} apt ${unit} ${cat}: ${msg}`.replace(/\s+/g, " ").trim();
     }
     if (pw) body += "\nPreferred: " + pw.trim();
+  } else if (action === "portal_chat") {
+    /**
+     * Propera app command bar — adapter only. Client sends final text (e.g. `#…` for staff capture)
+     * and optional `media[]` (`dataUrl` MVP). Same pipeline as other portal ingress.
+     */
+    const raw =
+      p.body !== undefined && p.body !== null
+        ? p.body
+        : p.message !== undefined && p.message !== null
+          ? p.message
+          : "";
+    body = String(raw).trim();
+    const mediaArr = Array.isArray(p.media)
+      ? p.media.filter((x) => x && typeof x === "object")
+      : [];
+    mediaJson = mediaArr.length ? JSON.stringify(mediaArr) : "";
+    if (!body && mediaArr.length === 0) {
+      throw new Error("buildRouterParameterFromPortal: portal_chat requires body/message or media");
+    }
+    if (!body && mediaArr.length > 0) {
+      throw new Error(
+        'buildRouterParameterFromPortal: portal_chat media-only requires body "#" (staff capture)'
+      );
+    }
   } else {
     body = String(p.body || "").trim();
     if (!body && portalPostImpliesPmTicketSave(p)) body = "noop";
@@ -134,7 +160,7 @@ function buildRouterParameterFromPortal(payload) {
     _phoneE164: actor,
     From: actor,
     Body: body,
-    _mediaJson: "",
+    _mediaJson: mediaJson,
     _portalAction: action,
     _portalPayloadJson: JSON.stringify(p),
     _tenantPhoneE164: String(p.tenantPhoneE164 || "").trim(),

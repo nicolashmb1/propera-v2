@@ -7,6 +7,7 @@ const {
   extractUnitFromBody,
   extractPropertyHintFromBody,
   extractWorkItemIdHintFromBody,
+  extractHumanTicketIdFromBody,
   buildSuggestedPromptsForCandidates,
   scoreCandidatesByIssueHints,
 } = require("./lifecycleExtract");
@@ -19,7 +20,7 @@ function normUnit(u) {
 
 /**
  * @param {object} opts
- * @param {Array<{ workItemId: string, unitId?: string, propertyId?: string, metadata_json?: object }>} opts.openWis
+ * @param {Array<{ workItemId: string, unitId?: string, propertyId?: string, metadata_json?: object, ticketHumanId?: string }>} opts.openWis
  * @param {string} opts.bodyTrim
  * @param {{ pending_work_item_id?: string, active_work_item_id?: string } | null} opts.ctx
  * @param {Set<string>} opts.knownPropertyCodesUpper
@@ -41,6 +42,19 @@ function resolveTargetWorkItemForStaff(opts) {
   }
   if (openWis.length === 1) {
     return { wiId: openWis[0].workItemId, reason: "OWNER_MATCH" };
+  }
+
+  const humanIdHint = extractHumanTicketIdFromBody(body);
+  if (humanIdHint) {
+    const byHuman = openWis.filter(
+      (w) =>
+        String(w.ticketHumanId || "")
+          .trim()
+          .toUpperCase() === humanIdHint
+    );
+    if (byHuman.length === 1) {
+      return { wiId: byHuman[0].workItemId, reason: "HUMAN_TICKET_ID_MATCH" };
+    }
   }
 
   const wiIdHint = extractWorkItemIdHintFromBody(body);

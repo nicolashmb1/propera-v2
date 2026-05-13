@@ -68,3 +68,60 @@ test("staff_command: accepts actorPhone alias", () => {
   });
   assert.equal(p.From, "+19085550101");
 });
+
+test("portal_chat passes body and sets _portalAction", () => {
+  const p = buildRouterParameterFromPortal({
+    action: "portal_chat",
+    actorPhoneE164: "+19085550101",
+    body: "# Penn apt 316 sink clogged",
+  });
+  assert.equal(p._portalAction, "portal_chat");
+  assert.equal(p.Body, "# Penn apt 316 sink clogged");
+  assert.equal(p._mediaJson, "");
+});
+
+test("portal_chat accepts message alias", () => {
+  const p = buildRouterParameterFromPortal({
+    action: "portal_chat",
+    actorPhoneE164: "+19085550101",
+    message: "Schedule tomorrow",
+  });
+  assert.equal(p.Body, "Schedule tomorrow");
+});
+
+test("portal_chat # only + media", () => {
+  const p = buildRouterParameterFromPortal({
+    action: "portal_chat",
+    actorPhoneE164: "+19085550101",
+    body: "#",
+    media: [{ kind: "image", mime_type: "image/png", dataUrl: "data:image/png;base64,AAAA" }],
+  });
+  assert.equal(p.Body, "#");
+  const arr = JSON.parse(p._mediaJson);
+  assert.equal(arr.length, 1);
+  assert.equal(arr[0].kind, "image");
+});
+
+test("portal_chat rejects empty body and no media", () => {
+  assert.throws(
+    () =>
+      buildRouterParameterFromPortal({
+        action: "portal_chat",
+        actorPhoneE164: "+19085550101",
+        body: "   ",
+      }),
+    /portal_chat requires body\/message or media/
+  );
+});
+
+test("portal_chat rejects media without body", () => {
+  assert.throws(
+    () =>
+      buildRouterParameterFromPortal({
+        action: "portal_chat",
+        actorPhoneE164: "+19085550101",
+        media: [{ kind: "image", dataUrl: "data:image/png;base64,QQ==" }],
+      }),
+    /media-only requires body/
+  );
+});

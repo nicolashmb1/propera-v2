@@ -15,6 +15,11 @@ describe("parsePortalPmTicketBody", () => {
     assert.deepEqual(p, { kind: "soft_delete", humanTicketId: "PENN-042626-1877" });
   });
 
+  test("soft delete / cancel wire short id", () => {
+    const p = parsePortalPmTicketBody(" penn-031 canceled ");
+    assert.deepEqual(p, { kind: "soft_delete", humanTicketId: "PENN-031" });
+  });
+
   test("update with status Open", () => {
     const p = parsePortalPmTicketBody("Update PENN-042626-1877. status Open.");
     assert.equal(p && p.kind, "update");
@@ -119,6 +124,20 @@ describe("parsePortalPmTicketRequest (Body + _portalPayloadJson)", () => {
     assert.equal(p.fields.category, "Plumbing");
     assert.equal(p.fields.urgency, "urgent");
     assert.equal(p.fields.issue, "Leak under sink");
+  });
+
+  test("short V2-style ticketId + status (PM complete / portal webhook)", () => {
+    const p = parsePortalPmTicketRequest({
+      Body: "noop",
+      _portalPayloadJson: JSON.stringify({
+        ticketId: "PENN-031",
+        humanTicketId: "PENN-031",
+        status: "completed",
+      }),
+    });
+    assert.equal(p && p.kind, "update");
+    assert.equal(p.humanTicketId, "PENN-031");
+    assert.equal(p.fields.statusRaw, "completed");
   });
 
   test("structured JSON wins over wire Update line for same field (portal save authority)", () => {

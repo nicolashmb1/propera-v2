@@ -92,6 +92,7 @@ Checklist / progress rows.
 | `completed_by` | staff id |
 | `completed_at` | timestamp |
 | `notes` | optional |
+| `proof_photo_urls` | jsonb array of public image URLs (set on complete; cleared on reopen) |
 
 ---
 
@@ -191,11 +192,11 @@ or
 
 **POST body (preview):** one of templateKey / savedProgramId / expansionType bodies above; optional **`includedScopeLabels`**.
 
-**PATCH complete body:** `{ "completedBy": "STAFF_NICK", "notes": "" }` (optional).
+**PATCH complete body:** `{ "completedBy": "STAFF_NICK", "notes": "", "proofPhotoUrls": ["https://…"] }` — **`notes`** / **`proofPhotoUrls`** optional. **`proofPhotoUrls`** is an array of public **http(s)** image URLs (max **12**); staff uploads images via **propera-app** (same **`pm-attachments`** storage as ticket photos), then sends URLs on complete. Reopening a line clears **`proof_photo_urls`**.
 
 Auth: same portal token pattern as existing portal routes (`X-Propera-Portal-Token` / `PROPERA_PORTAL_TOKEN`).
 
-**Migrations:** `supabase/migrations/018_program_engine_v1.sql` (program tables), **`019_properties_program_expansion_profile.sql`** (`properties.program_expansion_profile` — optional per-property `floor_paint_scopes` / `common_paint_scopes` arrays for line expansion), **`022_saved_programs.sql`** (`saved_programs`, `program_runs.saved_program_id`, strict XOR on runs).
+**Migrations:** `supabase/migrations/018_program_engine_v1.sql` (program tables), **`019_properties_program_expansion_profile.sql`** (`properties.program_expansion_profile` — optional per-property `floor_paint_scopes` / `common_paint_scopes` arrays for line expansion), **`022_saved_programs.sql`** (`saved_programs`, `program_runs.saved_program_id`, strict XOR on runs), **`040_program_lines_proof_photos.sql`** (`program_lines.proof_photo_urls` jsonb — proof-of-work image URLs on complete).
 
 ---
 
@@ -215,6 +216,7 @@ Auth: same portal token pattern as existing portal routes (`X-Propera-Portal-Tok
 - **Create program run** sends **`includedScopeLabels`** when the preview had lines and at least one area remains checked.
 - Main column scrolls as a single **`page-scroll`** region (header through run list) so long previews and area lists are not clipped.
 - **Filter runs** by property; **Saved programs** strip (desktop) lists active definitions with **Start run**; run cards open right **checklist** panel (complete/reopen per line; **completed_at** / **completed_by** on lines).
+- **Proof of work:** optional photos per open line (upload to **`pm-attachments`**, then stored on complete as **`proof_photo_urls`**); thumbnails on completed lines; reopen clears photos.
 - **Delete program run** from list or panel where portal role allows (V2 + app gate).
 
 ---
@@ -229,6 +231,7 @@ Auth: same portal token pattern as existing portal routes (`X-Propera-Portal-Tok
 | **propera-app** `/preventive` + proxies + property profile PATCH | Done |
 | Staff NL → `createProgramRun` | Later |
 | **`saved_programs` + XOR `program_runs` + preview ephemeral + app proxies** | Done (`022_saved_programs.sql`, DAL, portal, propera-app) |
+| **Line completion proof photos** | Done (`040_program_lines_proof_photos.sql`, DAL + portal + **`/preventive`**) |
 
 ---
 

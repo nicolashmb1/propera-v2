@@ -278,12 +278,36 @@ function extractPropertyHintFromBody(body, knownUpper, propertiesList) {
   return "";
 }
 
+/** Same shape as `portalTicketMutations` / `staffTicketAmendNl` — PREFIX-MMDDYY-#### */
+const HUMAN_TICKET_ID_BODY_RE = /\b([A-Za-z0-9]{2,12}-\d{6}-\d{4})\b/i;
+
+/**
+ * Human ticket id from free text (parentheses optional). Does not treat long
+ * property words (e.g. "westgrand") as work-item ids — that broke portal_chat
+ * messages like `205 westgrand (WGRA-042726-5381)`.
+ * @param {string} body
+ * @returns {string} uppercase human id or ""
+ */
+function extractHumanTicketIdFromBody(body) {
+  const t = String(body || "").trim();
+  if (!t) return "";
+  const m1 = t.match(HUMAN_TICKET_ID_BODY_RE);
+  if (m1) return String(m1[1] || "").trim().toUpperCase();
+  const m2 = t.match(/\(([A-Za-z0-9]{2,12}-\d{6}-\d{4})\)/i);
+  if (m2) return String(m2[1] || "").trim().toUpperCase();
+  const v2 = /\bv2:V2([A-Za-z0-9]+):([A-Za-z0-9-]+)\b/i.exec(t);
+  if (v2) {
+    return `${String(v2[1] || "").toUpperCase()}-${String(v2[2] || "").trim()}`.toUpperCase();
+  }
+  return "";
+}
+
+/** Work item id hint — `WI_…` only (legacy 8+ char token match removed; use {@link extractHumanTicketIdFromBody}). */
 function extractWorkItemIdHintFromBody(body) {
   const t = String(body || "").trim();
   const wiPrefix = t.match(/\b(WI_[a-zA-Z0-9]+)\b/i);
   if (wiPrefix) return String(wiPrefix[1] || "").trim();
-  const suffix = t.match(/\b([a-zA-Z0-9]{8,})\b/);
-  return suffix ? String(suffix[1] || "").trim() : "";
+  return "";
 }
 
 /** @see 25_STAFF_RESOLVER.gs staffEscapeRe_ */
@@ -467,6 +491,7 @@ module.exports = {
   detectPropertyFromBody,
   extractPropertyHintFromBody,
   extractWorkItemIdHintFromBody,
+  extractHumanTicketIdFromBody,
   staffEscapeRe,
   staffExtractScheduleRemainderFromTarget,
   buildSuggestedPromptsForCandidates,

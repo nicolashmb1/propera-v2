@@ -4,6 +4,7 @@
  *
  * @see `contracts/buildRouterParameterFromTwilio.js` — sets `provider: "twilio"`
  * @see `adapters/telegram/normalizeTelegramUpdate.js` — sets `provider: "telegram"`
+ * Portal / app uploads may pass `dataUrl` directly (no Twilio/Telegram fetch).
  */
 
 const {
@@ -84,6 +85,26 @@ async function ocrTwilioImageItem(item, twilio) {
  * @param {object} item
  * @param {{ apiKey: string, model: string, botToken: string }} tg
  */
+/**
+ * Inline data URL (e.g. portal_chat `media[]`) — same vision OCR as other transports.
+ * @param {object} item
+ * @param {{ apiKey: string, model: string }} vision
+ */
+async function ocrInlineDataUrlImageItem(item, vision) {
+  const du = String(item && item.dataUrl ? item.dataUrl : "").trim();
+  if (!du.toLowerCase().startsWith("data:image")) return "";
+  const kind = String(item.kind || "").toLowerCase();
+  const ct = String(item.contentType || item.mime_type || item.mimeType || "").toLowerCase();
+  if (kind && kind !== "image" && !ct.startsWith("image/")) return "";
+
+  return openaiVisionOcrFromDataUrl(du, {
+    apiKey: vision.apiKey,
+    model: vision.model,
+    timeoutMs: OCR_TIMEOUT_MS,
+    maxRetries: 2,
+  });
+}
+
 async function ocrTelegramImageItem(item, tg) {
   const fileId = String(item && item.file_id ? item.file_id : "").trim();
   if (!fileId) return "";
@@ -143,11 +164,14 @@ async function enrichInboundMediaWithOcr(mediaList, opts) {
 
   const twilioReady = !!(enabled && apiKey && sid && token);
   const telegramReady = !!(enabled && apiKey && botToken);
+  const inlineDataUrlReady = !!(enabled && apiKey);
 
   const injectedOrchestrator =
     opts && opts.deps && typeof opts.deps.enrichMediaWithOcr === "function";
 
-  if (!injectedOrchestrator && !twilioReady && !telegramReady) return list;
+  if (!injectedOrchestrator && !twilioReady && !telegramReady && !inlineDataUrlReady) {
+    return list;
+  }
 
   return enrichImpl(list, {
     enabled: true,
@@ -160,6 +184,10 @@ async function enrichInboundMediaWithOcr(mediaList, opts) {
       if (prov === "telegram") {
         if (!telegramReady) return "";
         return ocrTelegramImageItem(item, { apiKey, model, botToken });
+      }
+      if (inlineDataUrlReady) {
+        const inline = await ocrInlineDataUrlImageItem(item, { apiKey, model });
+        if (inline) return inline;
       }
       return "";
     },

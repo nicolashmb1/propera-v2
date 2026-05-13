@@ -7,6 +7,8 @@ const { resolveTargetWorkItemForStaff } = require("../src/brain/staff/resolveTar
 const { normalizeStaffOutcome, parsePartsEta } = require("../src/brain/staff/normalizeStaffOutcome");
 const {
   staffExtractScheduleRemainderFromTarget,
+  extractHumanTicketIdFromBody,
+  extractWorkItemIdHintFromBody,
 } = require("../src/brain/staff/lifecycleExtract");
 
 describe("resolveTargetWorkItemForStaff", () => {
@@ -209,6 +211,51 @@ describe("resolveTargetWorkItemForStaff", () => {
       },
     });
     assert.equal(r.wiId, "");
+  });
+
+  test("human ticket id in body + ticketHumanId on WI (portal NL)", () => {
+    const openWis = [
+      {
+        workItemId: "WI_W1",
+        unitId: "205",
+        propertyId: "WGRA",
+        metadata_json: {},
+        ticketHumanId: "WGRA-042726-5381",
+      },
+      {
+        workItemId: "WI_W2",
+        unitId: "206",
+        propertyId: "WGRA",
+        metadata_json: {},
+        ticketHumanId: "WGRA-042726-9999",
+      },
+    ];
+    const r = resolveTargetWorkItemForStaff({
+      openWis,
+      bodyTrim: "205 westgrand (WGRA-042726-5381) done",
+      ctx: null,
+      knownPropertyCodesUpper: new Set(["WGRA"]),
+    });
+    assert.equal(r.wiId, "WI_W1");
+    assert.equal(r.reason, "HUMAN_TICKET_ID_MATCH");
+  });
+});
+
+describe("extractHumanTicketIdFromBody / extractWorkItemIdHintFromBody (portal NL)", () => {
+  test("parenthesized human id", () => {
+    assert.equal(
+      extractHumanTicketIdFromBody("205 westgrand (WGRA-042726-5381)"),
+      "WGRA-042726-5381"
+    );
+  });
+  test("v2 composite id in text", () => {
+    assert.equal(
+      extractHumanTicketIdFromBody("see v2:V2WGRA:042726-5381 thanks"),
+      "WGRA-042726-5381"
+    );
+  });
+  test("property word westgrand is not treated as WI_ hint", () => {
+    assert.equal(extractWorkItemIdHintFromBody("205 westgrand (WGRA-042726-5381)"), "");
   });
 });
 

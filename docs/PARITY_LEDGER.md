@@ -22,7 +22,7 @@
 
 **Biggest intentional gaps vs full GAS:** full **`handleInboundRouter_`** graph (vendor/system lanes, complete Twilio parity), full **`handleLifecycleSignal_`** / sheet-style lifecycle, **Outgate template map**, **amenity/leasing/water/vendor** engines, **canonical intake vision/CIG** queue, **Alexa/sensors**.
 
-**PM / Task programs (V2-only, not GAS):** Template-driven **`program_runs`** + **`program_lines`** — building ops checklists (`018_program_engine_v1.sql`, `src/dal/programRuns.js`, `src/pm/expandProgramLines.js`, `/api/portal/program-*` including **preview** and **delete**). Intentionally **separate** from reactive tenant tickets; see **`docs/PM_PROGRAM_ENGINE_V1.md`**. Per-property **`program_expansion_profile`** (**019**) feeds line expansion; **roadmap** to reuse that building structure for intake, ticket routing, and staff flows is in the same doc (**Strategic reuse** section). **File map:** **`docs/BRAIN_PORT_MAP.md`** (Portal: preventive / program runs).
+**PM / Task programs (V2-only, not GAS):** Template-driven **`program_runs`** + **`program_lines`** — building ops checklists (`018_program_engine_v1.sql`, `src/dal/programRuns.js`, `src/pm/expandProgramLines.js`, `/api/portal/program-*` including **preview**, **delete**, and **optional `proofPhotoUrls` on line complete** — `040_program_lines_proof_photos.sql`). Intentionally **separate** from reactive tenant tickets; see **`docs/PM_PROGRAM_ENGINE_V1.md`**. Per-property **`program_expansion_profile`** (**019**) feeds line expansion; **roadmap** to reuse that building structure for intake, ticket routing, and staff flows is in the same doc (**Strategic reuse** section). **File map:** **`docs/BRAIN_PORT_MAP.md`** (Portal: preventive / program runs).
 
 ### GAS V1 engine file → V2 coverage map
 
@@ -70,6 +70,8 @@ Use this to see **what exists in GAS** and whether **V2 has a row** in §§1–6
 | `POST /webhooks/telegram` | Telegram Bot API | `telegram` | **No** |
 | `POST /webhooks/twilio`, `POST /webhooks/sms` | Twilio `application/x-www-form-urlencoded` | `sms` if `From` is not `whatsapp:`; **`whatsapp`** if `From` starts with `whatsapp:` | **Yes, SMS only** — `sms` runs TCPA compliance + DB opt-out; **`whatsapp` does not** |
 | `POST /webhooks/portal` | JSON (`buildRouterParameterFromPortal`) | **`portal`** | **No** — structured PM/staff ingress; outbound reply returned on HTTP JSON only |
+
+**Portal `action: portal_chat`:** propera-app command bar adapter — JSON carries final `Body` / `message` (clients typically prefix `#` for staff capture in UI) and optional `media[]` items with inline **`dataUrl`** (`data:image/…`) → `_mediaJson`. Same **`runInboundPipeline`** as other portal ingress (`transportChannel: portal`). Inline image OCR uses **`enrichInboundMediaWithOcr`** → **`openaiVisionOcrFromDataUrl`** when **`INTAKE_MEDIA_OCR_ENABLED`** and **`OPENAI_API_KEY`** are set (no Twilio/Telegram fetch). Validation rejects media-only payloads without body **`#`**.
 
 **Portal `action: create_ticket` (V2 policy):** Validated structured signal — `buildStructuredPortalCreateDraft` + `finalizeMaintenance.readPortalCreateTicketPresentation`. Does **not** run `compileTurn` / regex intake on synthetic `Body`; **no** emergency inference or `localCategoryFromText` on issue text; **category / urgency / status / serviceNote** come from `_portalPayloadJson`; only **preferredWindow** is parsed for lifecycle schedule (`applyPreferredWindowByTicketKey`). PARITY GAP vs GAS portal pipeline (intentional).
 

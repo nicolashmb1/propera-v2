@@ -7,6 +7,41 @@
 
 ---
 
+## 2026-05-12 — Preventive checklist proof-of-work photos
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **SQL** | **`040_program_lines_proof_photos.sql`** — `program_lines.proof_photo_urls` (jsonb array of public URLs). |
+| **V2** | **`programRuns.js`** — `PATCH` complete accepts **`proofPhotoUrls`** (bounded, http(s) only); reopen clears; **`PROGRAM_LINE_COMPLETED`** payload includes **`proof_photo_count`**. |
+| **Portal** | **`registerPortalRoutes.js`** forwards **`proofPhotoUrls`**. |
+| **propera-app** | **`/preventive`** checklist: upload via existing **`/api/pm/upload-attachment`** (`pm-attachments`), optional thumbnails before complete, saved proofs on completed lines. |
+| **Docs** | **`PM_PROGRAM_ENGINE_V1.md`**, **`PARITY_LEDGER.md`**, **`supabase/migrations/README.md`**. |
+
+### Continue
+
+Apply migration **`040`** on Supabase; requires **`026`** bucket for uploads (same as ticket photos).
+
+---
+
+## 2026-05-11 — Portal command bar (`portal_chat`)
+
+### Done
+
+| Area | Notes |
+|------|--------|
+| **`buildRouterParameterFromPortal.js`** | **`action: portal_chat`** — `body` / `message`, optional **`media`** → **`_mediaJson`**; rejects media-only without body `#`. |
+| **`enrichInboundMediaWithOcr.js`** | OCR for **`data:image…` dataUrl** items (portal uploads) via existing vision transport when OCR enabled. |
+| **Tests** | **`buildRouterParameterFromPortal.test.js`** — portal_chat cases; **`tests/scenarios/portalPortalChatStaffCapture.test.js`** — `#` body → core. |
+| **propera-app** | **`POST /api/portal/command`**, **`portalCommandChat.ts`** (actor phone from session contact + env fallback), **`PortalCommandChat.tsx`** (New ticket vs Normal), wired in **`AppLayout`**. |
+
+### Continue
+
+Operator docs: roster **`contacts.phone_e164`** for signed-in staff (else **`PROPERA_PM_ACTOR_PHONE_E164`**); parity row **`PARITY_LEDGER.md`** (portal ingress).
+
+---
+
 ## 2026-05-09 — `handleInboundCore` refactor plan **complete** (Phases 2–5 closure)
 
 ### Done

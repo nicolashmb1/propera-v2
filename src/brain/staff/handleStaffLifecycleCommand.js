@@ -10,6 +10,7 @@ const { appendEventLog } = require("../../dal/appendEventLog");
 const { getConversationCtx } = require("../../dal/conversationCtx");
 const {
   listOpenWorkItemsForOwner,
+  getTicketHumanIdByTicketKeys,
   getWorkItemByWorkItemId,
 } = require("../../dal/workItems");
 const { listPropertiesForMenu } = require("../../dal/intakeSession");
@@ -134,12 +135,15 @@ async function handleStaffLifecycleCommand(o) {
   const propertiesList = await listPropertiesForMenu();
   const ctx = await getConversationCtx(staffActorKey);
   const rawRows = await listOpenWorkItemsForOwner(staffId);
+  const ticketKeys = rawRows.map((r) => String(r.ticket_key || "").trim());
+  const ticketKeyToHuman = await getTicketHumanIdByTicketKeys(sb, ticketKeys);
   const openWis = rawRows.map((r) => ({
     workItemId: r.work_item_id,
     unitId: r.unit_id,
     propertyId: r.property_id,
     metadata_json: r.metadata_json,
     ticketKey: r.ticket_key ? String(r.ticket_key).trim() : "",
+    ticketHumanId: ticketKeyToHuman.get(String(r.ticket_key || "").trim()) || "",
   }));
 
   let ctxPendingWi = null;
