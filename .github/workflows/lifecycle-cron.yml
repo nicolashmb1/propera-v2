@@ -1,9 +1,12 @@
-# Wakes V2 only — no lifecycle logic here. POST /internal/cron/lifecycle-timers runs processDueLifecycleTimers in propera-v2.
+﻿# Wakes V2 only — no lifecycle logic here.
+# POST /internal/cron/lifecycle-timers runs processDueLifecycleTimers.
+# POST /internal/cron/meter-runs-process-pending processes pending utility meter photos.
+
 name: Lifecycle Cron
 
 on:
   schedule:
-    # GitHub allows short cadence but execution may drift; 5–10 min typical for timer slack.
+    # GitHub scheduled actions may drift; 5 min is fine for lifecycle + meter processing.
     - cron: "*/5 * * * *"
   workflow_dispatch:
 
@@ -23,6 +26,24 @@ jobs:
             -H "ngrok-skip-browser-warning: true")"
           body="$(echo "$response" | sed '$d')"
           status="$(echo "$response" | tail -n1)"
-          echo "HTTP status: $status"
-          echo "Response body: $body"
+          echo "Lifecycle HTTP status: $status"
+          echo "Lifecycle response body: $body"
+          test "$status" -ge 200 -a "$status" -lt 300
+
+      - name: Call meter runs processing endpoint
+        env:
+          CRON_URL: ${{ secrets.PROPERA_METER_RUNS_CRON_URL }}
+          CRON_SECRET: ${{ secrets.LIFECYCLE_CRON_SECRET }}
+        run: |
+          test -n "$CRON_URL"
+          test -n "$CRON_SECRET"
+          response="$(curl -sS -w '\n%{http_code}' -X POST "$CRON_URL" \
+            -H "content-type: application/json" \
+            -H "x-propera-cron-secret: $CRON_SECRET" \
+            -H "ngrok-skip-browser-warning: true" \
+            --data '{"limitRuns":4,"limitPerRun":2}')"
+          body="$(echo "$response" | sed '$d')"
+          status="$(echo "$response" | tail -n1)"
+          echo "Meter runs HTTP status: $status"
+          echo "Meter runs response body: $body"
           test "$status" -ge 200 -a "$status" -lt 300
