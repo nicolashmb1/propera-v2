@@ -23,6 +23,8 @@ Run SQL files in **numeric order** in the Supabase SQL Editor (same project as `
 | **040_program_lines_proof_photos.sql** | `program_lines.proof_photo_urls` (jsonb array of image URLs) | **`programRuns.js`** complete/reopen + portal **`PATCH .../program-lines/:id/complete`**; **`propera-app`** `/preventive` proof upload |
 | **021_portal_auth_allowlist.sql** | `portal_auth_allowlist` — pre-approved emails, `portal_role`, optional `staff_id` FK | **`propera-app`** `POST /api/auth/register`, **`POST /api/auth/login`**, **`portalMeFromSupabase`** (`/api/me`); service role bypasses RLS |
 | **031_batch_media_meter_billing.sql** | `batch_media_runs`, `batch_media_assets`, `utility_meters`, `utility_meter_readings`; Storage bucket **`utility-meter-runs`** | **`meterBillingRuns.js`**, **`registerMeterRunRoutes.js`** (`/api/portal/meter-runs`, `utility-meters`); **`propera-app`** `/api/utility-meter-runs/*`, `/api/utility-meter-runs/upload` |
+| **041_batch_media_assets_updated_at.sql** | `batch_media_assets.updated_at` + touch trigger | Stuck **PROCESSING** reset, **`POST /internal/cron/meter-runs-process-pending`**, portal resume / snapshot counts |
+| **042_operational_finance_v1.sql** | `ticket_cost_entries`, `tenant_ledger_entries`, `portal_ticket_financial_summary_v1`, `portal_property_maintenance_spend_month_v1`; extends **`portal_tickets_v1`** (`ticket_row_id`, finance timeline colors), **`portal_properties_v1`** (UTC-month maintenance columns) | **`ticketCostEntries.js`**, portal `/api/portal/tickets/:id/ticket-cost-entries*`, **`propera-app`** Costs & charges; env: `PROPERA_FINANCE_ENABLED`, `PROPERA_FINANCE_TICKET_COSTS_ENABLED`, `PROPERA_FINANCE_LEDGER_ENABLED` + `NEXT_PUBLIC_PROPERA_FINANCE_ENABLED` |
 
 ### Minimum paths
 

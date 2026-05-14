@@ -7,6 +7,50 @@
 
 ---
 
+## 2026-05-14 — PM Assignment Override V1 (portal cockpit)
+
+### Done (this session)
+
+| Area | Change |
+|------|--------|
+| **Migration 043** | `043_ticket_assignment_responsibility_v1.sql` — adds `assignment_source`, `assignment_note`, `assignment_updated_at`, `assignment_updated_by` columns to `tickets`; backfills `POLICY` source on existing assigned rows; creates `portal_tickets_v1` view (all assignment columns + `timeline_json` + `ticket_row_id` alias). |
+| **V2 DAL** | `src/dal/portalTicketAssignment.js` — `applyPortalTicketAssignment` (writes `PM_OVERRIDE` source tag, syncs `work_items` via `updateWorkItemsByTicketKey`, appends `PORTAL_PM_TICKET_ASSIGNMENT` event log); `listStaffAssignableToProperty` (org-wide active staff, no `staff_assignments` dependency); `assertStaffAssignable` (active-only check, property-agnostic). |
+| **V2 portal routes** | `registerPortalRoutes.js`: `POST /api/portal/tickets/:ticketId/assignment` (PM override write); `GET /api/portal/properties/:code/staff-for-assignment` (staff list). Both guarded by portal token (`gate`). |
+| **Phase 3 — `ticketAssignmentGuard`** | `src/dal/ticketAssignmentGuard.js` — `mergeTicketUpdateRespectingPmOverride` strips policy assignment columns from patches when `assignment_source = PM_OVERRIDE`. Wired into `portalTicketMutations.js` (incl. soft delete), `executeLifecycleDecision.js` (`APPLY_SCHEDULE_SET`), `afterTenantScheduleApplied.js`, `ticketLifecycleSync.js`, `turnovers.js`. Event `PORTAL_PM_TICKET_MUTATION_ASSIGNMENT_STRIPPED` when a portal mutation patch contained stripped keys. Tests: `tests/ticketAssignmentGuard.test.js`. |
+| **Docs** | `docs/PM_ASSIGNMENT_OVERRIDE.md` Phase 3 marked complete; `PARITY_LEDGER.md` §11 corrected (finalize is INSERT-only; guard is `ticketAssignmentGuard` + call sites). |
+| **propera-app types + maps** | `types.ts` (`PortalStaffOption`, `PmTicketAssignmentPayload` incl. `ticketKey`); `mapRemoteTicket.ts` (`ticketRowId`, `ticketKey`, `assignedStaffId`, `assignmentNote`, `assignmentSourceLabel`); `portalSupabaseRead.ts` fallback column read. |
+| **propera-app API routes** | `/api/pm/ticket-assignment` (proxy → V2 POST); `/api/pm/property-staff` (proxy → V2 GET staff list). UUID regex loosened to accept any standard UUID (any version/variant). `ticketKey` forwarded as last-resort path segment. |
+| **propera-app `api.ts`** | `fetchPmStaffForPropertyAssignment`, `postPmTicketAssignment` helpers. |
+| **TicketDetailPanel UX** | Assignment block redesigned: compact display row (Assigned to · Name + pencil edit icon). Clicking edit opens a **modal popup** with "Reassign to" select (current assignee excluded), "Reason (optional)" textarea, dark Save + Cancel. Current assignee excluded from dropdown. Modal resets on open. Save closes modal on success. |
+| **AppLayout.tsx** | CSS for `.assign-display-row`, `.assign-edit-btn`, `.assign-modal-backdrop`, `.assign-modal`, `.assign-modal-*`, `.assignment-save-btn`, `.assignment-reassign-note` — all scoped, no global style changes. |
+| **Staff list fix** | Old code queried `staff_assignments` for property/GLOBAL — excluded staff without property rows (Geff). New code queries `staff` where `active = true` directly. V2 server restart required after code change. |
+| **UUID/lookup robustness** | UUID regex: loosened from `[1-8]...[89ab]` to any standard 8-4-4-4-12 UUID. `fetchTicketRowForAssignment`: UUID path → `tickets.id`; human id path → `tickets.ticket_id` with `tickets.ticket_key` fallback; final last-resort by `ticket_key` for unrecognised hint formats. |
+
+### Architecture alignment
+
+- **V2 is authoritative** — app sends a PM signal; V2 validates, writes, audits. No direct Supabase writes from app.
+- **PM lock vs automation** — `ticketAssignmentGuard` ensures `tickets.update` from portal mutations, lifecycle schedule paths, WI-done sync, and turnover links cannot overwrite assignment columns while `assignment_source = PM_OVERRIDE`. PM portal `applyPortalTicketAssignment` remains the authoritative assignment writer (no stripper).
+- **Audit trail** — every assignment change appended to `event_log` with actor, staff id, ticket key, trace id.
+- **Phases 4–5 not started** — Activity timeline row on PM assign (Phase 4); vendor/team targets (Phase 5).
+
+### Known gaps / next session candidates
+
+| Item | Notes |
+|------|-------|
+| **Assignment timeline event** | `applyPortalTicketAssignment` does not yet append a `ticket_timeline_events` row (kind `assigned`, actor PM name). Would surface in Activity tab. |
+| **Staff `staff_id` null guard** | If a `staff` row has `staff_id = null`, `listStaffAssignableToProperty` filters it out via `.filter(r => r.staffId)` — correct but silent. |
+| **`HANDOFF_LOG` + `PARITY_LEDGER` update** | Done in this entry. |
+
+### Commands
+
+```bash
+cd propera-v2
+npm test
+npm start   # restart required after portalTicketAssignment.js changes
+```
+
+---
+
 ## 2026-05-12 — Preventive checklist proof-of-work photos
 
 ### Done

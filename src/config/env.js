@@ -192,7 +192,10 @@ function dashboardToken() {
   return String(env("DASHBOARD_TOKEN", "")).trim();
 }
 
-/** POST `/internal/cron/lifecycle-timers` — header `X-Propera-Cron-Secret` must match when set. */
+/**
+ * POST `/internal/cron/lifecycle-timers` and `/internal/cron/meter-runs-process-pending` —
+ * header `X-Propera-Cron-Secret` must match when set.
+ */
 function lifecycleCronSecret() {
   return String(env("LIFECYCLE_CRON_SECRET", "")).trim();
 }
@@ -210,6 +213,21 @@ function portalApiToken() {
 /** Turnover Engine `/api/portal/turnovers*` — opt-in until GA (`PROPERA_TURNOVER_ENGINE_ENABLED=1`). */
 function turnoverEngineEnabled() {
   return env("PROPERA_TURNOVER_ENGINE_ENABLED", "") === "1";
+}
+
+/** Operational finance master — default off (`PROPERA_FINANCE_ENABLED=1`). */
+function financeCoreEnabled() {
+  return env("PROPERA_FINANCE_ENABLED", "") === "1";
+}
+
+/** Ticket cost entries API — requires core + `PROPERA_FINANCE_TICKET_COSTS_ENABLED=1`. */
+function financeTicketCostsEnabled() {
+  return financeCoreEnabled() && env("PROPERA_FINANCE_TICKET_COSTS_ENABLED", "") === "1";
+}
+
+/** Post approved ticket charges to `tenant_ledger_entries` (`PROPERA_FINANCE_LEDGER_ENABLED=1`). */
+function financeLedgerEnabled() {
+  return financeCoreEnabled() && env("PROPERA_FINANCE_LEDGER_ENABLED", "") === "1";
 }
 
 module.exports = {
@@ -246,4 +264,7 @@ module.exports = {
   lifecycleCronSecret,
   portalApiToken,
   turnoverEngineEnabled,
+  financeCoreEnabled,
+  financeTicketCostsEnabled,
+  financeLedgerEnabled,
 };

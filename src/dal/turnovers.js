@@ -4,6 +4,7 @@
 const { getSupabase } = require("../db/supabase");
 const { appendEventLog } = require("./appendEventLog");
 const { finalizeMaintenanceDraft } = require("./finalizeMaintenance");
+const { mergeTicketUpdateRespectingPmOverride } = require("./ticketAssignmentGuard");
 
 const ACTIVE_STATUSES = ["OPEN", "IN_PROGRESS"];
 
@@ -480,8 +481,12 @@ async function linkTicketToTurnoverItem(turnoverId, itemId, ticketLookup, o) {
     hint
   );
   const { data: ticket } = isUuid
-    ? await sb.from("tickets").select("id, ticket_id, ticket_key").eq("id", hint).maybeSingle()
-    : await sb.from("tickets").select("id, ticket_id, ticket_key").eq("ticket_id", hint.toUpperCase()).maybeSingle();
+    ? await sb.from("tickets").select("id, ticket_id, ticket_key, assignment_source").eq("id", hint).maybeSingle()
+    : await sb
+        .from("tickets")
+        .select("id, ticket_id, ticket_key, assignment_source")
+        .eq("ticket_id", hint.toUpperCase())
+        .maybeSingle();
 
   if (!ticket || !ticket.ticket_id) return { ok: false, error: "ticket_not_found" };
 
@@ -492,12 +497,14 @@ async function linkTicketToTurnoverItem(turnoverId, itemId, ticketLookup, o) {
     })
     .eq("id", iid);
 
+  const turnoverLinkPatch = mergeTicketUpdateRespectingPmOverride(ticket, {
+    turnover_id: tid,
+    turnover_item_id: iid,
+  });
+
   await sb
     .from("tickets")
-    .update({
-      turnover_id: tid,
-      turnover_item_id: iid,
-    })
+    .update(turnoverLinkPatch)
     .eq("id", ticket.id);
 
   await sb.from("work_items").update({ turnover_id: tid }).eq("ticket_key", ticket.ticket_key);
@@ -591,12 +598,20 @@ async function createTicketFromTurnoverItem(o) {
     })
     .eq("id", itemId);
 
+  const { data: newTicketRow } = await sb
+    .from("tickets")
+    .select("assignment_source")
+    .eq("ticket_key", fin.ticketKey)
+    .maybeSingle();
+
+  const turnoverOnTicketPatch = mergeTicketUpdateRespectingPmOverride(newTicketRow || {}, {
+    turnover_id: turnoverId,
+    turnover_item_id: itemId,
+  });
+
   await sb
     .from("tickets")
-    .update({
-      turnover_id: turnoverId,
-      turnover_item_id: itemId,
-    })
+    .update(turnoverOnTicketPatch)
     .eq("ticket_key", fin.ticketKey);
 
   await sb.from("work_items").update({ turnover_id: turnoverId }).eq("ticket_key", fin.ticketKey);

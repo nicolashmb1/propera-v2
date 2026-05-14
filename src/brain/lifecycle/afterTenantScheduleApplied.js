@@ -5,6 +5,7 @@
 const { handleLifecycleSignal } = require("./handleLifecycleSignal");
 const { lifecycleEnabledForProperty } = require("../../dal/lifecyclePolicyDal");
 const { appendEventLog } = require("../../dal/appendEventLog");
+const { mergeTicketUpdateRespectingPmOverride } = require("../../dal/ticketAssignmentGuard");
 
 /**
  * @param {object} o
@@ -62,13 +63,21 @@ async function afterTenantScheduleApplied(o) {
     })
     .eq("work_item_id", wi.work_item_id);
 
+  const { data: ticketLockRow } = await sb
+    .from("tickets")
+    .select("assignment_source")
+    .eq("ticket_key", ticketKey)
+    .maybeSingle();
+
+  const tenantScheduleTicketPatch = mergeTicketUpdateRespectingPmOverride(ticketLockRow || {}, {
+    status: "Scheduled",
+    updated_at: now,
+    last_activity_at: now,
+  });
+
   await sb
     .from("tickets")
-    .update({
-      status: "Scheduled",
-      updated_at: now,
-      last_activity_at: now,
-    })
+    .update(tenantScheduleTicketPatch)
     .eq("ticket_key", ticketKey);
 
   await appendEventLog({

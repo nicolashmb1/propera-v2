@@ -59,7 +59,7 @@ Use this to see **what exists in GAS** and whether **V2 has a row** in §§1–6
 | `03_ALEXA_ADAPTER.gs` | Alexa | **Not in V2** |
 | `04_SENSOR_GATEWAY.gs` | IoT | **Not in V2** |
 | `27_DEV_TOOLS_HARNESS.gs` | GAS dev/test harness | **Not in V2** — Node uses `npm test`, local scripts, optional dashboard |
-| `apps-script/ProperaPortalAPI.gs` | Portal HTTP API (Sheets-backed) | **PARTIAL** — V2 adds `GET /api/portal/gas-compat?path=tickets|properties` (Supabase read) + `POST /webhooks/portal` (structured `RouterParameter` → `runInboundPipeline`, `transportChannel: portal`). **propera-app** `/api/pm/*` is **V2-first** for V2-shaped ticket ids; GAS remains legacy for non-V2 rows and **upload / create-property** until ported. **`portalTicketMutations`** merges **`attachments` / `attachmentUrls`** from `_portalPayloadJson` into `tickets.attachments`. Full GAS `path=pm.*` parity still evolving. |
+| `apps-script/ProperaPortalAPI.gs` | Portal HTTP API (Sheets-backed) | **PARTIAL** — V2 adds `GET /api/portal/gas-compat?path=tickets\|properties` (Supabase read) + `POST /webhooks/portal` (structured `RouterParameter` → `runInboundPipeline`, `transportChannel: portal`). **propera-app** `/api/pm/*` is **V2-first** for V2-shaped ticket ids; GAS remains legacy for non-V2 rows and **upload / create-property** until ported. **`portalTicketMutations`** merges **`attachments` / `attachmentUrls`** from `_portalPayloadJson` into `tickets.attachments`. Full GAS `path=pm.*` parity still evolving. **PM Assignment Override (V2-only, 2026-05-14):** `POST /api/portal/tickets/:ticketId/assignment` + `GET /api/portal/properties/:code/staff-for-assignment` — see §10 PM Assignment block below. |
 | `PROPERA_MAIN_BACKUP.gs` | Monolith backup / `detectPropertyFromBody_` | §1 — property detect ported in `lifecycleExtract.js` |
 | `sms-consent-handler.gs` (if present) | SMS consent | Superseded by V2 **`sms_opt_out`** + SMS-only compliance in `runInboundPipeline` |
 
@@ -209,6 +209,7 @@ Requires migration **`011_sms_opt_out.sql`** for opt-out persistence. See [PROPE
 
 **Orientation:** read **Snapshot** (top of this file) + **§7** (remaining gaps) before deep rows in §§1–6.
 
+- [PM_ASSIGNMENT_OVERRIDE.md](./PM_ASSIGNMENT_OVERRIDE.md) — **PM assignment override phases 1–5**: what is complete, what is pending, key files, acceptance criteria.  
 - [ORCHESTRATOR_ROUTING.md](./ORCHESTRATOR_ROUTING.md) — **inbound order**, **core guards**, **lane stubs** (engine 20 review).  
 - [GAS_ENGINE_PORT_PROGRAM.md](./GAS_ENGINE_PORT_PROGRAM.md) — **phased port** for engines **10 / 12 / 14 / 20** (canonical intake, lifecycle, directory/session, orchestrator); use when you want “ported” beyond this ledger’s row-level notes.
 - [PORTING_FROM_GAS.md](./PORTING_FROM_GAS.md) — porting rules + table (keep in sync with this ledger).  
@@ -230,3 +231,21 @@ These items **do not** change GAS behavioral parity; they help operators and age
 | **Structured stdout** | **Unchanged** | `emitTimed` / `STRUCTURED_LOGS.md`; `STRUCTURED_LOG=0` disables. |
 
 **Tenant-facing copy:** finalize receipt hides internal WI id / ticket UUID — see `handleInboundCore.js` (UX, not engine parity).
+
+---
+
+## 11. PM Assignment Override — portal cockpit (V2-only, 2026-05-14)
+
+**Not a GAS parity item.** This is a new PM capability with no direct GAS equivalent.
+
+| Item | Status | Notes |
+|------|--------|-------|
+| **Migration** | **SHIPPED** | `043_ticket_assignment_responsibility_v1.sql` — `assignment_source`, `assignment_note`, `assignment_updated_at`, `assignment_updated_by` on `tickets`; `portal_tickets_v1` view (all assignment cols + `ticket_row_id`). |
+| **DAL** | **SHIPPED** | `src/dal/portalTicketAssignment.js` — `applyPortalTicketAssignment` (write + audit), `listStaffAssignableToProperty` (org-wide active staff), `assertStaffAssignable` (active-only). |
+| **Portal routes** | **SHIPPED** | `POST /api/portal/tickets/:ticketId/assignment` (PM override, portal token); `GET /api/portal/properties/:code/staff-for-assignment` (staff list, portal token). |
+| **Policy guard (Phase 3)** | **SHIPPED** | `src/dal/ticketAssignmentGuard.js` — `mergeTicketUpdateRespectingPmOverride` strips policy assignment columns from `tickets.update` patches when `assignment_source = PM_OVERRIDE`. Used by `portalTicketMutations.js`, `executeLifecycleDecision.js` (schedule apply), `afterTenantScheduleApplied.js`, `ticketLifecycleSync.js`, `turnovers.js`. `applyPortalTicketAssignment` does **not** use the stripper (authoritative PM write). `finalizeMaintenanceDraft` is INSERT-only. |
+| **propera-app cockpit** | **SHIPPED** | `TicketDetailPanel`: compact assignment display + edit icon → modal (reassign select, reason textarea, Save/Cancel). Current assignee excluded from dropdown. `portal_tickets_v1` view feeds `ticket_row_id` + assignment fields to app. |
+| **Audit** | **SHIPPED** | Every change appends `PORTAL_PM_TICKET_ASSIGNMENT` to `event_log` with actor, staff id, ticket key, trace id. |
+| **Phase 3 — automation vs PM lock** | **SHIPPED** | See **`docs/PM_ASSIGNMENT_OVERRIDE.md`** Phase 3 + `tests/ticketAssignmentGuard.test.js`. Staff reassignment policy documented for future work. |
+| **Assignment timeline event** | **NOT STARTED** | No `ticket_timeline_events` row appended on PM reassign. Would surface in Activity tab as `assigned` kind. |
+| **Phases 4–5** | **NOT STARTED** | Rich assignment history UI; vendor/team/PM targets beyond staff. |

@@ -5,6 +5,7 @@
 
 const { getSupabase } = require("../db/supabase");
 const { appendEventLog } = require("./appendEventLog");
+const { mergeTicketUpdateRespectingPmOverride, ticketRowHasPmAssignmentOverride, TICKET_ASSIGNMENT_POLICY_KEYS } = require("./ticketAssignmentGuard");
 const {
   cancelPendingLifecycleTimersForTicketKey,
 } = require("./lifecycleTimers");
@@ -436,15 +437,24 @@ function normalizePortalPriority(raw) {
 async function fetchTicketByHumanId(sb, humanTicketId) {
   const id = String(humanTicketId || "").trim();
   if (!id) return null;
+  const upper = id.toUpperCase();
   const { data, error } = await sb
     .from("tickets")
     .select(
-      "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history"
+      "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history, assignment_source"
     )
-    .eq("ticket_id", id)
+    .eq("ticket_id", upper)
     .maybeSingle();
-  if (error || !data) return null;
-  return data;
+  if (!error && data) return data;
+  const { data: dI, error: eI } = await sb
+    .from("tickets")
+    .select(
+      "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history, assignment_source"
+    )
+    .ilike("ticket_id", id)
+    .maybeSingle();
+  if (!eI && dI) return dI;
+  return null;
 }
 
 /**
@@ -455,15 +465,32 @@ async function fetchTicketForPortalMutation(sb, lookupHint) {
   const hint = String(lookupHint || "").trim();
   if (!hint) return null;
   if (TICKET_ROW_UUID_RE.test(hint)) {
+    const hl = hint.toLowerCase();
     const { data, error } = await sb
       .from("tickets")
       .select(
-        "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history"
+        "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history, assignment_source"
       )
-      .eq("id", hint)
+      .eq("id", hl)
       .maybeSingle();
-    if (error || !data) return null;
-    return data;
+    if (!error && data) return data;
+    const { data: dk, error: ek } = await sb
+      .from("tickets")
+      .select(
+        "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history, assignment_source"
+      )
+      .eq("ticket_key", hl)
+      .maybeSingle();
+    if (!ek && dk) return dk;
+    const { data: dk2, error: ek2 } = await sb
+      .from("tickets")
+      .select(
+        "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history, assignment_source"
+      )
+      .eq("ticket_key", hint)
+      .maybeSingle();
+    if (!ek2 && dk2) return dk2;
+    return null;
   }
   if (HUMAN_TICKET_ID_RE.test(hint) || SHORT_HUMAN_TICKET_ID_RE.test(hint)) {
     return fetchTicketByHumanId(sb, hint.toUpperCase());
@@ -565,14 +592,15 @@ async function tryPortalPmTicketMutation(o) {
   }
 
   if (parsed.kind === "soft_delete") {
+    const deletePatch = mergeTicketUpdateRespectingPmOverride(ticket, {
+      status: "Deleted",
+      closed_at: now,
+      updated_at: now,
+      last_activity_at: now,
+    });
     const { error: tErr } = await sb
       .from("tickets")
-      .update({
-        status: "Deleted",
-        closed_at: now,
-        updated_at: now,
-        last_activity_at: now,
-      })
+      .update(deletePatch)
       .eq("ticket_id", resolvedTicketId);
     if (tErr) {
       return {
@@ -684,9 +712,31 @@ async function tryPortalPmTicketMutation(o) {
     ticketPatch.attachments = joined.length > 3800 ? joined.slice(0, 3800) : joined;
   }
 
+  const ticketPatchFiltered = mergeTicketUpdateRespectingPmOverride(ticket, ticketPatch);
+
+  if (ticketRowHasPmAssignmentOverride(ticket)) {
+    const strippedKeys = TICKET_ASSIGNMENT_POLICY_KEYS.filter(
+      (k) =>
+        Object.prototype.hasOwnProperty.call(ticketPatch, k) &&
+        !Object.prototype.hasOwnProperty.call(ticketPatchFiltered, k)
+    );
+    if (strippedKeys.length) {
+      await appendEventLog({
+        traceId,
+        log_kind: "portal",
+        event: "PORTAL_PM_TICKET_MUTATION_ASSIGNMENT_STRIPPED",
+        payload: {
+          human_ticket_id: resolvedTicketId,
+          ticket_key: ticketKey,
+          stripped_keys: strippedKeys,
+        },
+      });
+    }
+  }
+
   const { error: tErr2 } = await sb
     .from("tickets")
-    .update(ticketPatch)
+    .update(ticketPatchFiltered)
     .eq("ticket_id", resolvedTicketId);
   if (tErr2) {
     return {
@@ -865,4 +915,5 @@ module.exports = {
   normalizePortalTicketStatus,
   normalizePortalPriority,
   tryPortalPmTicketMutation,
+  updateWorkItemsByTicketKey,
 };

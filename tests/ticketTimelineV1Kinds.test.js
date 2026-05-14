@@ -19,3 +19,15 @@ test("Ticket Timeline V1 DB-trigger kinds are unique and stable", () => {
   assert.equal(DB_TRIGGER_TIMELINE_KINDS.length, 6);
   assert.equal(new Set(DB_TRIGGER_TIMELINE_KINDS).size, 6);
 });
+
+/** V2 portal / finance writers — keep aligned with ticket_cost_entries DAL + portal_tickets_v1 color case. */
+const V2_SEMANTIC_TIMELINE_KINDS = Object.freeze([
+  "cost_added",
+  "cost_updated",
+  "tenant_charge_decision",
+]);
+
+test("V2 semantic finance timeline kinds are stable", () => {
+  assert.equal(V2_SEMANTIC_TIMELINE_KINDS.length, 3);
+  assert.equal(new Set(V2_SEMANTIC_TIMELINE_KINDS).size, 3);
+});

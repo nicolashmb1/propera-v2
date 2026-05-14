@@ -19,6 +19,9 @@ const {
 
 const BUCKET_DEFAULT = "utility-meter-runs";
 
+/** PROCESSING rows older than this are reset to UPLOADED before picking the next batch (client disconnect / crash). */
+const METER_STUCK_PROCESSING_MINUTES = 12;
+
 /** Public bucket URL for portal review thumbnails (bucket is public-read per migration 031). */
 function publicStorageObjectUrl(baseUrl, bucket, storagePath) {
   const b = String(baseUrl || "").replace(/\/$/, "");
@@ -156,7 +159,9 @@ async function getMeterRunDetail(runId) {
   }
   const { data: assets, error: aErr } = await sb
     .from("batch_media_assets")
-    .select("id, storage_bucket, storage_path, mime_type, processing_status, last_error, created_at")
+    .select(
+      "id, storage_bucket, storage_path, mime_type, processing_status, last_error, created_at, updated_at"
+    )
     .eq("run_id", runId)
     .order("created_at", { ascending: true });
 
@@ -185,10 +190,12 @@ async function getMeterRunDetail(runId) {
       mime_type: a.mime_type,
       processing_status: a.processing_status,
       last_error: a.last_error,
+      updated_at: a.updated_at || null,
       photo_public_url: supabaseUrl
         ? publicStorageObjectUrl(supabaseUrl, a.storage_bucket || BUCKET_DEFAULT, a.storage_path)
         : null,
     })),
+    assetStatusSummary: summarizeMeterAssetsForPortal(assetList),
   };
 }
 
@@ -242,6 +249,77 @@ async function refreshUploadedCount(runId) {
       updated_at: new Date().toISOString(),
     })
     .eq("id", runId);
+}
+
+/**
+ * Portal-friendly counts derived from `batch_media_assets` (source of truth for resume / stuck UX).
+ * @param {Array<{ processing_status?: string, updated_at?: string }>} assetList
+ */
+function summarizeMeterAssetsForPortal(assetList) {
+  const list = assetList || [];
+  const now = Date.now();
+  const stuckMs = METER_STUCK_PROCESSING_MINUTES * 60 * 1000;
+  let uploaded = 0;
+  let queued = 0;
+  let processing = 0;
+  let stuckProcessing = 0;
+  let extracted = 0;
+  let validated = 0;
+  let failed = 0;
+  for (const a of list) {
+    const s = String(a.processing_status || "").trim();
+    if (s === "UPLOADED") uploaded += 1;
+    else if (s === "QUEUED") queued += 1;
+    else if (s === "PROCESSING") {
+      processing += 1;
+      const u = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+      if (u > 0 && now - u > stuckMs) stuckProcessing += 1;
+    } else if (s === "EXTRACTED") extracted += 1;
+    else if (s === "VALIDATED") validated += 1;
+    else if (s === "FAILED") failed += 1;
+  }
+  const pendingRetryCount = uploaded + queued + failed;
+  const visionCompleteCount = extracted + validated;
+  return {
+    total: list.length,
+    uploaded,
+    queued,
+    processing,
+    stuckProcessing,
+    extracted,
+    validated,
+    failed,
+    pendingRetryCount,
+    visionCompleteCount,
+  };
+}
+
+/**
+ * Reset orphaned PROCESSING rows so `processPendingAssets` can pick them up again.
+ */
+async function releaseStuckMeterAssetsForRun(sb, runId, olderThanMinutes = METER_STUCK_PROCESSING_MINUTES) {
+  const threshold = new Date(Date.now() - olderThanMinutes * 60 * 1000).toISOString();
+  await sb
+    .from("batch_media_assets")
+    .update({
+      processing_status: "UPLOADED",
+      last_error: "stuck_processing_reset",
+    })
+    .eq("run_id", runId)
+    .eq("processing_status", "PROCESSING")
+    .lt("updated_at", threshold);
+}
+
+async function releaseStuckMeterAssetsGlobal(sb, olderThanMinutes = METER_STUCK_PROCESSING_MINUTES) {
+  const threshold = new Date(Date.now() - olderThanMinutes * 60 * 1000).toISOString();
+  await sb
+    .from("batch_media_assets")
+    .update({
+      processing_status: "UPLOADED",
+      last_error: "stuck_processing_reset",
+    })
+    .eq("processing_status", "PROCESSING")
+    .lt("updated_at", threshold);
 }
 
 async function matchMeterForProperty(sb, propertyCode, extraction, qrDecodedHint) {
@@ -438,6 +516,8 @@ async function processPendingAssets(runId, { limit = 100 } = {}) {
   const sb = getSupabase();
   if (!sb) return { ok: false, error: "no_db" };
 
+  await releaseStuckMeterAssetsForRun(sb, runId, METER_STUCK_PROCESSING_MINUTES);
+
   await sb
     .from("batch_media_runs")
     .update({
@@ -457,11 +537,87 @@ async function processPendingAssets(runId, { limit = 100 } = {}) {
 
   const results = [];
   for (const a of assets || []) {
-    results.push(await processOneAsset(a));
+    const one = await processOneAsset(a);
+    results.push({ assetId: a.id, ...one });
   }
 
   await recalcRunSummary(runId);
-  return { ok: true, processed: results.length, results };
+
+  const { count: pendingCt, error: pendingCtErr } = await sb
+    .from("batch_media_assets")
+    .select("id", { count: "exact", head: true })
+    .eq("run_id", runId)
+    .in("processing_status", ["UPLOADED", "QUEUED", "FAILED"]);
+
+  let remaining = 0;
+  if (!pendingCtErr && pendingCt != null && Number.isFinite(Number(pendingCt))) {
+    remaining = Number(pendingCt);
+  } else {
+    const { data: pendRows, error: pendErr } = await sb
+      .from("batch_media_assets")
+      .select("id")
+      .eq("run_id", runId)
+      .in("processing_status", ["UPLOADED", "QUEUED", "FAILED"]);
+    if (!pendErr && Array.isArray(pendRows)) remaining = pendRows.length;
+  }
+
+  return {
+    ok: true,
+    processed: results.length,
+    results,
+    remaining,
+  };
+}
+
+/**
+ * Internal cron: release stuck PROCESSING assets globally, then process a bounded set of runs.
+ * Uses the same `processPendingAssets` path as the portal (no duplicated vision logic).
+ * @param {{ limitRuns?: number, limitPerRun?: number }} opts
+ */
+async function processMeterRunsPendingCron(opts = {}) {
+  const sb = getSupabase();
+  if (!sb) return { ok: false, error: "no_db" };
+  const limitRuns = Math.max(1, Math.min(50, Math.floor(Number(opts.limitRuns) || 8)));
+  const limitPerRun = Math.max(1, Math.min(10, Math.floor(Number(opts.limitPerRun) || 2)));
+  await releaseStuckMeterAssetsGlobal(sb, METER_STUCK_PROCESSING_MINUTES);
+
+  const { data: pendingRows, error: qErr } = await sb
+    .from("batch_media_assets")
+    .select("run_id")
+    .in("processing_status", ["UPLOADED", "QUEUED", "FAILED"])
+    .limit(800);
+
+  if (qErr) return { ok: false, error: String(qErr.message || qErr) };
+
+  const runIdsOrdered = [];
+  const seen = new Set();
+  for (const row of pendingRows || []) {
+    const rid = row.run_id;
+    if (!rid || seen.has(rid)) continue;
+    seen.add(rid);
+    runIdsOrdered.push(rid);
+    if (runIdsOrdered.length >= limitRuns) break;
+  }
+
+  const results = [];
+  let totalProcessed = 0;
+  for (const runId of runIdsOrdered) {
+    const out = await processPendingAssets(runId, { limit: limitPerRun });
+    results.push({
+      runId,
+      ok: out.ok,
+      error: out.error,
+      processed: out.processed,
+      remaining: out.remaining,
+    });
+    if (out.ok) totalProcessed += Number(out.processed) || 0;
+  }
+  return {
+    ok: true,
+    runsTouched: runIdsOrdered.length,
+    totalProcessed,
+    results,
+  };
 }
 
 async function recalcRunSummary(runId) {
@@ -785,6 +941,7 @@ module.exports = {
   registerAsset,
   deleteMeterRunAsset,
   processPendingAssets,
+  processMeterRunsPendingCron,
   correctMeterReading,
   listUtilityMeters,
   upsertUtilityMeter,

@@ -5,6 +5,41 @@
  * @param {object} row — Supabase tickets row
  * @returns {Record<string, unknown>}
  */
+function inferAssignmentSourceMachine(r) {
+  const raw = String(r.assignment_source || "").trim().toUpperCase();
+  if (raw) return raw;
+  const by = String(r.assigned_by || "").trim();
+  if (by.toUpperCase().startsWith("POLICY:")) return "POLICY";
+  if (by.toUpperCase() === "PM_PORTAL") return "PM_OVERRIDE";
+  if (String(r.assigned_id || "").trim() || String(r.assigned_name || "").trim()) return "POLICY";
+  return "";
+}
+
+function inferAssignmentSourceLabel(r) {
+  const machine = inferAssignmentSourceMachine(r);
+  const pretty = {
+    POLICY: "Policy",
+    PM_OVERRIDE: "PM override",
+    STAFF_REASSIGN: "Staff reassignment",
+    SYSTEM_ESCALATION: "System escalation",
+    VENDOR: "Vendor",
+  };
+  if (machine && pretty[machine]) return pretty[machine];
+  if (machine) {
+    return machine
+      .toLowerCase()
+      .split("_")
+      .filter(Boolean)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ");
+  }
+  const by = String(r.assigned_by || "").trim();
+  if (by.toUpperCase().startsWith("POLICY:")) return "Policy";
+  if (by.toUpperCase() === "PM_PORTAL") return "PM override";
+  if (by) return by.length > 48 ? by.slice(0, 48) + "…" : by;
+  return "";
+}
+
 function mapTicketRowToRemoteShape(row) {
   const r = row || {};
   const created = r.created_at ? new Date(r.created_at).toISOString() : "";
@@ -19,6 +54,11 @@ function mapTicketRowToRemoteShape(row) {
     String(r.assign_to || "").trim() ||
     "";
 
+  const assignmentUpdatedRaw = r.assignment_updated_at || r.assigned_at || null;
+  const assignmentUpdatedAt = assignmentUpdatedRaw
+    ? new Date(assignmentUpdatedRaw).toISOString()
+    : "";
+
   const attachmentsRaw = String(r.attachments || "").trim();
   const attachmentsList = attachmentsRaw
     ? attachmentsRaw.split(/[\n|]+/).map((s) => s.trim()).filter(Boolean)
@@ -31,6 +71,7 @@ function mapTicketRowToRemoteShape(row) {
 
   return {
     ticketId: String(r.ticket_id || "").trim(),
+    ticketRowId: String(r.ticket_row_id || r.id || "").trim(),
     property: prop,
     unit: String(r.unit_label || "").trim(),
     status: String(r.status || "").trim(),
@@ -43,6 +84,14 @@ function mapTicketRowToRemoteShape(row) {
     serviceNotes: String(r.service_notes || "").trim(),
     preferredWindow: String(r.preferred_window || "").trim(),
     assignee,
+    propertyCode: String(r.property_code || "").trim(),
+    assignedStaffId: String(r.assigned_id || "").trim(),
+    assignmentTargetType: String(r.assigned_type || "").trim(),
+    assignmentSource: inferAssignmentSourceMachine(r),
+    assignmentSourceLabel: inferAssignmentSourceLabel(r),
+    assignmentNote: String(r.assignment_note || "").trim(),
+    assignmentUpdatedAt,
+    assignmentUpdatedBy: String(r.assignment_updated_by || "").trim(),
     createdAt: created,
     closedAt: closed,
     tenant: {

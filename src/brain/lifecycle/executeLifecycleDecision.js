@@ -14,6 +14,7 @@ const { dispatchLifecycleOutbound } = require("../../outgate/dispatchLifecycleOu
 const {
   dispatchStaffLifecycleReminder,
 } = require("./staffLifecycleOutbound");
+const { mergeTicketUpdateRespectingPmOverride } = require("../../dal/ticketAssignmentGuard");
 
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} sb
@@ -216,13 +217,21 @@ async function executeLifecycleDecision(sb, decision, facts, signal, o) {
       return false;
     }
 
+    const { data: ticketLockRow } = await sb
+      .from("tickets")
+      .select("assignment_source")
+      .eq("ticket_key", ticketKey)
+      .maybeSingle();
+
+    const scheduleStatusPatch = mergeTicketUpdateRespectingPmOverride(ticketLockRow || {}, {
+      status: "Scheduled",
+      updated_at: now,
+      last_activity_at: now,
+    });
+
     await sb
       .from("tickets")
-      .update({
-        status: "Scheduled",
-        updated_at: now,
-        last_activity_at: now,
-      })
+      .update(scheduleStatusPatch)
       .eq("ticket_key", ticketKey);
 
     await appendEventLog({

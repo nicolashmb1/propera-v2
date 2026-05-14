@@ -139,19 +139,42 @@ function registerMeterRunRoutes(app) {
       if (lim != null && Number.isFinite(Number(lim))) {
         limit = Math.max(1, Math.min(100, Math.floor(Number(lim))));
       }
+      /** When false, skip `getMeterRunDetail` for lighter multi-step processing from the portal. Default true for older clients. */
+      const includeDetail = body.includeDetail !== false;
       const out = await processPendingAssets(req.params.id, { limit });
       if (!out.ok) {
         return res.status(400).json({ ok: false, error: out.error || "process_failed" });
       }
-      const detail = await getMeterRunDetail(req.params.id);
       const failures = Array.isArray(out.results)
         ? out.results.filter((r) => r && r.ok === false && r.error)
         : [];
       const process_errors = failures.map((r) => String(r.error)).filter(Boolean);
+      /** Omit when unknown so clients do not treat `0` as authoritative (would abort multi-step process early). */
+      const remainingKnown =
+        typeof out.remaining === "number" && Number.isFinite(out.remaining) ? out.remaining : undefined;
+      const assetResults = Array.isArray(out.results)
+        ? out.results.map((r) => ({
+            assetId: String((r && r.assetId) || ""),
+            ok: Boolean(r && r.ok),
+            ...(r && r.error ? { error: String(r.error) } : {}),
+            ...(r && r.duplicate ? { duplicate: true } : {}),
+          }))
+        : [];
+      if (includeDetail) {
+        const detail = await getMeterRunDetail(req.params.id);
+        return res.status(200).json({
+          ok: true,
+          processed: out.processed,
+          ...(remainingKnown !== undefined ? { remaining: remainingKnown } : {}),
+          detail,
+          ...(process_errors.length ? { process_errors } : {}),
+        });
+      }
       return res.status(200).json({
         ok: true,
         processed: out.processed,
-        detail,
+        ...(remainingKnown !== undefined ? { remaining: remainingKnown } : {}),
+        assetResults,
         ...(process_errors.length ? { process_errors } : {}),
       });
     } catch (err) {

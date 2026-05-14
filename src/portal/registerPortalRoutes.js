@@ -38,7 +38,16 @@ const {
 } = require("../dal/turnovers");
 const { getSupabase } = require("../db/supabase");
 const { verifyPortalRequest } = require("./portalAuth");
-const { turnoverEngineEnabled } = require("../config/env");
+const { turnoverEngineEnabled, financeTicketCostsEnabled } = require("../config/env");
+const {
+  listTicketCostEntriesForPortal,
+  createTicketCostEntryForPortal,
+  updateTicketCostEntryForPortal,
+} = require("../dal/ticketCostEntries");
+const {
+  applyPortalTicketAssignment,
+  listStaffAssignableToProperty,
+} = require("../dal/portalTicketAssignment");
 
 function registerPortalReadRoutes(app) {
   async function sendTickets(_req, res) {
@@ -91,6 +100,16 @@ function registerPortalReadRoutes(app) {
     return gate(async (req, res, next) => {
       if (!turnoverEngineEnabled()) {
         return res.status(404).json({ ok: false, error: "turnover_engine_disabled" });
+      }
+      return handler(req, res, next);
+    });
+  }
+
+  /** Ticket costs — `PROPERA_FINANCE_ENABLED=1` + `PROPERA_FINANCE_TICKET_COSTS_ENABLED=1`. */
+  function gateFinance(handler) {
+    return gate(async (req, res, next) => {
+      if (!financeTicketCostsEnabled()) {
+        return res.status(404).json({ ok: false, error: "finance_disabled" });
       }
       return handler(req, res, next);
     });
@@ -163,6 +182,133 @@ function registerPortalReadRoutes(app) {
   }));
 
   app.get("/api/portal/tickets", gate(sendTickets));
+
+  app.get(
+    "/api/portal/properties/:code/staff-for-assignment",
+    gate(async (req, res) => {
+      try {
+        const sb = getSupabase();
+        if (!sb) {
+          return res.status(503).json({ ok: false, error: "no_db" });
+        }
+        const out = await listStaffAssignableToProperty(sb, req.params.code);
+        if (!out.ok) {
+          const status = out.error === "invalid_property_code" ? 400 : 500;
+          return res.status(status).json({ ok: false, error: out.error || "list_failed" });
+        }
+        return res.status(200).json({ ok: true, staff: out.staff });
+      } catch (err) {
+        return res.status(500).json({
+          ok: false,
+          error: String(err && err.message ? err.message : err),
+        });
+      }
+    })
+  );
+
+  app.post("/api/portal/tickets/:ticketId/assignment", gate(async (req, res) => {
+    try {
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await applyPortalTicketAssignment({
+        ticketLookupHint: req.params.ticketId,
+        ticketKeyHint: body.ticket_key ?? body.ticketKey,
+        ticketRowIdHint: body.ticket_row_id ?? body.ticketRowId,
+        assignedStaffId:
+          Object.prototype.hasOwnProperty.call(body, "assigned_staff_id")
+            ? body.assigned_staff_id
+            : body.assignedStaffId,
+        assignmentNote: body.assignment_note ?? body.assignmentNote,
+        actorLabel: body.actor_label ?? body.actorLabel,
+        traceId: req.traceId,
+      });
+      if (!out.ok) {
+        const code =
+          out.status >= 400 && out.status < 600 ? out.status : 400;
+        return res.status(code).json({ ok: false, error: out.error || "assignment_failed" });
+      }
+      return res.status(200).json({
+        ok: true,
+        ticketId: out.ticketId,
+        ticketRowId: out.ticketRowId,
+        assignedStaffId: out.assignedStaffId,
+        assignedDisplayName: out.assignedDisplayName,
+        assignmentSource: out.assignmentSource,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.get(
+    "/api/portal/tickets/:ticketRowId/ticket-cost-entries",
+    gateFinance(async (req, res) => {
+      try {
+        const out = await listTicketCostEntriesForPortal(req.params.ticketRowId);
+        if (!out.ok) {
+          const code = out.error === "ticket_not_found" ? 404 : 500;
+          return res.status(code).json({ ok: false, error: out.error || "list_failed" });
+        }
+        return res.status(200).json({ ok: true, entries: out.entries });
+      } catch (err) {
+        return res.status(500).json({
+          ok: false,
+          error: String(err && err.message ? err.message : err),
+        });
+      }
+    })
+  );
+
+  app.post(
+    "/api/portal/tickets/:ticketRowId/ticket-cost-entries",
+    gateFinance(async (req, res) => {
+      try {
+        const out = await createTicketCostEntryForPortal(req.params.ticketRowId, req.body || {});
+        if (!out.ok) {
+          const code =
+            out.error === "ticket_not_found"
+              ? 404
+              : out.error === "imported_history_read_only"
+                ? 403
+                : 400;
+          return res.status(code).json({ ok: false, error: out.error || "create_failed" });
+        }
+        return res.status(201).json({ ok: true, entry: out.entry });
+      } catch (err) {
+        return res.status(500).json({
+          ok: false,
+          error: String(err && err.message ? err.message : err),
+        });
+      }
+    })
+  );
+
+  app.patch(
+    "/api/portal/ticket-cost-entries/:entryId",
+    gateFinance(async (req, res) => {
+      try {
+        const out = await updateTicketCostEntryForPortal(req.params.entryId, req.body || {});
+        if (!out.ok) {
+          const code =
+            out.error === "not_found" || out.error === "ticket_not_found"
+              ? 404
+              : out.error === "imported_history_read_only"
+                ? 403
+                : 400;
+          return res.status(code).json({ ok: false, error: out.error || "update_failed" });
+        }
+        return res.status(200).json({ ok: true, entry: out.entry });
+      } catch (err) {
+        return res.status(500).json({
+          ok: false,
+          error: String(err && err.message ? err.message : err),
+        });
+      }
+    })
+  );
+
   app.get("/api/portal/properties", gate(sendProperties));
 
   app.get(

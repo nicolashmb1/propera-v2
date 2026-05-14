@@ -67,6 +67,7 @@ Conversations **drift**: freeze lifts, scope shifts, priorities change, a port l
 | Test strategy / what to run for regression | **`docs/TESTING_STRATEGY.md`** (if testing expectations changed) |
 | Portal preventive / program expansion or building-profile contract | **`docs/PM_PROGRAM_ENGINE_V1.md`** (+ **`docs/BRAIN_PORT_MAP.md`** portal PM row if routes/files move) |
 | Ticket Activity timeline (trigger kinds, view contract, V2 event kinds, duplicate rule) | **`docs/TICKET_TIMELINE.md`**, **`supabase/migrations/`** (new migration if SQL contract changes), **`propera-app/src/lib/timelineMapping.ts`**, **`tests/ticketTimelineV1Kinds.test.js`** (or successor) |
+| PM assignment override phases, acceptance criteria, per-phase status | **`docs/PM_ASSIGNMENT_OVERRIDE.md`** — update `Status` column when a phase ships or acceptance criteria change |
 
 **Rule:** Stale docs are a bug. **Do not** end a meaningful direction change with only chat context updated.
 
@@ -85,6 +86,7 @@ Conversations **drift**: freeze lifts, scope shifts, priorities change, a port l
 | Porting rules + GAS source table | `docs/PORTING_FROM_GAS.md` |
 | Runnable code | `propera-v2/src/` |
 | Portal PM / preventive (program runs, expansion) | `docs/PM_PROGRAM_ENGINE_V1.md`; code: `src/dal/programRuns.js`, `src/pm/expandProgramLines.js`, `src/portal/registerPortalRoutes.js` |
+| PM assignment override (phases 1–5, what's done, what's next) | `docs/PM_ASSIGNMENT_OVERRIDE.md`; code: `src/dal/portalTicketAssignment.js`, `src/portal/registerPortalRoutes.js` |
 | Unit tests | `propera-v2/tests/` |
 | Supabase SQL | `propera-v2/supabase/migrations/` |
 | Portal ticket Activity / timeline V1+V2 contract | **`docs/TICKET_TIMELINE.md`**; SQL: `034`–`037` ticket timeline migrations; app: `propera-app/src/lib/timelineMapping.ts` |

@@ -123,6 +123,7 @@ async function listTicketsForPortal() {
     .from("tickets")
     .select(
       [
+        "id",
         "ticket_id",
         "tenant_phone_e164",
         "property_code",
@@ -141,6 +142,14 @@ async function listTicketsForPortal() {
         "preferred_window",
         "assign_to",
         "assigned_name",
+        "assigned_type",
+        "assigned_id",
+        "assigned_at",
+        "assigned_by",
+        "assignment_source",
+        "assignment_note",
+        "assignment_updated_at",
+        "assignment_updated_by",
         "attachments",
         "is_imported_history",
       ].join(",")
@@ -179,6 +188,9 @@ function mapPortalPropertyViewRow(p) {
     lastActivity: String(p.last_activity || "—"),
     address: String(p.address || "").trim(),
     programExpansionProfile: programExpansionProfileForApi(p.program_expansion_profile),
+    maintenanceSpendCentsMonth: Number(p.maintenance_spend_cents_month) || 0,
+    maintenanceTenantChargeCentsMonth: Number(p.maintenance_tenant_charge_cents_month) || 0,
+    maintenanceCostEntryCountMonth: Number(p.maintenance_cost_entry_count_month) || 0,
   };
 }
 
@@ -226,6 +238,9 @@ async function listPropertiesForPortal() {
         lastActivity: "—",
         address: String(p.address || "").trim(),
         programExpansionProfile: programExpansionProfileForApi(p.program_expansion_profile),
+        maintenanceSpendCentsMonth: 0,
+        maintenanceTenantChargeCentsMonth: 0,
+        maintenanceCostEntryCountMonth: 0,
       };
     });
   }
@@ -257,6 +272,9 @@ async function listPropertiesForPortal() {
       lastActivity: "—",
       address: String(p.address || "").trim(),
       programExpansionProfile: programExpansionProfileForApi(p.program_expansion_profile),
+      maintenanceSpendCentsMonth: 0,
+      maintenanceTenantChargeCentsMonth: 0,
+      maintenanceCostEntryCountMonth: 0,
     };
   });
 }
