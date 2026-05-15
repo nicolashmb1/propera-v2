@@ -66,6 +66,7 @@ function parseWithStageFallback(raw, stageDay, opts) {
  * @param {string} o.preferredWindow — raw tenant text
  * @param {string} [o.traceId] — request trace for structured logs (`SCHEDULE_*` events)
  * @param {number} [o.traceStartMs] — HTTP entry time for `elapsed_ms` on log lines
+ * @param {Record<string, string>} [o.ticketChangedBy] — `changed_by_actor_*` for auditable schedule writes
  * @returns {Promise<{
  *   ok: boolean,
  *   error?: string,
@@ -245,14 +246,17 @@ async function applyPreferredWindowByTicketKey(o) {
   }
 
   const now = new Date().toISOString();
-  const { error: tErr } = await sb
-    .from("tickets")
-    .update({
-      preferred_window: preferred_window,
-      scheduled_end_at: scheduled_end_at,
-      updated_at: now,
-    })
-    .eq("ticket_key", key);
+  const { mergeChangedByIntoTicketPatch } = require("./ticketAuditPatch");
+  const audit =
+    o.ticketChangedBy && typeof o.ticketChangedBy === "object" ? o.ticketChangedBy : null;
+  const baseTicketPatch = {
+    preferred_window: preferred_window,
+    scheduled_end_at: scheduled_end_at,
+    updated_at: now,
+  };
+  const ticketPatch = audit ? mergeChangedByIntoTicketPatch(baseTicketPatch, audit) : baseTicketPatch;
+
+  const { error: tErr } = await sb.from("tickets").update(ticketPatch).eq("ticket_key", key);
 
   if (tErr) return { ok: false, error: tErr.message };
 

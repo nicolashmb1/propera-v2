@@ -405,6 +405,9 @@ app.post("/webhooks/portal", async (req, res) => {
   });
   try {
     const routerParameter = buildRouterParameterFromPortal(body);
+    const auth = String(req.get("authorization") || "").trim();
+    const m = /^Bearer\s+(\S+)/i.exec(auth);
+    const portalUserAccessToken = m ? m[1] : "";
     const result = await runInboundPipeline({
       traceId: req.traceId,
       traceStartMs: req.traceStartMs,
@@ -412,6 +415,7 @@ app.post("/webhooks/portal", async (req, res) => {
       transportChannel: "portal",
       telegramSignal: null,
       logKind: "portal_webhook",
+      portalUserAccessToken,
     });
     const logicalOk = result.json && result.json.ok !== false;
     emit({

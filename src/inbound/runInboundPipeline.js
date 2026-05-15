@@ -24,6 +24,8 @@ const {
 const { setSmsOptOut, isSmsOptedOut } = require("../dal/smsOptOut");
 const { handleStaffLifecycleCommand } = require("../brain/staff/handleStaffLifecycleCommand");
 const { tryPortalPmTicketMutation } = require("../dal/portalTicketMutations");
+const { portalPostImpliesPmTicketSave } = require("../contracts/buildRouterParameterFromPortal");
+const { resolvePortalTicketMutationActor } = require("../portal/resolvePortalStaffActor");
 const { handleInboundCore } = require("../brain/core/handleInboundCore");
 const {
   buildOutboundIntent,
@@ -85,6 +87,7 @@ function resolveOutboundIntentType(o) {
  * @param {string} o.traceId
  * @param {number} [o.traceStartMs]
  * @param {Record<string, string>} o.routerParameter
+ * @param {string} [o.portalUserAccessToken] — Supabase user JWT (Bearer) for auditable portal mutations
  * @param {'sms' | 'whatsapp' | 'telegram' | 'portal'} o.transportChannel
  * @param {object} [o.telegramSignal] — required for Telegram outbound + chat link
  * @param {string} [o.logKind] — structured log kind prefix
@@ -215,10 +218,35 @@ async function runInboundPipeline(o) {
   });
 
   let staffRun = null;
-  // Portal webhook is token-gated in `index.js`; PM saves must persist even when the
-  // actor phone is not linked in `staff` (common for portal-only PM logins).
-  // Same `Update <HUMAN_ID> …` parser for **staff** on Telegram / SMS / WhatsApp so
-  // ticket fields (e.g. unit) can be corrected after `#` capture finalizes (draft row is gone).
+  /** @type {string | null} */
+  let portalActorGateError = null;
+  if (transportChannel === "portal" && isDbConfigured()) {
+    const sbAct = getSupabase();
+    const portalAct = String(routerParameter._portalAction || "").trim().toLowerCase();
+    let needsPortalActor = portalAct === "create_ticket";
+    if (!needsPortalActor) {
+      try {
+        const nested = JSON.parse(String(routerParameter._portalPayloadJson || "{}"));
+        needsPortalActor = portalPostImpliesPmTicketSave(nested);
+      } catch (_) {
+        needsPortalActor = false;
+      }
+    }
+    if (needsPortalActor && sbAct) {
+      const rAct = await resolvePortalTicketMutationActor(sbAct, {
+        accessToken: o.portalUserAccessToken,
+        staffContext,
+        transportChannel,
+      });
+      if (!rAct.ok) {
+        portalActorGateError = rAct.error || "portal_actor_unresolved";
+      } else if (rAct.changedBy) {
+        routerParameter._portalMutationActorJson = JSON.stringify(rAct.changedBy);
+      }
+    }
+  }
+
+  // Portal PM ticket saves + same parser for staff on Telegram / SMS / WhatsApp.
   if (isDbConfigured()) {
     const staffPmChannel =
       transportChannel === "portal" ||
@@ -228,18 +256,33 @@ async function runInboundPipeline(o) {
         staffContext &&
         staffContext.isStaff);
     if (staffPmChannel) {
-      staffRun = await tryPortalPmTicketMutation({
-        traceId,
-        traceStartMs,
-        routerParameter,
-        staffAmendContext:
-          staffContext && staffContext.isStaff && staffContext.staff
-            ? {
-                staffId: String(staffContext.staff.staff_id || "").trim(),
-                staffActorKey: String(staffContext.staffActorKey || "").trim(),
-              }
-            : null,
-      });
+      if (portalActorGateError) {
+        staffRun = {
+          ok: false,
+          brain: "portal_actor_gate",
+          replyText:
+            "Sign-in required: " +
+            (portalActorGateError === "missing_portal_access_token"
+              ? "missing portal session token (Authorization: Bearer)."
+              : portalActorGateError),
+          resolution: { error: portalActorGateError },
+        };
+      } else {
+        staffRun = await tryPortalPmTicketMutation({
+          traceId,
+          traceStartMs,
+          routerParameter,
+          transportChannel,
+          portalUserAccessToken: o.portalUserAccessToken,
+          staffAmendContext:
+            staffContext && staffContext.isStaff && staffContext.staff
+              ? {
+                  staffId: String(staffContext.staff.staff_id || "").trim(),
+                  staffActorKey: String(staffContext.staffActorKey || "").trim(),
+                }
+              : null,
+        });
+      }
     }
   }
   if (!staffRun && shouldInvokeStaffLifecycle(precursor, staffContext)) {

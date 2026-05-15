@@ -247,5 +247,5 @@ These items **do not** change GAS behavioral parity; they help operators and age
 | **propera-app cockpit** | **SHIPPED** | `TicketDetailPanel`: compact assignment display + edit icon → modal (reassign select, reason textarea, Save/Cancel). Current assignee excluded from dropdown. `portal_tickets_v1` view feeds `ticket_row_id` + assignment fields to app. |
 | **Audit** | **SHIPPED** | Every change appends `PORTAL_PM_TICKET_ASSIGNMENT` to `event_log` with actor, staff id, ticket key, trace id. |
 | **Phase 3 — automation vs PM lock** | **SHIPPED** | See **`docs/PM_ASSIGNMENT_OVERRIDE.md`** Phase 3 + `tests/ticketAssignmentGuard.test.js`. Staff reassignment policy documented for future work. |
-| **Assignment timeline event** | **NOT STARTED** | No `ticket_timeline_events` row appended on PM reassign. Would surface in Activity tab as `assigned` kind. |
+| **Assignment timeline event** | **SHIPPED** | PM reassign updates assignee columns → **`tickets_log_timeline`** emits **`assigned`** with **`actor_label`** / **`actor_*`** from resolved portal staff (not `PM_PORTAL` as the operator-facing label). |
 | **Phases 4–5** | **NOT STARTED** | Rich assignment history UI; vendor/team/PM targets beyond staff. |

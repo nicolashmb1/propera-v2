@@ -5,6 +5,7 @@
  */
 
 const { appendEventLog } = require("../../dal/appendEventLog");
+const { tenantSmsActor } = require("../../dal/ticketAuditPatch");
 const { emitTimed } = require("../../logging/structuredLog");
 const {
   getConversationCtxAttach,
@@ -354,6 +355,7 @@ async function handleScheduleReplyIfExpected(o) {
         : "",
       traceId,
       traceStartMs: traceStartMs != null ? traceStartMs : undefined,
+      ticketChangedBy: tenantSmsActor(),
     });
     await clearIntakeLike();
     await clearPendingExpected(canonicalBrainActorKey);

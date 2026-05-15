@@ -7,6 +7,26 @@
 
 ---
 
+## 2026-05-15 — Ticket mutation audit + Activity actor (P0)
+
+### Done (this session)
+
+| Area | Change |
+|------|--------|
+| **Migration 045** | `045_ticket_mutation_audit.sql` — `tickets.changed_by_actor_type|id|label|source`; `ticket_timeline_events.actor_type|id|source`; `tickets_log_timeline()` reads **`changed_by_*`** (legacy fallbacks); status headline **Status changed to …**; **`portal_tickets_v1.timeline_json`** exposes structured actor fields; index on **`portal_auth_allowlist(auth_user_id)`**. |
+| **Portal actor resolution** | `src/portal/resolvePortalStaffActor.js` — JWT → allowlist → staff; `PROPERA_PORTAL_ACTOR_JWT_REQUIRED` in `.env.example`. |
+| **Inbound / webhook** | Bearer token from `POST /webhooks/portal` into pipeline; portal PM ticket mutations gated before `tryPortalPmTicketMutation`; `_portalMutationActorJson` for DALs. |
+| **DALs** | `portalTicketMutations`, `portalTicketAssignment`, `finalizeMaintenance`, `ticketPreferredWindow`, `afterTenantScheduleApplied`, lifecycle paths, `ticketCostEntries`, `turnovers` (create + **link-ticket** ticket patch) merge **`changed_by_*`**. |
+| **REST** | `registerPortalRoutes` — turnover **create-ticket** + **link-ticket** require Bearer + resolved actor. |
+| **propera-app** | Session bearer on webhook mutations (`pmV2Proxy`, `pmRouteHelpers`); turnover **link-ticket** route forwards **`Authorization`**. |
+| **UI / docs** | `timelineMapping.ts` maps legacy **`PM_PORTAL`** display; **`TICKET_TIMELINE.md`** §1–3 + migration table; **`PARITY_LEDGER.md`** assignment timeline row set to **SHIPPED**. |
+
+### Notes
+
+- **Turnover link-ticket** now mutates `tickets` with the same actor contract as other portal ticket writes (was a gap).
+
+---
+
 ## 2026-05-14 — PM Assignment Override V1 (portal cockpit)
 
 ### Done (this session)
@@ -31,13 +51,13 @@
 - **V2 is authoritative** — app sends a PM signal; V2 validates, writes, audits. No direct Supabase writes from app.
 - **PM lock vs automation** — `ticketAssignmentGuard` ensures `tickets.update` from portal mutations, lifecycle schedule paths, WI-done sync, and turnover links cannot overwrite assignment columns while `assignment_source = PM_OVERRIDE`. PM portal `applyPortalTicketAssignment` remains the authoritative assignment writer (no stripper).
 - **Audit trail** — every assignment change appended to `event_log` with actor, staff id, ticket key, trace id.
-- **Phases 4–5 not started** — Activity timeline row on PM assign (Phase 4); vendor/team targets (Phase 5).
+- **Phases 4–5** — Phase 4 (Activity): DB trigger **`assigned`** rows on assignee column changes with resolved **`changed_by_*`** (see 2026-05-15 handoff). Phase 5 (vendor/team targets) not started.
 
 ### Known gaps / next session candidates
 
 | Item | Notes |
 |------|-------|
-| **Assignment timeline event** | `applyPortalTicketAssignment` does not yet append a `ticket_timeline_events` row (kind `assigned`, actor PM name). Would surface in Activity tab. |
+| **Rich assignment history UI** | Single **`assigned`** timeline row per assignee change; no separate “history list” UI beyond Activity stream. |
 | **Staff `staff_id` null guard** | If a `staff` row has `staff_id = null`, `listStaffAssignableToProperty` filters it out via `.filter(r => r.staffId)` — correct but silent. |
 | **`HANDOFF_LOG` + `PARITY_LEDGER` update** | Done in this entry. |
 

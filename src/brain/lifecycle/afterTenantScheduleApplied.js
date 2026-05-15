@@ -6,6 +6,7 @@ const { handleLifecycleSignal } = require("./handleLifecycleSignal");
 const { lifecycleEnabledForProperty } = require("../../dal/lifecyclePolicyDal");
 const { appendEventLog } = require("../../dal/appendEventLog");
 const { mergeTicketUpdateRespectingPmOverride } = require("../../dal/ticketAssignmentGuard");
+const { mergeChangedByIntoTicketPatch, tenantSmsActor } = require("../../dal/ticketAuditPatch");
 
 /**
  * @param {object} o
@@ -15,6 +16,7 @@ const { mergeTicketUpdateRespectingPmOverride } = require("../../dal/ticketAssig
  * @param {string} [o.propertyCodeHint] — draft property if WI row lacks `property_id`
  * @param {string} [o.traceId]
  * @param {number} [o.traceStartMs]
+ * @param {Record<string, string>} [o.ticketChangedBy] — `changed_by_actor_*` for ticket status → Scheduled
  */
 async function afterTenantScheduleApplied(o) {
   const sb = o.sb;
@@ -69,11 +71,18 @@ async function afterTenantScheduleApplied(o) {
     .eq("ticket_key", ticketKey)
     .maybeSingle();
 
-  const tenantScheduleTicketPatch = mergeTicketUpdateRespectingPmOverride(ticketLockRow || {}, {
-    status: "Scheduled",
-    updated_at: now,
-    last_activity_at: now,
-  });
+  const auditRaw = o.ticketChangedBy && typeof o.ticketChangedBy === "object" ? o.ticketChangedBy : null;
+  const audit =
+    auditRaw && String(auditRaw.changed_by_actor_label || "").trim() ? auditRaw : tenantSmsActor();
+
+  const tenantScheduleTicketPatch = mergeChangedByIntoTicketPatch(
+    mergeTicketUpdateRespectingPmOverride(ticketLockRow || {}, {
+      status: "Scheduled",
+      updated_at: now,
+      last_activity_at: now,
+    }),
+    audit
+  );
 
   await sb
     .from("tickets")

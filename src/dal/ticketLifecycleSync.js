@@ -3,6 +3,7 @@
  */
 const { getSupabase } = require("../db/supabase");
 const { mergeTicketUpdateRespectingPmOverride } = require("./ticketAssignmentGuard");
+const { mergeChangedByIntoTicketPatch, lifecycleTimerActor } = require("./ticketAuditPatch");
 
 /**
  * @param {string} ticketKey — uuid
@@ -20,12 +21,15 @@ async function syncTicketRowWhenWorkItemDone(ticketKey) {
     .eq("ticket_key", key)
     .maybeSingle();
 
-  const patch = mergeTicketUpdateRespectingPmOverride(ticketLockRow || {}, {
-    status: "Completed",
-    closed_at: now,
-    updated_at: now,
-    last_activity_at: now,
-  });
+  const patch = mergeChangedByIntoTicketPatch(
+    mergeTicketUpdateRespectingPmOverride(ticketLockRow || {}, {
+      status: "Completed",
+      closed_at: now,
+      updated_at: now,
+      last_activity_at: now,
+    }),
+    lifecycleTimerActor()
+  );
 
   const { error } = await sb.from("tickets").update(patch).eq("ticket_key", key);
 

@@ -197,4 +197,4 @@ function buildRouterParameterFromPortal(payload) {
   };
 }
 
-module.exports = { buildRouterParameterFromPortal };
+module.exports = { buildRouterParameterFromPortal, portalPostImpliesPmTicketSave };

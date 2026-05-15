@@ -5,6 +5,7 @@ const { getSupabase } = require("../db/supabase");
 const { appendEventLog } = require("./appendEventLog");
 const { finalizeMaintenanceDraft } = require("./finalizeMaintenance");
 const { mergeTicketUpdateRespectingPmOverride } = require("./ticketAssignmentGuard");
+const { mergeChangedByIntoTicketPatch } = require("./ticketAuditPatch");
 
 const ACTIVE_STATUSES = ["OPEN", "IN_PROGRESS"];
 
@@ -460,6 +461,7 @@ async function reorderTurnoverItems(turnoverId, orderedIds, o) {
  * @param {string} turnoverId
  * @param {string} itemId
  * @param {string} ticketLookup — human ticket id or row uuid
+ * @param {{ traceId?: string, portalTicketAudit?: Record<string, string> }} [o]
  */
 async function linkTicketToTurnoverItem(turnoverId, itemId, ticketLookup, o) {
   const sb = getSupabase();
@@ -497,10 +499,21 @@ async function linkTicketToTurnoverItem(turnoverId, itemId, ticketLookup, o) {
     })
     .eq("id", iid);
 
-  const turnoverLinkPatch = mergeTicketUpdateRespectingPmOverride(ticket, {
-    turnover_id: tid,
-    turnover_item_id: iid,
-  });
+  const audit =
+    o && o.portalTicketAudit && typeof o.portalTicketAudit === "object"
+      ? o.portalTicketAudit
+      : null;
+  if (!audit || !String(audit.changed_by_actor_label || "").trim()) {
+    return { ok: false, error: "missing_portal_actor" };
+  }
+
+  const turnoverLinkPatch = mergeChangedByIntoTicketPatch(
+    mergeTicketUpdateRespectingPmOverride(ticket, {
+      turnover_id: tid,
+      turnover_item_id: iid,
+    }),
+    audit
+  );
 
   await sb
     .from("tickets")
@@ -567,6 +580,9 @@ async function createTicketFromTurnoverItem(o) {
     }),
     _mediaJson: "",
   };
+  if (o.portalTicketAudit && typeof o.portalTicketAudit === "object") {
+    routerParameter._portalMutationActorJson = JSON.stringify(o.portalTicketAudit);
+  }
 
   const fin = await finalizeMaintenanceDraft({
     traceId: String(o.traceId || "turnover_ticket"),
@@ -604,10 +620,13 @@ async function createTicketFromTurnoverItem(o) {
     .eq("ticket_key", fin.ticketKey)
     .maybeSingle();
 
-  const turnoverOnTicketPatch = mergeTicketUpdateRespectingPmOverride(newTicketRow || {}, {
-    turnover_id: turnoverId,
-    turnover_item_id: itemId,
-  });
+  const turnoverOnTicketPatch = mergeChangedByIntoTicketPatch(
+    mergeTicketUpdateRespectingPmOverride(newTicketRow || {}, {
+      turnover_id: turnoverId,
+      turnover_item_id: itemId,
+    }),
+    o.portalTicketAudit && typeof o.portalTicketAudit === "object" ? o.portalTicketAudit : {}
+  );
 
   await sb
     .from("tickets")

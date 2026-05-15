@@ -6,6 +6,8 @@
 const { getSupabase } = require("../db/supabase");
 const { appendEventLog } = require("./appendEventLog");
 const { mergeTicketUpdateRespectingPmOverride, ticketRowHasPmAssignmentOverride, TICKET_ASSIGNMENT_POLICY_KEYS } = require("./ticketAssignmentGuard");
+const { mergeChangedByIntoTicketPatch } = require("./ticketAuditPatch");
+const { buildChangedByFromStaffIdText } = require("../portal/resolvePortalStaffActor");
 const {
   cancelPendingLifecycleTimersForTicketKey,
 } = require("./lifecycleTimers");
@@ -511,6 +513,8 @@ async function updateWorkItemsByTicketKey(sb, ticketKey, wiPatch) {
  * @param {string} o.traceId
  * @param {number} [o.traceStartMs] — for `applyPreferredWindowByTicketKey` / structured log timing
  * @param {Record<string, string | undefined>} o.routerParameter
+ * @param {'portal'|'telegram'|'sms'|'whatsapp'} [o.transportChannel]
+ * @param {string} [o.portalUserAccessToken] — Supabase JWT when resolving actor outside `_portalMutationActorJson`
  * @returns {Promise<object | null>} staffRun-shaped object, or null to fall through
  */
 async function tryPortalPmTicketMutation(o) {
@@ -521,6 +525,7 @@ async function tryPortalPmTicketMutation(o) {
       : undefined;
   const routerParameter = (o && o.routerParameter) || {};
   const sb = getSupabase();
+  const transportChannel = String(o.transportChannel || "portal").toLowerCase();
 
   let parsed = parsePortalPmTicketRequest(routerParameter);
   if (
@@ -572,6 +577,33 @@ async function tryPortalPmTicketMutation(o) {
   const now = new Date().toISOString();
   const ticketKey = String(ticket.ticket_key || "").trim();
 
+  let effChangedBy = null;
+  const pj = String(routerParameter._portalMutationActorJson || "").trim();
+  if (pj) {
+    try {
+      const j = JSON.parse(pj);
+      if (j && typeof j === "object" && String(j.changed_by_actor_label || "").trim()) {
+        effChangedBy = j;
+      }
+    } catch (_) {}
+  }
+  if (!effChangedBy && transportChannel !== "portal" && o.staffAmendContext && String(o.staffAmendContext.staffId || "").trim()) {
+    const br = await buildChangedByFromStaffIdText(
+      sb,
+      String(o.staffAmendContext.staffId || "").trim(),
+      transportChannel || "telegram"
+    );
+    if (br.ok) effChangedBy = br.changedBy;
+  }
+  if (!effChangedBy) {
+    return {
+      ok: false,
+      brain: "portal_ticket_mutation",
+      replyText: "Sign-in required: could not resolve actor for this ticket change.",
+      resolution: { error: "portal_actor_unresolved" },
+    };
+  }
+
   if (ticket.is_imported_history === true) {
     await appendEventLog({
       traceId,
@@ -592,12 +624,15 @@ async function tryPortalPmTicketMutation(o) {
   }
 
   if (parsed.kind === "soft_delete") {
-    const deletePatch = mergeTicketUpdateRespectingPmOverride(ticket, {
-      status: "Deleted",
-      closed_at: now,
-      updated_at: now,
-      last_activity_at: now,
-    });
+    const deletePatch = mergeChangedByIntoTicketPatch(
+      mergeTicketUpdateRespectingPmOverride(ticket, {
+        status: "Deleted",
+        closed_at: now,
+        updated_at: now,
+        last_activity_at: now,
+      }),
+      effChangedBy
+    );
     const { error: tErr } = await sb
       .from("tickets")
       .update(deletePatch)
@@ -641,7 +676,10 @@ async function tryPortalPmTicketMutation(o) {
   }
 
   /** @type {Record<string, unknown>} */
-  const ticketPatch = { updated_at: now, last_activity_at: now };
+  const ticketPatch = mergeChangedByIntoTicketPatch(
+    { updated_at: now, last_activity_at: now },
+    effChangedBy
+  );
   const f = parsed.fields || {};
   let canonicalStatus = "";
 
@@ -830,6 +868,7 @@ async function tryPortalPmTicketMutation(o) {
       preferredWindow: scheduleCommitRaw,
       traceId,
       traceStartMs,
+      ticketChangedBy: effChangedBy,
     });
 
     if (!schedRes.ok) {
@@ -859,6 +898,7 @@ async function tryPortalPmTicketMutation(o) {
       propertyCodeHint: propHint,
       traceId,
       traceStartMs: traceStartMs != null ? traceStartMs : undefined,
+      ticketChangedBy: effChangedBy,
     });
 
     scheduleAppliedLabel =

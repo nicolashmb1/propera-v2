@@ -88,13 +88,17 @@ async function resolveTenantRosterId(sb, ticket) {
 }
 
 async function insertTimeline(sb, ticketId, kind, headline, detail, actor) {
+  const label = normStr(actor).slice(0, 200) || "Portal";
   const { error } = await sb.from("ticket_timeline_events").insert({
     ticket_id: ticketId,
     occurred_at: new Date().toISOString(),
     event_kind: kind,
     headline: normStr(headline).slice(0, 500) || kind,
     detail: normStr(detail).slice(0, 2000),
-    actor_label: normStr(actor).slice(0, 200) || "Portal",
+    actor_label: label,
+    actor_type: "STAFF",
+    actor_id: "",
+    actor_source: "propera_app",
   });
   if (error) throw new Error(error.message);
 }

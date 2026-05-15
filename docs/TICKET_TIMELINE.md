@@ -9,7 +9,7 @@
 ## 1. What operators see
 
 - **Source of truth for portal reads:** `public.portal_tickets_v1.timeline_json` — JSON array of objects built from `public.ticket_timeline_events`, ordered by time.
-- **App mapping:** `propera-app/src/lib/timelineMapping.ts` maps each element to UI rows (`action`, `by`, `time`, `color`). **Do not** invent a second timeline shape in the portal without updating this doc and the view contract.
+- **App mapping:** `propera-app/src/lib/timelineMapping.ts` maps each element to UI rows (`action`, `by`, `time`, `color`, optional `actor_type` / `actor_source`). **Do not** invent a second timeline shape in the portal without updating this doc and the view contract.
 
 ---
 
@@ -17,14 +17,17 @@
 
 | Object | Role |
 |--------|------|
-| `public.ticket_timeline_events` | Append-only rows: `ticket_id`, `occurred_at`, `event_kind`, `headline`, `detail`, `actor_label`. |
-| Trigger `public.tickets_log_timeline()` on `public.tickets` | **Timeline V1** — emits events when ticket **columns** change in tracked ways (see §4). |
-| `public.portal_tickets_v1` | Exposes tickets plus **`timeline_json`** (never null — coalesce to `[]`). |
+| `public.tickets` | On each mutation path, **`changed_by_actor_type`**, **`changed_by_actor_id`**, **`changed_by_actor_label`**, **`changed_by_source`** (see migration `045_ticket_mutation_audit.sql`) — server-resolved staff or explicit **SYSTEM** channel; **not** client-authoritative display strings. |
+| `public.ticket_timeline_events` | Append-only rows: `ticket_id`, `occurred_at`, `event_kind`, `headline`, `detail`, `actor_label`, plus **`actor_type`**, **`actor_id`**, **`actor_source`** (snapshot at insert time). |
+| Trigger `public.tickets_log_timeline()` on `public.tickets` | **Timeline V1** — emits events when ticket **columns** change in tracked ways (see §4); copies actor from **`NEW.changed_by_*`** (with legacy fallbacks where older rows lack those columns). |
+| `public.portal_tickets_v1` | Exposes tickets plus **`timeline_json`** (never null — coalesce to `[]`); each element includes **`by`** (label) and optional **`actor_type`**, **`actor_id`**, **`actor_source`**. |
 
 **View `action` field (contract):**  
 `headline` alone if `detail` is empty; otherwise `headline || ': ' || detail`. Terminal completion rows use **`headline = 'Ticket ' || status`** and **`detail = ''`** so the UI shows e.g. **Ticket Completed**, not a concatenated generic phrase plus status.
 
 **Actor labels:** Raw `POLICY:*` codes from `tickets.assigned_by` are **not** shown to operators — stored/displayed as **`Policy`** (trigger + backfill + app sanitize for stale JSON).
+
+**Portal PM mutations:** propera-app forwards the signed-in user’s Supabase access token as **`Authorization: Bearer`** on webhook and REST ticket writes; V2 resolves **`auth_user_id`** via **`portal_auth_allowlist`** → **`staff`** and sets **`changed_by_*`** before the ticket row update. **`PROPERA_PORTAL_ACTOR_JWT_REQUIRED`** (see `propera-v2/.env.example`) tightens dev vs prod behavior for the gate (`resolvePortalStaffActor.js`).
 
 ---
 
@@ -42,6 +45,7 @@
 | `035_ticket_timeline_kind_normalize.sql` | Kind string normalization if legacy values exist. |
 | `036_ticket_timeline_activity_ux.sql` | Assignment noise fixes, `created` detail empty, backfills. |
 | `037_ticket_timeline_display_cleanup.sql` | Policy masking, `resolved_closed` headline/detail shape, backfill existing rows. |
+| `045_ticket_mutation_audit.sql` | **`tickets.changed_by_*`**; **`ticket_timeline_events.actor_type/id/source`**; trigger prefers **`changed_by_*`**; non-terminal status headline **`Status changed to …`**; **`portal_tickets_v1.timeline_json`** exposes structured actor fields; index on **`portal_auth_allowlist(auth_user_id)`**. |
 
 **Deployment:** Apply migrations **before** the portal relies on `timeline_json`; reload ticket payloads after SQL changes.
 

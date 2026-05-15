@@ -15,6 +15,7 @@ const {
   dispatchStaffLifecycleReminder,
 } = require("./staffLifecycleOutbound");
 const { mergeTicketUpdateRespectingPmOverride } = require("../../dal/ticketAssignmentGuard");
+const { mergeChangedByIntoTicketPatch, lifecycleTimerActor } = require("../../dal/ticketAuditPatch");
 
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} sb
@@ -181,6 +182,7 @@ async function executeLifecycleDecision(sb, decision, facts, signal, o) {
       preferredWindow: scheduleText,
       traceId,
       traceStartMs: traceStartMs != null ? traceStartMs : undefined,
+      ticketChangedBy: lifecycleTimerActor(),
     });
 
     if (!applyResult.ok) {
@@ -223,11 +225,14 @@ async function executeLifecycleDecision(sb, decision, facts, signal, o) {
       .eq("ticket_key", ticketKey)
       .maybeSingle();
 
-    const scheduleStatusPatch = mergeTicketUpdateRespectingPmOverride(ticketLockRow || {}, {
-      status: "Scheduled",
-      updated_at: now,
-      last_activity_at: now,
-    });
+    const scheduleStatusPatch = mergeChangedByIntoTicketPatch(
+      mergeTicketUpdateRespectingPmOverride(ticketLockRow || {}, {
+        status: "Scheduled",
+        updated_at: now,
+        last_activity_at: now,
+      }),
+      lifecycleTimerActor()
+    );
 
     await sb
       .from("tickets")

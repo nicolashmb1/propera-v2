@@ -1,6 +1,7 @@
 /**
  * Contract for Ticket Timeline V1 — DB-trigger-owned event_kind values only.
- * Keep aligned with supabase/migrations/034_ticket_timeline_events.sql header.
+ * Keep aligned with supabase/migrations/034_ticket_timeline_events.sql header
+ * and 045_ticket_mutation_audit.sql (actor columns + trigger behavior).
  * Semantic kinds (message_received, timer_armed, …) are reserved for future V2 writers.
  */
 const test = require("node:test");

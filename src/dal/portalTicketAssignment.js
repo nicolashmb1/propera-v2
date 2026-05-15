@@ -10,6 +10,8 @@ const { getSupabase } = require("../db/supabase");
 const { appendEventLog } = require("./appendEventLog");
 const { updateWorkItemsByTicketKey } = require("./portalTicketMutations");
 const { getStaffDisplayNameByStaffId } = require("./staffPhoneByStaffId");
+const { resolvePortalStaffActorFromJwt } = require("../portal/resolvePortalStaffActor");
+const { mergeChangedByIntoTicketPatch } = require("./ticketAuditPatch");
 
 const HUMAN_ID = "([A-Za-z0-9]{2,12}-\\d{6}-\\d{4})";
 const HUMAN_TICKET_ID_RE = new RegExp(`^${HUMAN_ID}$`, "i");
@@ -222,14 +224,6 @@ async function assertStaffAssignable(sb, staffIdText) {
   return { ok: true };
 }
 
-function sanitizeActorLabel(raw) {
-  const s = String(raw || "")
-    .trim()
-    .replace(/[\r\n\t]+/g, " ")
-    .slice(0, 120);
-  return s || "Property manager";
-}
-
 function sanitizeAssignmentNote(raw) {
   return String(raw || "")
     .trim()
@@ -345,7 +339,19 @@ async function applyPortalTicketAssignment(o) {
     rawStaff === UNASSIGNED_TOKEN ||
     rawStaff.toLowerCase() === "unassigned";
 
-  const actor = sanitizeActorLabel(o.actorLabel);
+  const jwt = String(o.portalUserAccessToken || "").trim();
+  if (!jwt) {
+    return { ok: false, error: "missing_portal_access_token", status: 401 };
+  }
+  const actorRes = await resolvePortalStaffActorFromJwt(sb, jwt);
+  if (!actorRes.ok || !actorRes.changedBy) {
+    return {
+      ok: false,
+      error: actorRes.error || "portal_actor_unresolved",
+      status: 403,
+    };
+  }
+  const resolvedActorLabel = String(actorRes.changedBy.changed_by_actor_label || "").trim();
   const note = sanitizeAssignmentNote(o.assignmentNote);
   const now = new Date().toISOString();
   const resolvedHumanId = String(ticket.ticket_id || "").trim();
@@ -363,15 +369,18 @@ async function applyPortalTicketAssignment(o) {
     : (await getStaffDisplayNameByStaffId(sb, rawStaff)) || rawStaff;
 
   /** @type {Record<string, unknown>} */
-  const ticketPatch = {
-    updated_at: now,
-    last_activity_at: now,
-    assignment_source: "PM_OVERRIDE",
-    assignment_note: note,
-    assignment_updated_at: now,
-    assignment_updated_by: actor,
-    assigned_by: "PM_PORTAL",
-  };
+  const ticketPatch = mergeChangedByIntoTicketPatch(
+    {
+      updated_at: now,
+      last_activity_at: now,
+      assignment_source: "PM_OVERRIDE",
+      assignment_note: note,
+      assignment_updated_at: now,
+      assignment_updated_by: resolvedActorLabel,
+      assigned_by: "PM_PORTAL",
+    },
+    actorRes.changedBy
+  );
 
   if (unassign) {
     Object.assign(ticketPatch, {

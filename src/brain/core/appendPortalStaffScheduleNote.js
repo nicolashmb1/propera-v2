@@ -11,6 +11,7 @@ const {
 const {
   afterTenantScheduleApplied,
 } = require("../lifecycle/afterTenantScheduleApplied");
+const { telegramStaffCaptureActor } = require("../../dal/ticketAuditPatch");
 
 function resolveDeps(deps) {
   const builtin = {
@@ -45,11 +46,16 @@ async function appendPortalStaffScheduleNote(
   if (!ticketKey || String(scheduleHint || "").trim().length < MIN_SCHEDULE_LEN) {
     return receiptBase;
   }
+  const scheduleActor =
+    scheduleOpts && scheduleOpts.ticketChangedBy && typeof scheduleOpts.ticketChangedBy === "object"
+      ? scheduleOpts.ticketChangedBy
+      : telegramStaffCaptureActor();
   const applied = await applyWindow({
     ticketKey,
     preferredWindow: String(scheduleHint).trim(),
     traceId,
     traceStartMs,
+    ticketChangedBy: scheduleActor,
   });
   if (applied.ok) {
     if (scheduleOpts && scheduleOpts.afterLifecycle) {
@@ -65,6 +71,7 @@ async function appendPortalStaffScheduleNote(
           propertyCodeHint: String(scheduleOpts.propertyCodeHint || "").trim(),
           traceId,
           traceStartMs: traceStartMs != null ? traceStartMs : undefined,
+          ticketChangedBy: scheduleActor,
         });
       }
     }

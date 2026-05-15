@@ -209,6 +209,9 @@ function registerPortalReadRoutes(app) {
   app.post("/api/portal/tickets/:ticketId/assignment", gate(async (req, res) => {
     try {
       const body = req.body && typeof req.body === "object" ? req.body : {};
+      const auth = String(req.get("authorization") || "").trim();
+      const m = /^Bearer\s+(\S+)/i.exec(auth);
+      const portalUserAccessToken = m ? m[1] : "";
       const out = await applyPortalTicketAssignment({
         ticketLookupHint: req.params.ticketId,
         ticketKeyHint: body.ticket_key ?? body.ticketKey,
@@ -218,8 +221,8 @@ function registerPortalReadRoutes(app) {
             ? body.assigned_staff_id
             : body.assignedStaffId,
         assignmentNote: body.assignment_note ?? body.assignmentNote,
-        actorLabel: body.actor_label ?? body.actorLabel,
         traceId: req.traceId,
+        portalUserAccessToken,
       });
       if (!out.ok) {
         const code =
@@ -638,11 +641,27 @@ function registerPortalReadRoutes(app) {
   app.post("/api/portal/turnovers/:id/items/:itemId/create-ticket", gateTurnover(async (req, res) => {
     try {
       const body = req.body || {};
+      const sb = getSupabase();
+      if (!sb) {
+        return res.status(503).json({ ok: false, error: "no_db" });
+      }
+      const auth = String(req.get("authorization") || "").trim();
+      const m = /^Bearer\s+(\S+)/i.exec(auth);
+      const jwt = m ? m[1] : "";
+      if (!jwt) {
+        return res.status(401).json({ ok: false, error: "missing_portal_access_token" });
+      }
+      const { resolvePortalStaffActorFromJwt } = require("../portal/resolvePortalStaffActor");
+      const rAct = await resolvePortalStaffActorFromJwt(sb, jwt);
+      if (!rAct.ok || !rAct.changedBy) {
+        return res.status(403).json({ ok: false, error: rAct.error || "portal_actor_unresolved" });
+      }
       const out = await createTicketFromTurnoverItem({
         turnoverId: req.params.id,
         itemId: req.params.itemId,
         actorPhoneE164: body.actor_phone_e164 ?? body.actorPhoneE164 ?? "",
         traceId: req.traceId,
+        portalTicketAudit: rAct.changedBy,
       });
       if (!out.ok) {
         const code =
@@ -670,9 +689,25 @@ function registerPortalReadRoutes(app) {
   app.post("/api/portal/turnovers/:id/items/:itemId/link-ticket", gateTurnover(async (req, res) => {
     try {
       const body = req.body || {};
+      const sb = getSupabase();
+      if (!sb) {
+        return res.status(503).json({ ok: false, error: "no_db" });
+      }
+      const auth = String(req.get("authorization") || "").trim();
+      const m = /^Bearer\s+(\S+)/i.exec(auth);
+      const jwt = m ? m[1] : "";
+      if (!jwt) {
+        return res.status(401).json({ ok: false, error: "missing_portal_access_token" });
+      }
+      const { resolvePortalStaffActorFromJwt } = require("../portal/resolvePortalStaffActor");
+      const rAct = await resolvePortalStaffActorFromJwt(sb, jwt);
+      if (!rAct.ok || !rAct.changedBy) {
+        return res.status(403).json({ ok: false, error: rAct.error || "portal_actor_unresolved" });
+      }
       const hint = body.ticket_id ?? body.ticketId ?? body.human_ticket_id ?? "";
       const out = await linkTicketToTurnoverItem(req.params.id, req.params.itemId, hint, {
         traceId: req.traceId,
+        portalTicketAudit: rAct.changedBy,
       });
       if (!out.ok) {
         const code =

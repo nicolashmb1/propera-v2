@@ -105,6 +105,7 @@ function buildTicketAttachmentsFromRouterParameter(routerParameter) {
  * @param {string} [o.reportSourcePhone] — report context only (not persisted as tenant phone for common-area)
  * @param {string} [o.turnoverId] — optional `public.turnovers.id`
  * @param {string} [o.turnoverItemId] — optional `public.turnover_items.id`
+ * @param {Record<string, string>} [o.portalTicketAudit] — `changed_by_actor_*` when portal passes explicit audit (e.g. turnover create)
  */
 async function finalizeMaintenanceDraft(o) {
   const sb = getSupabase();
@@ -230,6 +231,29 @@ async function finalizeMaintenanceDraft(o) {
     meta.portal_structured_create = true;
   }
 
+  const {
+    mergeChangedByIntoTicketPatch,
+    tenantSmsActor,
+    telegramStaffCaptureActor,
+  } = require("./ticketAuditPatch");
+  let ticketAudit = null;
+  if (o.portalTicketAudit && typeof o.portalTicketAudit === "object") {
+    const pl = String(o.portalTicketAudit.changed_by_actor_label || "").trim();
+    if (pl) ticketAudit = o.portalTicketAudit;
+  }
+  const pj = String(p._portalMutationActorJson || "").trim();
+  if (!ticketAudit && pj) {
+    try {
+      const j = JSON.parse(pj);
+      if (j && typeof j === "object" && String(j.changed_by_actor_label || "").trim()) {
+        ticketAudit = j;
+      }
+    } catch (_) {}
+  }
+  if (!ticketAudit) {
+    ticketAudit = o.mode === "TENANT" ? tenantSmsActor() : telegramStaffCaptureActor();
+  }
+
   /** Full Sheet1 parity (requires supabase/migrations/006_tickets_sheet1_columns.sql). */
   const ticketRow = {
     ticket_id: humanTicketId,
@@ -312,6 +336,7 @@ async function finalizeMaintenanceDraft(o) {
 
     turnover_id: o.turnoverId || null,
     turnover_item_id: o.turnoverItemId || null,
+    ...mergeChangedByIntoTicketPatch({}, ticketAudit),
   };
 
   const { data: ticket, error: tErr } = await sb
