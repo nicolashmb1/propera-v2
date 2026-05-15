@@ -21,6 +21,9 @@ const {
   twilioAuthToken,
   telegramBotToken,
 } = require("../../config/env");
+const {
+  enrichInboundMediaWithAudioTranscription,
+} = require("./enrichInboundMediaWithAudioTranscription");
 
 function parseMediaSignalsJson(raw) {
   const s = String(raw || "").trim();
@@ -131,6 +134,7 @@ async function fetchImageDataUrlForSignal(item) {
  * @param {object} [opts]
  * @param {string} [opts.bodyText]
  * @param {string} [opts.channel]
+ * @param {string} [opts.traceId] — flight recorder + audio pipeline logs
  * @param {object} [opts.deps]
  * @returns {Promise<{ media: unknown[], mediaSignals: object[] }>}
  */
@@ -138,19 +142,27 @@ async function enrichInboundMediaWithSignals(mediaArr, opts) {
   const list = Array.isArray(mediaArr) ? mediaArr : [];
   const bodyText = String(opts && opts.bodyText || "").trim();
   const channel = String(opts && opts.channel || "").trim().toLowerCase();
+  const traceId = String(opts && opts.traceId || "").trim();
   const deps = opts && opts.deps && typeof opts.deps === "object" ? opts.deps : {};
 
   const ocrImpl =
     typeof deps.enrichInboundMediaWithOcr === "function"
       ? deps.enrichInboundMediaWithOcr
       : enrichInboundMediaWithOcr;
-  const media = await ocrImpl(list);
+  let media = await ocrImpl(list);
+
+  media = await enrichInboundMediaWithAudioTranscription(media, {
+    traceId,
+    transportChannel: channel,
+    deps,
+  });
 
   const signalEnabled =
     deps.forceEnabled === true ||
     typeof deps.extractImageMaintenanceSignal === "function" ||
     intakeMediaSignalEnabled();
-  if (!signalEnabled || !media.length) return { media, mediaSignals: [] };
+  if (!media.length) return { media, mediaSignals: [] };
+  if (!signalEnabled) return { media, mediaSignals: [] };
 
   const provider =
     typeof deps.extractImageMaintenanceSignal === "function"

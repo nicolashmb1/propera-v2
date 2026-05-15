@@ -102,6 +102,45 @@ test("portal_chat # only + media", () => {
   assert.equal(arr[0].kind, "image");
 });
 
+test("portal_chat voice_note alias + audio storagePath", () => {
+  const p = buildRouterParameterFromPortal({
+    action: "portal_chat",
+    actorPhoneE164: "+19085550101",
+    body: "#",
+    portal_chat_mode: "staff_capture",
+    media: [
+      {
+        kind: "voice_note",
+        storagePath: "portal-chat-audio/u1/note.webm",
+        mimeType: "audio/webm",
+        filename: "note.webm",
+        sizeBytes: 1200,
+      },
+    ],
+  });
+  const arr = JSON.parse(p._mediaJson);
+  assert.equal(arr[0].kind, "audio");
+  assert.equal(arr[0].storagePath, "portal-chat-audio/u1/note.webm");
+});
+
+test("portal_chat normal mode allows empty body when media present", () => {
+  const p = buildRouterParameterFromPortal({
+    action: "portal_chat",
+    actorPhoneE164: "+19085550101",
+    body: "",
+    portal_chat_mode: "normal",
+    media: [
+      {
+        kind: "audio",
+        storagePath: "portal-chat-audio/x.webm",
+        mimeType: "audio/webm",
+      },
+    ],
+  });
+  assert.equal(p.Body, "");
+  assert.ok(JSON.parse(p._mediaJson).length >= 1);
+});
+
 test("portal_chat rejects empty body and no media", () => {
   assert.throws(
     () =>

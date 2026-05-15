@@ -2,14 +2,12 @@
  * Utility meter batch runs — batch_media_runs + utility_meter_readings (MVP 1a).
  */
 const { getSupabase } = require("../db/supabase");
-const {
-  supabaseUrl,
-  openaiApiKey,
-  meterRegisterLastDigitZero,
-  meterExpectedRegisterDigits,
-} = require("../config/env");
+const { supabaseUrl, meterRegisterLastDigitZero, meterExpectedRegisterDigits } = require("../config/env");
 const { validateMeterReading } = require("../meterRuns/validateMeterReading");
-const { extractMeterReadingFromImage } = require("../meterRuns/extractMeterReading");
+const {
+  extractMeterReadingFromImage,
+  stubExtraction,
+} = require("../meterRuns/extractMeterReading");
 const { tryDecodeQrFromImageBuffer } = require("../meterRuns/decodeMeterQr");
 const {
   normMeterKey,
@@ -387,93 +385,158 @@ async function processOneAsset(assetRow) {
   const tensPolicy = meterRegisterLastDigitZero();
   const expRegDigits = meterExpectedRegisterDigits();
 
+  /** When local QR resolves a unique meter, one vision call can include previous reading + expected id (no second pass). */
+  const meterFromQr = await matchMeterForProperty(sb, propertyCode, {}, qrHint);
+
   let extraction;
-  try {
-    extraction = await extractMeterReadingFromImage(buf, mime, {
-      qrDecodedHint: qrHint,
-      lastDigitMustBeZero: tensPolicy,
-      expectedRegisterDigitCount: expRegDigits,
-    });
-  } catch (e) {
-    await sb
-      .from("batch_media_assets")
-      .update({
-        processing_status: "FAILED",
-        last_error: String(e && e.message ? e.message : e),
-      })
-      .eq("id", assetId);
-    return { ok: false, error: "extract_throw" };
-  }
+  let meter;
+  let reading;
 
-  const meter = await matchMeterForProperty(sb, propertyCode, extraction, qrHint);
-  if (!meter) {
-    await sb
-      .from("batch_media_assets")
-      .update({
-        processing_status: "FAILED",
-        extraction_json: extraction,
-        last_error: "meter_not_matched",
-      })
-      .eq("id", assetId);
-    return { ok: false, error: "meter_not_matched" };
-  }
-
-  const { data: reading } = await sb
-    .from("utility_meter_readings")
-    .select("*")
-    .eq("run_id", runId)
-    .eq("meter_id", meter.id)
-    .maybeSingle();
-
-  if (!reading) {
-    await sb
-      .from("batch_media_assets")
-      .update({
-        processing_status: "FAILED",
-        extraction_json: extraction,
-        last_error: "reading_row_missing",
-      })
-      .eq("id", assetId);
-    return { ok: false, error: "reading_row_missing" };
-  }
-
-  if (reading.asset_id && reading.current_reading != null) {
-    await sb
-      .from("batch_media_assets")
-      .update({
-        processing_status: "VALIDATED",
-        extraction_json: extraction,
-        last_error: "duplicate_photo_for_meter",
-      })
-      .eq("id", assetId);
-
-    await sb
+  if (meterFromQr) {
+    const { data: readingEarly } = await sb
       .from("utility_meter_readings")
-      .update({
-        status: "DUPLICATE",
-        review_reasons: ["duplicate_photo"],
-        extraction_json: extraction,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", reading.id);
+      .select("*")
+      .eq("run_id", runId)
+      .eq("meter_id", meterFromQr.id)
+      .maybeSingle();
 
-    await recalcRunSummary(runId);
-    return { ok: true, duplicate: true };
-  }
+    if (!readingEarly) {
+      await sb
+        .from("batch_media_assets")
+        .update({
+          processing_status: "FAILED",
+          last_error: "reading_row_missing",
+        })
+        .eq("id", assetId);
+      return { ok: false, error: "reading_row_missing" };
+    }
 
-  if (openaiApiKey()) {
+    if (readingEarly.asset_id && readingEarly.current_reading != null) {
+      const dupEx = stubExtraction();
+      dupEx.extract_pass = "skipped_duplicate_before_vision";
+      dupEx.qualityFlags = (dupEx.qualityFlags || []).concat("duplicate_photo_no_vision");
+
+      await sb
+        .from("batch_media_assets")
+        .update({
+          processing_status: "VALIDATED",
+          extraction_json: dupEx,
+          last_error: "duplicate_photo_for_meter",
+        })
+        .eq("id", assetId);
+
+      await sb
+        .from("utility_meter_readings")
+        .update({
+          status: "DUPLICATE",
+          review_reasons: ["duplicate_photo"],
+          extraction_json: dupEx,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", readingEarly.id);
+
+      await recalcRunSummary(runId);
+      return { ok: true, duplicate: true };
+    }
+
+    meter = meterFromQr;
+    reading = readingEarly;
+
     try {
       extraction = await extractMeterReadingFromImage(buf, mime, {
-        previousReading: reading.previous_reading,
-        expectedRegisterDigitCount: expRegDigits,
-        lastDigitMustBeZero: tensPolicy,
         qrDecodedHint: qrHint,
+        lastDigitMustBeZero: tensPolicy,
+        expectedRegisterDigitCount: expRegDigits,
+        previousReading: reading.previous_reading,
         expectedMeterId: meter.meter_key,
         refinementPass: true,
       });
-      extraction.extract_pass = "refinement";
-    } catch (_) {
-      /* keep match-pass extraction */
+      extraction.extract_pass = "single_with_qr_context";
+    } catch (e) {
+      await sb
+        .from("batch_media_assets")
+        .update({
+          processing_status: "FAILED",
+          last_error: String(e && e.message ? e.message : e),
+        })
+        .eq("id", assetId);
+      return { ok: false, error: "extract_throw" };
+    }
+  } else {
+    try {
+      extraction = await extractMeterReadingFromImage(buf, mime, {
+        qrDecodedHint: qrHint,
+        lastDigitMustBeZero: tensPolicy,
+        expectedRegisterDigitCount: expRegDigits,
+      });
+      extraction.extract_pass = "single_match";
+    } catch (e) {
+      await sb
+        .from("batch_media_assets")
+        .update({
+          processing_status: "FAILED",
+          last_error: String(e && e.message ? e.message : e),
+        })
+        .eq("id", assetId);
+      return { ok: false, error: "extract_throw" };
+    }
+
+    meter = await matchMeterForProperty(sb, propertyCode, extraction, qrHint);
+    if (!meter) {
+      await sb
+        .from("batch_media_assets")
+        .update({
+          processing_status: "FAILED",
+          extraction_json: extraction,
+          last_error: "meter_not_matched",
+        })
+        .eq("id", assetId);
+      return { ok: false, error: "meter_not_matched" };
+    }
+
+    const { data: readingLate } = await sb
+      .from("utility_meter_readings")
+      .select("*")
+      .eq("run_id", runId)
+      .eq("meter_id", meter.id)
+      .maybeSingle();
+
+    if (!readingLate) {
+      await sb
+        .from("batch_media_assets")
+        .update({
+          processing_status: "FAILED",
+          extraction_json: extraction,
+          last_error: "reading_row_missing",
+        })
+        .eq("id", assetId);
+      return { ok: false, error: "reading_row_missing" };
+    }
+
+    reading = readingLate;
+
+    if (reading.asset_id && reading.current_reading != null) {
+      await sb
+        .from("batch_media_assets")
+        .update({
+          processing_status: "VALIDATED",
+          extraction_json: extraction,
+          last_error: "duplicate_photo_for_meter",
+        })
+        .eq("id", assetId);
+
+      await sb
+        .from("utility_meter_readings")
+        .update({
+          status: "DUPLICATE",
+          review_reasons: ["duplicate_photo"],
+          extraction_json: extraction,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", reading.id);
+
+      await recalcRunSummary(runId);
+      return { ok: true, duplicate: true };
     }
   }
 

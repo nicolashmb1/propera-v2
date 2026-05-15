@@ -140,6 +140,56 @@ function intakeMediaVisionEnabled() {
   return envFlagTrue("INTAKE_MEDIA_VISION_ENABLED", false);
 }
 
+/** Master gate: portal/Telegram/etc. may attach audio; V2 may load + transcribe when on. */
+function intakeAudioEnabled() {
+  return envFlagTrue("INTAKE_AUDIO_ENABLED", false);
+}
+
+/** When on with `OPENAI_API_KEY` + `OPENAI_AUDIO_TRANSCRIPTION_ENABLED`, run speech-to-text on audio media. */
+function intakeAudioTranscriptionEnabled() {
+  return envFlagTrue("INTAKE_AUDIO_TRANSCRIPTION_ENABLED", false);
+}
+
+/** Second gate for OpenAI transcription API (belt-and-suspenders with INTAKE_AUDIO_TRANSCRIPTION_ENABLED). */
+function openaiAudioTranscriptionEnabled() {
+  return envFlagTrue("OPENAI_AUDIO_TRANSCRIPTION_ENABLED", false);
+}
+
+/**
+ * Comma-separated transport/channel ids: `portal` (Propera Chat), `telegram`, `whatsapp`, `sms`.
+ * Alias: `propera_chat` → treated as `portal`.
+ */
+function intakeAudioChannelsRaw() {
+  return String(env("INTAKE_AUDIO_CHANNELS", "portal")).trim();
+}
+
+function intakeAudioMaxSeconds() {
+  const n = parseInt(env("INTAKE_AUDIO_MAX_SECONDS", "120"), 10);
+  if (!isFinite(n) || n < 1) return 120;
+  return Math.min(n, 600);
+}
+
+function intakeAudioMaxBytes() {
+  const n = parseInt(env("INTAKE_AUDIO_MAX_BYTES", "25000000"), 10);
+  if (!isFinite(n) || n < 1024) return 25000000;
+  return Math.min(n, 100 * 1024 * 1024);
+}
+
+/** Bucket for portal chat audio uploads (must match app upload route). */
+function intakeAudioStorageBucket() {
+  return String(env("INTAKE_AUDIO_STORAGE_BUCKET", "pm-attachments")).trim() || "pm-attachments";
+}
+
+/** Path prefix required for V2 download (security). */
+function intakeAudioStoragePathPrefix() {
+  const p = String(env("INTAKE_AUDIO_STORAGE_PATH_PREFIX", "portal-chat-audio")).trim();
+  return p.replace(/^\/+|\/+$/g, "") || "portal-chat-audio";
+}
+
+function openaiAudioTranscriptionModel() {
+  return String(env("OPENAI_AUDIO_TRANSCRIPTION_MODEL", "whisper-1")).trim() || "whisper-1";
+}
+
 /** Vision-capable model for OCR extraction from images. */
 function openaiModelVision() {
   return String(env("OPENAI_MODEL_VISION", "gpt-4o-mini")).trim() || "gpt-4o-mini";
@@ -267,4 +317,13 @@ module.exports = {
   financeCoreEnabled,
   financeTicketCostsEnabled,
   financeLedgerEnabled,
+  intakeAudioEnabled,
+  intakeAudioTranscriptionEnabled,
+  openaiAudioTranscriptionEnabled,
+  intakeAudioChannelsRaw,
+  intakeAudioMaxSeconds,
+  intakeAudioMaxBytes,
+  intakeAudioStorageBucket,
+  intakeAudioStoragePathPrefix,
+  openaiAudioTranscriptionModel,
 };

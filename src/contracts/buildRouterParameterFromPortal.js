@@ -88,6 +88,28 @@ function normalizePortalPostPayload(payload) {
   return {};
 }
 
+function normalizePortalChatMediaItem(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const o = { ...raw };
+  let k = String(o.kind != null ? o.kind : "image").trim().toLowerCase();
+  if (k === "voice" || k === "voice_note") k = "audio";
+  o.kind = k;
+  if (k === "audio") {
+    const sp = String(o.storagePath || "").trim();
+    const mime = String(o.mimeType || o.mime_type || "").trim();
+    if (!sp) {
+      throw new Error("buildRouterParameterFromPortal: portal_chat audio requires storagePath");
+    }
+    if (!mime) {
+      throw new Error("buildRouterParameterFromPortal: portal_chat audio requires mimeType or mime_type");
+    }
+    o.storagePath = sp;
+    o.mime_type = mime;
+    if (!o.mimeType) o.mimeType = mime;
+  }
+  return o;
+}
+
 function buildRouterParameterFromPortal(payload) {
   const p = normalizePortalPostPayload(payload);
   const action = String(p.action || "staff_command").trim().toLowerCase();
@@ -135,21 +157,29 @@ function buildRouterParameterFromPortal(payload) {
     const mediaArr = Array.isArray(p.media)
       ? p.media.filter((x) => x && typeof x === "object")
       : [];
-    mediaJson = mediaArr.length ? JSON.stringify(mediaArr) : "";
-    if (!body && mediaArr.length === 0) {
+    const normalizedMedia = [];
+    for (const x of mediaArr) {
+      const n = normalizePortalChatMediaItem(x);
+      if (n) normalizedMedia.push(n);
+    }
+    mediaJson = normalizedMedia.length ? JSON.stringify(normalizedMedia) : "";
+    if (!body && normalizedMedia.length === 0) {
       throw new Error("buildRouterParameterFromPortal: portal_chat requires body/message or media");
     }
-    if (!body && mediaArr.length > 0) {
-      throw new Error(
-        'buildRouterParameterFromPortal: portal_chat media-only requires body "#" (staff capture)'
-      );
+    if (!body && normalizedMedia.length > 0) {
+      const portalMode = String(p.portal_chat_mode || "staff_capture").trim().toLowerCase();
+      if (portalMode === "staff_capture") {
+        throw new Error(
+          'buildRouterParameterFromPortal: portal_chat media-only requires body "#" (staff capture)'
+        );
+      }
     }
   } else {
     body = String(p.body || "").trim();
     if (!body && portalPostImpliesPmTicketSave(p)) body = "noop";
   }
 
-  if (!body) {
+  if (!body && !mediaJson) {
     throw new Error("buildRouterParameterFromPortal: empty body");
   }
 

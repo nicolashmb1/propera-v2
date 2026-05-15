@@ -1,6 +1,7 @@
 /**
  * Vision extraction for utility meter photos — facts only; Propera validates downstream.
- * Two-phase batch flow (see meterBillingRuns): match pass → refinement pass with previousReading + expected context.
+ * `meterBillingRuns.processOneAsset` runs at most one call per asset: full context when local QR
+ * resolves the meter first; otherwise a single match-oriented call (no second refinement pass).
  */
 const { openaiApiKey, openaiModelMeterBatch } = require("../config/env");
 

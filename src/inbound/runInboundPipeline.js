@@ -103,6 +103,7 @@ async function runInboundPipeline(o) {
     const enriched = await enrichInboundMediaWithSignals(mediaArr, {
       bodyText: String(routerParameter.Body || ""),
       channel: transportChannel,
+      traceId,
       deps: o.mediaSignalDeps,
     });
     routerParameter._mediaJson = JSON.stringify(enriched.media);

@@ -31,6 +31,8 @@ const {
 } = require("./coreMaintenanceShared");
 const { buildFastDraftForMaintenanceCore } = require("./coreMaintenancePortalDraft");
 const { resolveStaffCaptureBodyAndSession } = require("./coreMaintenanceStaffCapture");
+const { parseMediaJson } = require("../shared/mediaPayload");
+const { isAudioMediaItem } = require("../../media/audioTranscriptionProvider");
 
 /**
  * @typedef {object} MaintenanceCoreDispatchCtx
@@ -141,6 +143,31 @@ async function buildMaintenanceCoreDispatchContext(o) {
   }
 
   if (!bodyText) {
+    const mediaList = parseMediaJson(p._mediaJson || "");
+    const hadAudio = mediaList.some((m) => isAudioMediaItem(m));
+    const anyTranscript = mediaList.some((m) => String(m.transcript || "").trim());
+    if (hadAudio && !anyTranscript) {
+      const replyText =
+        mode === "MANAGER"
+          ? "I could not understand the voice note clearly. Please resend it or type the ticket details after #."
+          : "I could not understand the audio clearly. Please resend it or type the issue in a short message.";
+      await appendEventLog({
+        traceId,
+        event: "CORE_AUDIO_TRANSCRIPTION_EMPTY",
+        payload: { mode },
+      });
+      return {
+        kind: "return",
+        coreEntered: false,
+        result: {
+          ok: true,
+          brain: "core_audio_clarify",
+          replyText,
+          ...staffMeta(),
+          ...outgateMeta("MAINTENANCE_CLARIFY_AUDIO"),
+        },
+      };
+    }
     await appendEventLog({ traceId, event: "CORE_SKIP_EMPTY_BODY", payload: { mode } });
     emitTimed(traceStartMs, {
       level: "info",

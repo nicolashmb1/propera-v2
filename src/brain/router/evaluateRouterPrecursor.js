@@ -14,13 +14,16 @@ const {
   composeInboundTextWithMedia,
 } = require("../shared/mediaPayload");
 const { parseMediaSignalsJson } = require("../shared/mediaSignalRuntime");
+const { intakeAudioEnabled } = require("../../config/env");
 
 /** Min chars for staff empty-body photo path to enter maintenance core via OCR / media signals. */
 const STAFF_MEDIA_INTAKE_MIN_LEN = 8;
 
 function transportAllowsStaffMediaIntake(transportChannel) {
   const t = String(transportChannel || "").trim().toLowerCase();
-  return t === "telegram" || t === "whatsapp" || t === "sms";
+  if (t === "telegram" || t === "whatsapp" || t === "sms") return true;
+  if (t === "portal" && intakeAudioEnabled()) return true;
+  return false;
 }
 
 function staffMediaMaintenanceComposedBody(parameter) {
