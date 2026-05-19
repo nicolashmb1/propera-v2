@@ -4,6 +4,7 @@
  */
 const { getSupabase } = require("../db/supabase");
 const { appendEventLog } = require("./appendEventLog");
+const { resolvePortalStaffActorFromJwt } = require("../portal/resolvePortalStaffActor");
 const { resolvePropertyCodeFromLabel } = require("./portalTenants");
 const { expandProgramLines } = require("../pm/expandProgramLines");
 const {
@@ -665,7 +666,7 @@ async function getProgramRunById(runId) {
   const { data: lines } = await sb
     .from("program_lines")
     .select(
-      "id, program_run_id, scope_type, scope_label, sort_order, status, completed_by, completed_at, notes, proof_photo_urls"
+      "id, program_run_id, scope_type, scope_label, sort_order, status, completed_by, completed_at, notes, proof_photo_urls, assigned_vendor_id, assigned_vendor_display"
     )
     .eq("program_run_id", id)
     .order("sort_order", { ascending: true })
@@ -812,6 +813,180 @@ async function reopenProgramLine(lineId, o) {
   return { ok: true, run };
 }
 
+/**
+ * PM portal: set or clear vendor on a checklist line.
+ * @param {string} lineId
+ * @param {object} o
+ * @param {string|undefined|null} [o.assignedVendorId] — `vendors.vendor_id`; empty / null clears
+ * @param {string} [o.traceId]
+ * @param {string} [o.portalUserAccessToken]
+ */
+async function setProgramLineVendor(lineId, o) {
+  const sb = getSupabase();
+  if (!sb) return { ok: false, error: "no_db" };
+
+  const lid = String(lineId || "").trim();
+  if (!lid) return { ok: false, error: "missing_line_id" };
+
+  const jwt = String(o?.portalUserAccessToken || "").trim();
+  let changedBy;
+  if (jwt) {
+    const actorRes = await resolvePortalStaffActorFromJwt(sb, jwt);
+    if (actorRes.ok && actorRes.changedBy) {
+      changedBy = actorRes.changedBy;
+    }
+  }
+  if (!changedBy) {
+    const { systemTicketActor } = require("./ticketAuditPatch");
+    changedBy = systemTicketActor("PM Portal", "propera_app");
+  }
+
+  const vid =
+    o.assignedVendorId === undefined || o.assignedVendorId === null
+      ? ""
+      : String(o.assignedVendorId).trim();
+
+  const { data: line, error: lineErr } = await sb
+    .from("program_lines")
+    .select("id, program_run_id")
+    .eq("id", lid)
+    .maybeSingle();
+
+  if (lineErr || !line) return { ok: false, error: "not_found" };
+
+  let display = "";
+  if (vid) {
+    const { data: vrow, error: vErr } = await sb
+      .from("vendors")
+      .select("vendor_id, display_name, active")
+      .eq("vendor_id", vid)
+      .maybeSingle();
+    if (vErr) {
+      if (vErr.code === "42P01" || /relation.*vendors.*does not exist/i.test(String(vErr.message || ""))) {
+        return { ok: false, error: "vendors_migration_required", status: 503 };
+      }
+      return { ok: false, error: vErr.message };
+    }
+    if (!vrow || vrow.active === false) return { ok: false, error: "vendor_not_found" };
+    display = String(vrow.display_name || "").trim() || vid;
+  }
+
+  const { error: upErr } = await sb
+    .from("program_lines")
+    .update({
+      assigned_vendor_id: vid,
+      assigned_vendor_display: vid ? display : "",
+    })
+    .eq("id", lid);
+
+  if (upErr) {
+    if (upErr.code === "42703" && /\bassigned_vendor/.test(String(upErr.message || ""))) {
+      return { ok: false, error: "vendors_migration_required", status: 503 };
+    }
+    return { ok: false, error: upErr.message || "update_failed" };
+  }
+
+  await appendEventLog({
+    traceId: String(o?.traceId || ""),
+    log_kind: "portal",
+    event: "PROGRAM_LINE_VENDOR_SET",
+    payload: {
+      program_line_id: lid,
+      program_run_id: line.program_run_id,
+      assigned_vendor_id: vid || null,
+      assigned_vendor_display: vid ? display : null,
+      changed_by: changedBy,
+    },
+  });
+
+  const run = await getProgramRunById(line.program_run_id);
+  return { ok: true, run };
+}
+
+/**
+ * Assign (or clear) a staff member on a single program_line.
+ * @param {string} lineId
+ * @param {{ assignedStaffId?: string|null, traceId?: string, portalUserAccessToken?: string }} o
+ */
+async function setProgramLineStaff(lineId, o) {
+  const sb = getSupabase();
+  if (!sb) return { ok: false, error: "no_db" };
+
+  const lid = String(lineId || "").trim();
+  if (!lid) return { ok: false, error: "missing_line_id" };
+
+  const jwt = String(o?.portalUserAccessToken || "").trim();
+  let changedBy;
+  if (jwt) {
+    const actorRes = await resolvePortalStaffActorFromJwt(sb, jwt);
+    if (actorRes.ok && actorRes.changedBy) {
+      changedBy = actorRes.changedBy;
+    }
+  }
+  if (!changedBy) {
+    const { systemTicketActor } = require("./ticketAuditPatch");
+    changedBy = systemTicketActor("PM Portal", "propera_app");
+  }
+
+  const sid =
+    o.assignedStaffId === undefined || o.assignedStaffId === null
+      ? ""
+      : String(o.assignedStaffId).trim();
+
+  const { data: line, error: lineErr } = await sb
+    .from("program_lines")
+    .select("id, program_run_id")
+    .eq("id", lid)
+    .maybeSingle();
+
+  if (lineErr || !line) return { ok: false, error: "not_found" };
+
+  let display = "";
+  if (sid) {
+    const { data: srow } = await sb
+      .from("portal_users")
+      .select("id, display_name, full_name, email")
+      .eq("id", sid)
+      .maybeSingle();
+    if (srow) {
+      display = String(srow.display_name || srow.full_name || srow.email || "").trim() || sid;
+    } else {
+      display = sid;
+    }
+  }
+
+  const { error: upErr } = await sb
+    .from("program_lines")
+    .update({
+      assigned_staff_id: sid,
+      assigned_staff_display: sid ? display : "",
+    })
+    .eq("id", lid);
+
+  if (upErr) {
+    if (upErr.code === "42703" && /\bassigned_staff/.test(String(upErr.message || ""))) {
+      return { ok: false, error: "staff_migration_required", status: 503 };
+    }
+    return { ok: false, error: upErr.message || "update_failed" };
+  }
+
+  await appendEventLog({
+    traceId: String(o?.traceId || ""),
+    log_kind: "portal",
+    event: "PROGRAM_LINE_STAFF_SET",
+    payload: {
+      program_line_id: lid,
+      program_run_id: line.program_run_id,
+      assigned_staff_id: sid || null,
+      assigned_staff_display: sid ? display : null,
+      changed_by: changedBy,
+    },
+  });
+
+  const run = await getProgramRunById(line.program_run_id);
+  return { ok: true, run };
+}
+
 module.exports = {
   createProgramRun,
   previewProgramRunExpansion,
@@ -820,6 +995,8 @@ module.exports = {
   getProgramRunById,
   completeProgramLine,
   reopenProgramLine,
+  setProgramLineVendor,
+  setProgramLineStaff,
   getTemplate,
   resolveProgramDefinitionForRun,
 };

@@ -19,6 +19,7 @@ const TARGET_KINDS = new Set([
   "OTHER",
 ]);
 const ENTRY_TYPES = new Set([
+  "material",
   "parts",
   "labor",
   "vendor_invoice",
@@ -45,6 +46,18 @@ function moneyDetailLine(amountCents, currency) {
   const cur = normStr(currency) || "USD";
   const n = (c / 100).toFixed(2);
   return `${cur} ${n}`;
+}
+
+async function fetchProgramRunRow(sb, programRunId) {
+  const id = normStr(programRunId);
+  if (!id || !TICKET_ROW_UUID_RE.test(id)) return null;
+  const { data, error } = await sb
+    .from("program_runs")
+    .select("id, property_code, title, status")
+    .eq("id", id)
+    .maybeSingle();
+  if (error || !data) return null;
+  return data;
 }
 
 async function fetchTicketRow(sb, ticketRowId) {
@@ -104,12 +117,17 @@ async function insertTimeline(sb, ticketId, kind, headline, detail, actor) {
 }
 
 function validateTargetPayload(row) {
-  const tk = normStr(row.target_kind).toUpperCase();
+  const tk = normStr(row.target_kind || row.targetKind).toUpperCase();
   if (!TARGET_KINDS.has(tk)) return { ok: false, error: "invalid_target_kind" };
-  if (tk === "UNIT" && !normStr(row.unit_catalog_id)) {
+  const unitCat = normStr(row.unit_catalog_id || row.unitCatalogId);
+  const locId = normStr(row.location_id || row.locationId);
+  const unitSnap = normStr(row.unit_label_snapshot || row.unitLabelSnapshot);
+  const locSnap = normStr(row.location_label_snapshot || row.locationLabelSnapshot);
+  /* Portal JSON uses camelCase; UNIT may be label-only when catalog has not matched yet (042 allows null FK). */
+  if (tk === "UNIT" && !unitCat && !unitSnap) {
     return { ok: false, error: "unit_catalog_id_required_for_unit_target" };
   }
-  if (tk === "PROPERTY_LOCATION" && !normStr(row.location_id)) {
+  if (tk === "PROPERTY_LOCATION" && !locId && !locSnap) {
     return { ok: false, error: "location_id_required_for_property_location_target" };
   }
   return { ok: true, target_kind: tk };
@@ -119,7 +137,9 @@ function mapRowToApi(r) {
   if (!r) return null;
   return {
     id: String(r.id),
-    ticketId: String(r.ticket_id),
+    ticketId: r.ticket_id ? String(r.ticket_id) : null,
+    programRunId: r.program_run_id ? String(r.program_run_id) : null,
+    programLineId: r.program_line_id ? String(r.program_line_id) : null,
     propertyCode: normStr(r.property_code).toUpperCase(),
     workItemId: r.work_item_id ? String(r.work_item_id) : null,
     targetKind: normStr(r.target_kind),
@@ -161,6 +181,23 @@ async function listTicketCostEntriesForPortal(ticketRowId) {
     .from("ticket_cost_entries")
     .select("*")
     .eq("ticket_id", ticket.id)
+    .order("created_at", { ascending: true });
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, entries: (data || []).map(mapRowToApi) };
+}
+
+/**
+ * @param {string} programRunId — program_runs.id UUID
+ */
+async function listProgramRunCostEntriesForPortal(programRunId) {
+  const sb = getSupabase();
+  if (!sb) return { ok: false, error: "no_db" };
+  const run = await fetchProgramRunRow(sb, programRunId);
+  if (!run) return { ok: false, error: "program_run_not_found" };
+  const { data, error } = await sb
+    .from("ticket_cost_entries")
+    .select("*")
+    .eq("program_run_id", run.id)
     .order("created_at", { ascending: true });
   if (error) return { ok: false, error: error.message };
   return { ok: true, entries: (data || []).map(mapRowToApi) };
@@ -280,8 +317,143 @@ async function createTicketCostEntryForPortal(ticketRowId, body) {
   return { ok: true, entry: mapRowToApi(data) };
 }
 
+/**
+ * Preventive / program-run cost row (same table as ticket costs; `target_kind` PROGRAM).
+ * @param {string} programRunId — program_runs.id UUID
+ * @param {object} body
+ */
+async function createProgramRunCostEntryForPortal(programRunId, body) {
+  const sb = getSupabase();
+  if (!sb) return { ok: false, error: "no_db" };
+  const run = await fetchProgramRunRow(sb, programRunId);
+  if (!run) return { ok: false, error: "program_run_not_found" };
+
+  const propRun = normStr(run.property_code).toUpperCase();
+  const propBody = normStr(body.propertyCode || body.property_code).toUpperCase();
+  if (propBody && propBody !== propRun) {
+    return { ok: false, error: "property_code_mismatch" };
+  }
+
+  const programBody = {
+    ...body,
+    targetKind: "PROGRAM",
+    target_kind: "PROGRAM",
+    unitCatalogId: null,
+    unit_catalog_id: null,
+    unitLabelSnapshot: "",
+    unit_label_snapshot: "",
+    locationId: null,
+    location_id: null,
+    locationLabelSnapshot: "",
+    location_label_snapshot: "",
+  };
+  const vt = validateTargetPayload(programBody);
+  if (!vt.ok) return { ok: false, error: vt.error };
+
+  let programLineId = null;
+  const rawLine = body.programLineId ?? body.program_line_id;
+  if (rawLine != null && normStr(rawLine)) {
+    const lid = normStr(rawLine);
+    if (!TICKET_ROW_UUID_RE.test(lid)) return { ok: false, error: "invalid_program_line_id" };
+    const { data: line, error: lineErr } = await sb
+      .from("program_lines")
+      .select("id, program_run_id")
+      .eq("id", lid)
+      .maybeSingle();
+    if (lineErr || !line) return { ok: false, error: "program_line_not_found" };
+    if (String(line.program_run_id) !== String(run.id)) {
+      return { ok: false, error: "program_line_run_mismatch" };
+    }
+    programLineId = lid;
+  }
+
+  const entryType = normStr(body.entryType || body.entry_type).toLowerCase();
+  if (!ENTRY_TYPES.has(entryType)) return { ok: false, error: "invalid_entry_type" };
+
+  const amountCents = Math.round(Number(body.amountCents ?? body.amount_cents));
+  if (!Number.isFinite(amountCents) || amountCents < 0) {
+    return { ok: false, error: "invalid_amount_cents" };
+  }
+
+  const paidStatus = normStr(body.paidStatus || body.paid_status || "unknown").toLowerCase();
+  if (!PAID_STATUSES.has(paidStatus)) return { ok: false, error: "invalid_paid_status" };
+
+  let chargeStatus = normStr(
+    body.tenantChargeStatus || body.tenant_charge_status || "not_chargeable"
+  ).toLowerCase();
+  if (!CHARGE_STATUSES.has(chargeStatus)) chargeStatus = "not_chargeable";
+
+  let chargeAmt =
+    body.tenantChargeAmountCents != null || body.tenant_charge_amount_cents != null
+      ? Math.round(Number(body.tenantChargeAmountCents ?? body.tenant_charge_amount_cents))
+      : null;
+  if (chargeStatus === "not_chargeable" || chargeStatus === "waived") {
+    chargeAmt = chargeAmt == null ? 0 : chargeAmt;
+  }
+  if (chargeAmt != null && (!Number.isFinite(chargeAmt) || chargeAmt < 0)) {
+    return { ok: false, error: "invalid_tenant_charge_amount_cents" };
+  }
+
+  const attachments = Array.isArray(body.attachmentUrls || body.attachment_urls)
+    ? body.attachmentUrls || body.attachment_urls
+    : [];
+
+  const tenantRosterId = body.tenantRosterId || body.tenant_roster_id
+    ? normStr(body.tenantRosterId || body.tenant_roster_id)
+    : null;
+
+  const nowIso = new Date().toISOString();
+  let chargeDecisionAt = null;
+  let chargeDecisionBy = normStr(body.chargeDecisionBy || body.charge_decision_by);
+  if (chargeStatus === "approved" || chargeStatus === "charged" || chargeStatus === "paid") {
+    chargeDecisionAt = nowIso;
+    if (!chargeDecisionBy) chargeDecisionBy = normStr(body.createdBy || body.created_by);
+  }
+
+  const insertRow = {
+    ticket_id: null,
+    program_run_id: run.id,
+    program_line_id: programLineId,
+    work_item_id: normStr(body.workItemId || body.work_item_id) || null,
+    property_code: propRun,
+    target_kind: vt.target_kind,
+    unit_catalog_id: null,
+    unit_label_snapshot: "",
+    location_id: null,
+    location_label_snapshot: "",
+    tenant_roster_id: tenantRosterId,
+    entry_type: entryType,
+    amount_cents: amountCents,
+    currency: normStr(body.currency || "USD").slice(0, 8) || "USD",
+    vendor_name: normStr(body.vendorName || body.vendor_name).slice(0, 240),
+    description: normStr(body.description).slice(0, 2000),
+    paid_by: normStr(body.paidBy || body.paid_by).slice(0, 120),
+    paid_status: paidStatus,
+    attachment_urls: attachments,
+    tenant_charge_amount_cents: chargeAmt,
+    tenant_charge_status: chargeStatus,
+    tenant_charge_reason: normStr(body.tenantChargeReason || body.tenant_charge_reason).slice(
+      0,
+      2000
+    ),
+    charge_decision_by: chargeDecisionBy.slice(0, 200),
+    charge_decision_at: chargeDecisionAt,
+    created_by: normStr(body.createdBy || body.created_by).slice(0, 200),
+  };
+
+  const { data, error } = await sb.from("ticket_cost_entries").insert(insertRow).select("*").single();
+  if (error) return { ok: false, error: error.message };
+
+  const ledgerOut = await maybePostTicketChargeToLedger(sb, data, null, insertRow.created_by);
+  if (!ledgerOut.ok) return ledgerOut;
+
+  return { ok: true, entry: mapRowToApi(data) };
+}
+
 async function maybePostTicketChargeToLedger(sb, costRow, ticket, actorLabel) {
   if (!financeLedgerEnabled()) return { ok: true };
+  /* Program-run rows have no ticket; tenant ledger posting stays ticket-scoped in V1. */
+  if (!ticket) return { ok: true };
 
   const st = normStr(costRow.tenant_charge_status).toLowerCase();
   const amt = Number(costRow.tenant_charge_amount_cents);
@@ -371,10 +543,17 @@ async function updateTicketCostEntryForPortal(entryId, body) {
     .eq("id", eid)
     .maybeSingle();
   if (exErr || !existing) return { ok: false, error: "not_found" };
+  if (!existing.ticket_id && !existing.program_run_id) {
+    return { ok: false, error: "invalid_cost_parent" };
+  }
 
-  const ticket = await fetchTicketRow(sb, existing.ticket_id);
-  if (!ticket) return { ok: false, error: "ticket_not_found" };
-  if (ticket.is_imported_history === true) {
+  const ticket = existing.ticket_id ? await fetchTicketRow(sb, existing.ticket_id) : null;
+  const programRun = existing.program_run_id
+    ? await fetchProgramRunRow(sb, existing.program_run_id)
+    : null;
+  if (existing.ticket_id && !ticket) return { ok: false, error: "ticket_not_found" };
+  if (existing.program_run_id && !programRun) return { ok: false, error: "program_run_not_found" };
+  if (ticket && ticket.is_imported_history === true) {
     return { ok: false, error: "imported_history_read_only" };
   }
 
@@ -479,24 +658,26 @@ async function updateTicketCostEntryForPortal(entryId, body) {
 
   const chargeChanged =
     patch.tenant_charge_status != null || patch.tenant_charge_amount_cents != null;
-  if (chargeChanged) {
-    await insertTimeline(
-      sb,
-      ticket.id,
-      "tenant_charge_decision",
-      "Tenant charge updated",
-      `${prevCharge} → ${nextCharge}`,
-      normStr(body.createdBy || body.created_by) || "Portal"
-    );
-  } else {
-    await insertTimeline(
-      sb,
-      ticket.id,
-      "cost_updated",
-      "Cost entry updated",
-      normStr(patch.description || existing.description).slice(0, 280),
-      normStr(body.createdBy || body.created_by) || "Portal"
-    );
+  if (ticket) {
+    if (chargeChanged) {
+      await insertTimeline(
+        sb,
+        ticket.id,
+        "tenant_charge_decision",
+        "Tenant charge updated",
+        `${prevCharge} → ${nextCharge}`,
+        normStr(body.createdBy || body.created_by) || "Portal"
+      );
+    } else {
+      await insertTimeline(
+        sb,
+        ticket.id,
+        "cost_updated",
+        "Cost entry updated",
+        normStr(patch.description || existing.description).slice(0, 280),
+        normStr(body.createdBy || body.created_by) || "Portal"
+      );
+    }
   }
 
   if (nextCharge === "waived" || nextCharge === "not_chargeable") {
@@ -504,7 +685,12 @@ async function updateTicketCostEntryForPortal(entryId, body) {
       await voidLedgerForCostEntry(sb, eid);
     }
   } else {
-    const ledgerOut = await maybePostTicketChargeToLedger(sb, updated, ticket, normStr(body.createdBy || body.created_by));
+    const ledgerOut = await maybePostTicketChargeToLedger(
+      sb,
+      updated,
+      ticket,
+      normStr(body.createdBy || body.created_by)
+    );
     if (!ledgerOut.ok) return ledgerOut;
   }
 
@@ -513,7 +699,9 @@ async function updateTicketCostEntryForPortal(entryId, body) {
 
 module.exports = {
   listTicketCostEntriesForPortal,
+  listProgramRunCostEntriesForPortal,
   createTicketCostEntryForPortal,
+  createProgramRunCostEntryForPortal,
   updateTicketCostEntryForPortal,
   mapRowToApi,
 };

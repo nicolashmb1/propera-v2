@@ -242,7 +242,7 @@ begin
       );
     end if;
 
-    if coalesce(trim(OLD.status), '') is distinct from coalesce(trim(NEW.status), '')) then
+    if coalesce(trim(OLD.status), '') is distinct from coalesce(trim(NEW.status), '') then
       new_st := lower(trim(coalesce(NEW.status, '')));
       term_new := new_st in (
         'completed', 'canceled', 'cancelled', 'resolved', 'closed', 'done', 'deleted'

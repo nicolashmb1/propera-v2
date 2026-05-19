@@ -191,6 +191,9 @@ function mapPortalPropertyViewRow(p) {
     maintenanceSpendCentsMonth: Number(p.maintenance_spend_cents_month) || 0,
     maintenanceTenantChargeCentsMonth: Number(p.maintenance_tenant_charge_cents_month) || 0,
     maintenanceCostEntryCountMonth: Number(p.maintenance_cost_entry_count_month) || 0,
+    maintenanceSpendCentsYtd: Number(p.maintenance_spend_cents_ytd) || 0,
+    maintenanceTenantChargeCentsYtd: Number(p.maintenance_tenant_charge_cents_ytd) || 0,
+    maintenanceCostEntryCountYtd: Number(p.maintenance_cost_entry_count_ytd) || 0,
   };
 }
 
@@ -241,6 +244,9 @@ async function listPropertiesForPortal() {
         maintenanceSpendCentsMonth: 0,
         maintenanceTenantChargeCentsMonth: 0,
         maintenanceCostEntryCountMonth: 0,
+        maintenanceSpendCentsYtd: 0,
+        maintenanceTenantChargeCentsYtd: 0,
+        maintenanceCostEntryCountYtd: 0,
       };
     });
   }
@@ -275,6 +281,9 @@ async function listPropertiesForPortal() {
       maintenanceSpendCentsMonth: 0,
       maintenanceTenantChargeCentsMonth: 0,
       maintenanceCostEntryCountMonth: 0,
+      maintenanceSpendCentsYtd: 0,
+      maintenanceTenantChargeCentsYtd: 0,
+      maintenanceCostEntryCountYtd: 0,
     };
   });
 }

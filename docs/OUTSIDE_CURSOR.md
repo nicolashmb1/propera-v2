@@ -34,6 +34,7 @@ Do these in your **web browser** at [supabase.com](https://supabase.com):
    - **Staff `#capture` tenant lookup (GAS Tenants sheet parity):** **`012_tenant_roster.sql`** — then seed rows (`property_code`, `unit_label`, `phone_e164`, `resident_name`, `active`). Without this table, staff-created tickets still save **empty** tenant phone (safe; no crash).
    - **Portal Supabase signup (propera-app):** **`021_portal_auth_allowlist.sql`** after **`003_identity.sql`** (FK to `staff.staff_id`). Then insert allowlist rows in SQL Editor (`email_lower`, `portal_role`, optional `staff_id`). **`propera-app`** register checks this table before `auth.admin.createUser`.
    - **Preventive checklist proof photos:** after **`018_program_engine_v1.sql`** (and ticket photo bucket **`026_pm_attachments_storage_bucket.sql`** for uploads), run **`040_program_lines_proof_photos.sql`** — adds **`program_lines.proof_photo_urls`**.
+   - **Vendor directory + preventive line vendor:** run **`046_vendors_and_program_line_vendor.sql`**, then insert active vendors in SQL Editor, e.g. `insert into public.vendors (vendor_id, display_name, active) values ('VND_PLUMB_CO', 'Acme Plumbing', true) on conflict (vendor_id) do nothing;`
 
 6. Restart `propera-v2` (`npm start`) and open `http://localhost:8080/health`.  
    You want `"db": { "configured": true, "ok": true }`.

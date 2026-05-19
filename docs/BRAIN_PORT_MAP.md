@@ -13,6 +13,8 @@
 
 **Latest session notes:** **[HANDOFF_LOG.md](./HANDOFF_LOG.md)** (dated blocks — ops dashboard, `event_log` expansion, `.env` path, intake flags, **`portal_chat`** command bar).
 
+**V2 + propera-app capabilities, market context, finance layers (0–5) vs gaps:** **[PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md](./PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md)**.
+
 | Phase | Status |
 |-------|--------|
 | **PHASE 1–2** Map + canonical `RouterParameter` contract | **Done** — see builder + `InboundSignal` |

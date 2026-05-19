@@ -18,7 +18,7 @@ validate, audit, and persist deterministically.
 | 2 | Portal routes + app cockpit UI | ✅ Complete |
 | 3 | Policy / automation respect for PM_OVERRIDE | ✅ Complete (see Phase 3 section) |
 | 4 | Assignment history in Activity tab | ⬜ Not started |
-| 5 | Vendor / team / PM targets beyond staff | ⬜ Not started |
+| 5 | Vendor / team / PM targets beyond staff | ⬜ Partial (2026-05-18) — **Vendor shipped:** `vendors` table (`046`), ticket `assigned_type=VENDOR` via `applyPortalTicketAssignment`, `work_items.owner_type`/`owner_id` sync, `GET /api/portal/vendors-for-assignment`, preventive **`PATCH .../program-lines/:id/vendor`**. **Remaining:** teams, PM-as-target, Activity tab entries (Phase 4), grouped dropdown polish. |
 
 ---
 
@@ -131,25 +131,34 @@ is visible without leaving the cockpit.
 
 ---
 
-## Phase 5 — Vendor / team / PM targets beyond staff ⬜
+## Phase 5 — Vendor / team / PM targets beyond staff ⬜ Partial
 
 **Goal:** The PM can assign a ticket to a vendor, a team, or another PM — not only to a
 `staff` table row.
 
-### Deliverables needed
+### Deliverables (vendor slice ✅ 2026-05-18)
 
 | Item | Notes |
 |------|-------|
-| `assigned_type` expansion | Currently only `STAFF` and empty. Needs `VENDOR`, `TEAM`, `PM`. |
-| Vendor/team lookup endpoint | New V2 route or extend staff-for-assignment to return typed options. |
-| App dropdown grouping | Reassign modal groups options: Staff · Vendors · Teams. |
-| `assertStaffAssignable` → `assertAssignableTarget` | Validate by type; vendor rows live in a different table. |
-| `work_items` sync for non-staff targets | `updateWorkItemsByTicketKey` currently writes `owner_id` (staff UUID). Non-staff targets need a different field or a nullable owner with a vendor/team reference. |
+| `assigned_type` expansion | **`VENDOR`** live for PM portal ticket assignment (`046` + `applyPortalTicketAssignment`). **`TEAM` / `PM`** not started. |
+| Vendor lookup endpoint | **`GET /api/portal/vendors-for-assignment`** (+ propera-app **`/api/pm/vendors-for-assignment`**). |
+| App UI | **`TicketDetailPanel`** staff/vendor tabs; preventive per-line vendor (**`PATCH .../program-lines/:id/vendor`**). |
+| Vendor validation | **`assertVendorAssignable`** + `vendors` table (active rows). |
+| `work_items` sync | **`owner_type`** + **`owner_id`** set to `VENDOR` + `vendor_id` text on PM vendor assign; **`STAFF`** explicit on staff assign. |
 
-### Acceptance criteria (not yet met)
-- [ ] PM can assign a ticket to a vendor from the cockpit
-- [ ] `assigned_type` correctly reflects the target type
-- [ ] Activity tab shows the vendor/team name
+### Remaining (Phase 5)
+
+| Item | Notes |
+|------|-------|
+| Team / PM targets | Not started. |
+| `assertAssignableTarget` unification | Optional refactor (`assertStaffAssignable` + `assertVendorAssignable` today). |
+| App dropdown grouping | Single modal with tabs today; optional grouped “Staff · Vendors · Teams” polish. |
+
+### Acceptance criteria
+
+- [x] PM can assign a ticket to a **vendor** from the cockpit (requires `vendors` rows in DB)
+- [x] `assigned_type` **`VENDOR`** on vendor assign
+- [ ] Activity tab shows explicit vendor/team timeline copy (Phase 4 / richer UI)
 
 ---
 
@@ -157,8 +166,8 @@ is visible without leaving the cockpit.
 
 | Layer | File |
 |-------|------|
-| Migration | `propera-v2/supabase/migrations/043_ticket_assignment_responsibility_v1.sql` |
-| V2 DAL — PM write | `propera-v2/src/dal/portalTicketAssignment.js` |
+| Migration | `propera-v2/supabase/migrations/043_ticket_assignment_responsibility_v1.sql` (+ **`046_vendors_and_program_line_vendor.sql`**) |
+| V2 DAL — PM write | `propera-v2/src/dal/portalTicketAssignment.js`, **`src/dal/programRuns.js`** (`setProgramLineVendor`) |
 | V2 DAL — PM lock (Phase 3) | `propera-v2/src/dal/ticketAssignmentGuard.js` |
 | V2 DAL — guarded updates | `propera-v2/src/dal/portalTicketMutations.js`, `ticketLifecycleSync.js`, `turnovers.js` |
 | V2 lifecycle — guarded updates | `propera-v2/src/brain/lifecycle/executeLifecycleDecision.js`, `afterTenantScheduleApplied.js` |
@@ -167,10 +176,12 @@ is visible without leaving the cockpit.
 | Tests (Phase 3) | `propera-v2/tests/ticketAssignmentGuard.test.js` |
 | App proxy — write | `propera-app/src/app/api/pm/ticket-assignment/route.ts` |
 | App proxy — staff | `propera-app/src/app/api/pm/property-staff/route.ts` |
+| App proxy — vendors | **`propera-app/src/app/api/pm/vendors-for-assignment/route.ts`** |
+| App proxy — program line vendor | **`propera-app/src/app/api/program-lines/[id]/vendor/route.ts`** |
 | App types | `propera-app/src/lib/types.ts` |
 | App maps | `propera-app/src/lib/mapRemoteTicket.ts` |
 | App API helpers | `propera-app/src/lib/api.ts` |
-| App panel | `propera-app/src/components/TicketDetailPanel.tsx` |
+| App panel | `propera-app/src/components/TicketDetailPanel.tsx`, **`src/app/preventive/page.tsx`** |
 | App styles | `propera-app/src/components/AppLayout.tsx` |
 | Timeline contract | `propera-v2/docs/TICKET_TIMELINE.md` |
 

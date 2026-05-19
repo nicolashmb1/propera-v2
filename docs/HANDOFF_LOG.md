@@ -7,6 +7,68 @@
 
 ---
 
+## 2026-05-19 — Finance P0 slice (YTD + receipts + preventive line on create)
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **Migration 048** | `048_portal_properties_maintenance_ytd.sql` — `portal_properties_v1` adds UTC **YTD** maintenance spend/charge/entry count (sum of monthly rollup from Jan 1 UTC). |
+| **V2** | `portalTicketsRead.js` maps YTD fields; fallback property rows include YTD zeros. |
+| **propera-app** | Properties KPI + cards (month + YTD); financial property header; **`CostEntryReceiptsField`** + PDF support on **`/api/pm/upload-attachment`**; ticket + preventive cost forms attach up to 6 URLs; preventive **optional checklist line** on new cost; CSV export columns for month/YTD cents. |
+
+### Ops
+
+Apply **048** after **042** (and **047** if program costs in use).
+
+---
+
+## 2026-05-19 — Preventive / program-run cost entries (finance)
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **Migration 047** | `047_program_run_cost_entries.sql` — `ticket_id` nullable; `program_run_id` / `program_line_id`; XOR parent check; **`material`** `entry_type`. |
+| **DAL** | `ticketCostEntries.js` — `listProgramRunCostEntriesForPortal`, `createProgramRunCostEntryForPortal`; `updateTicketCostEntryForPortal` supports rows with `program_run_id` (no ticket timeline / no ticket-scoped ledger V1); `mapRowToApi` includes `programRunId` / `programLineId`. |
+| **Portal** | `GET|POST /api/portal/program-runs/:programRunId/ticket-cost-entries` (`gateFinance`). |
+| **propera-app** | `GET|POST /api/program-runs/[id]/cost-entries` (same `[id]` segment as run detail); **`ProgramRunCostsSection`** on `/preventive` detail; ticket costs add **Material** type; `TicketCostEntry.ticketId` nullable + program ids. |
+
+### Ops
+
+Apply **047** in Supabase after **042** (and **046** if vendors are in use).
+
+---
+
+## 2026-05-19 — V2 + app capabilities & finance-depth roadmap (doc)
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **Docs** | **`PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md`** — what V2 does today, how **propera-app** connects (portal REST / webhooks / reads), market comparison, Layer 0–5 finance gaps. |
+| **Cross-links** | **`PROPERA_FINANCIAL_LAYER_MAP.md`**, **`BRAIN_PORT_MAP.md`** point to the new doc. |
+
+---
+
+## 2026-05-18 — Vendor assignment + preventive vendor + mobile proof uploads
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **Migration 046** | `046_vendors_and_program_line_vendor.sql` — `vendors` table; `program_lines.assigned_vendor_id` / `assigned_vendor_display`. |
+| **Tickets** | `applyPortalTicketAssignment` accepts **`assigned_vendor_id`** (mutually exclusive with non-empty staff); `tickets.assigned_type = VENDOR`; `work_items.owner_type` + `owner_id`; **`listVendorsForAssignment`**; **`GET /api/portal/vendors-for-assignment`**. |
+| **Preventive** | **`setProgramLineVendor`** in `programRuns.js`; **`PATCH /api/portal/program-lines/:id/vendor`**; JWT optional (falls back to system actor for event log). |
+| **propera-app** | Ticket modal staff/vendor tabs; `/api/pm/vendors-for-assignment`; `/api/program-lines/[id]/vendor`; **`/preventive`**: vendor dropdown per line; proof file input **visually hidden** (not `display:none`) + **`isLikelyImageFileForUpload`** for iOS empty MIME types. |
+| **Docs** | `PM_ASSIGNMENT_OVERRIDE.md` Phase 5 partial; `PARITY_LEDGER.md` §11; `migrations/README.md` row for **046**. |
+
+### Ops
+
+Insert active rows into **`public.vendors`** (`vendor_id`, `display_name`) after applying **046** — no seed in migration.
+
+---
+
 ## 2026-05-15 — Ticket mutation audit + Activity actor (P0)
 
 ### Done (this session)

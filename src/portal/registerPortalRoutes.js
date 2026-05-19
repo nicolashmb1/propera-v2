@@ -16,6 +16,8 @@ const {
   getProgramRunById,
   completeProgramLine,
   reopenProgramLine,
+  setProgramLineVendor,
+  setProgramLineStaff,
 } = require("../dal/programRuns");
 const {
   createSavedProgram,
@@ -41,12 +43,15 @@ const { verifyPortalRequest } = require("./portalAuth");
 const { turnoverEngineEnabled, financeTicketCostsEnabled } = require("../config/env");
 const {
   listTicketCostEntriesForPortal,
+  listProgramRunCostEntriesForPortal,
   createTicketCostEntryForPortal,
+  createProgramRunCostEntryForPortal,
   updateTicketCostEntryForPortal,
 } = require("../dal/ticketCostEntries");
 const {
   applyPortalTicketAssignment,
   listStaffAssignableToProperty,
+  listVendorsForAssignment,
 } = require("../dal/portalTicketAssignment");
 
 function registerPortalReadRoutes(app) {
@@ -206,6 +211,26 @@ function registerPortalReadRoutes(app) {
     })
   );
 
+  app.get("/api/portal/vendors-for-assignment", gate(async (_req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) {
+        return res.status(503).json({ ok: false, error: "no_db" });
+      }
+      const out = await listVendorsForAssignment(sb);
+      if (!out.ok) {
+        const status = out.error === "vendors_migration_required" ? 503 : 500;
+        return res.status(status).json({ ok: false, error: out.error || "list_failed" });
+      }
+      return res.status(200).json({ ok: true, vendors: out.vendors });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
   app.post("/api/portal/tickets/:ticketId/assignment", gate(async (req, res) => {
     try {
       const body = req.body && typeof req.body === "object" ? req.body : {};
@@ -220,6 +245,10 @@ function registerPortalReadRoutes(app) {
           Object.prototype.hasOwnProperty.call(body, "assigned_staff_id")
             ? body.assigned_staff_id
             : body.assignedStaffId,
+        assignedVendorId:
+          Object.prototype.hasOwnProperty.call(body, "assigned_vendor_id")
+            ? body.assigned_vendor_id
+            : body.assignedVendorId,
         assignmentNote: body.assignment_note ?? body.assignmentNote,
         traceId: req.traceId,
         portalUserAccessToken,
@@ -234,6 +263,8 @@ function registerPortalReadRoutes(app) {
         ticketId: out.ticketId,
         ticketRowId: out.ticketRowId,
         assignedStaffId: out.assignedStaffId,
+        assignedVendorId: out.assignedVendorId,
+        assignedType: out.assignedType,
         assignedDisplayName: out.assignedDisplayName,
         assignmentSource: out.assignmentSource,
       });
@@ -756,6 +787,50 @@ function registerPortalReadRoutes(app) {
     }
   }));
 
+  app.get(
+    "/api/portal/program-runs/:programRunId/ticket-cost-entries",
+    gateFinance(async (req, res) => {
+      try {
+        const out = await listProgramRunCostEntriesForPortal(req.params.programRunId);
+        if (!out.ok) {
+          const code = out.error === "program_run_not_found" ? 404 : 500;
+          return res.status(code).json({ ok: false, error: out.error || "list_failed" });
+        }
+        return res.status(200).json({ ok: true, entries: out.entries });
+      } catch (err) {
+        return res.status(500).json({
+          ok: false,
+          error: String(err && err.message ? err.message : err),
+        });
+      }
+    })
+  );
+
+  app.post(
+    "/api/portal/program-runs/:programRunId/ticket-cost-entries",
+    gateFinance(async (req, res) => {
+      try {
+        const out = await createProgramRunCostEntryForPortal(
+          req.params.programRunId,
+          req.body || {}
+        );
+        if (!out.ok) {
+          const code =
+            out.error === "program_run_not_found" || out.error === "program_line_not_found"
+              ? 404
+              : 400;
+          return res.status(code).json({ ok: false, error: out.error || "create_failed" });
+        }
+        return res.status(201).json({ ok: true, entry: out.entry });
+      } catch (err) {
+        return res.status(500).json({
+          ok: false,
+          error: String(err && err.message ? err.message : err),
+        });
+      }
+    })
+  );
+
   app.post(
     "/api/portal/program-runs/preview",
     gate(async (req, res) => {
@@ -882,6 +957,80 @@ function registerPortalReadRoutes(app) {
       if (!out.ok) {
         const code = out.error === "not_found" ? 404 : 400;
         return res.status(code).json({ ok: false, error: out.error || "reopen_failed" });
+      }
+      return res.status(200).json({ ok: true, run: out.run });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.patch("/api/portal/program-lines/:id/vendor", gate(async (req, res) => {
+    try {
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const hasVendorField =
+        Object.prototype.hasOwnProperty.call(body, "assigned_vendor_id") ||
+        Object.prototype.hasOwnProperty.call(body, "assignedVendorId");
+      if (!hasVendorField) {
+        return res.status(400).json({ ok: false, error: "assigned_vendor_id_required" });
+      }
+      const auth = String(req.get("authorization") || "").trim();
+      const m = /^Bearer\s+(\S+)/i.exec(auth);
+      const portalUserAccessToken = m ? m[1] : "";
+      const out = await setProgramLineVendor(req.params.id, {
+        assignedVendorId: Object.prototype.hasOwnProperty.call(body, "assigned_vendor_id")
+          ? body.assigned_vendor_id
+          : body.assignedVendorId,
+        traceId: req.traceId,
+        portalUserAccessToken,
+      });
+      if (!out.ok) {
+        const code =
+          out.error === "not_found"
+            ? 404
+            : out.error === "vendors_migration_required"
+              ? 503
+              : 400;
+        return res.status(code).json({ ok: false, error: out.error || "vendor_assign_failed" });
+      }
+      return res.status(200).json({ ok: true, run: out.run });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.patch("/api/portal/program-lines/:id/staff", gate(async (req, res) => {
+    try {
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const hasStaffField =
+        Object.prototype.hasOwnProperty.call(body, "assigned_staff_id") ||
+        Object.prototype.hasOwnProperty.call(body, "assignedStaffId");
+      if (!hasStaffField) {
+        return res.status(400).json({ ok: false, error: "assigned_staff_id_required" });
+      }
+      const auth = String(req.get("authorization") || "").trim();
+      const m = /^Bearer\s+(\S+)/i.exec(auth);
+      const portalUserAccessToken = m ? m[1] : "";
+      const out = await setProgramLineStaff(req.params.id, {
+        assignedStaffId: Object.prototype.hasOwnProperty.call(body, "assigned_staff_id")
+          ? body.assigned_staff_id
+          : body.assignedStaffId,
+        traceId: req.traceId,
+        portalUserAccessToken,
+      });
+      if (!out.ok) {
+        const code =
+          out.error === "not_found"
+            ? 404
+            : out.error === "staff_migration_required"
+              ? 503
+              : 400;
+        return res.status(code).json({ ok: false, error: out.error || "staff_assign_failed" });
       }
       return res.status(200).json({ ok: true, run: out.run });
     } catch (err) {

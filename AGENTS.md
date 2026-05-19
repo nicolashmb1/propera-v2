@@ -21,6 +21,37 @@ Optional: **`docs/GAS_ENGINE_PORT_PROGRAM.md`** (phased port for engines 10/12/1
 
 ---
 
+## Finance work — mandatory reads when working on Propera finances
+
+If the user says anything about **finances, ledger, rent, delinquency, owner statements, charges, lease, cost, vendor AP, budgets**, or working on the **`/financial` area** of propera-app, read these **before touching code**:
+
+1. **`docs/PROPERA_FINANCE_ROADMAP.md`** — **start here**. Six-phase plan from the current baseline to full owner finance. Shows exactly what is done, what is next, and the migration sequence. **Check which phase we are in before building anything.**
+2. **`docs/PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md`** — honest snapshot of what ships today (capabilities checklist, Layer 0–5 depth map, feature flags, §2.5a for propera-app finance surfaces).
+3. **`docs/PROPERA_FINANCIAL_LAYER_MAP.md`** — where tables live, portal routes, guardrails, app proxy pattern for cost/ledger data.
+
+### Where the roadmap stands right now (update this when a phase item ships)
+
+| Phase | Status | Last migration |
+|-------|--------|---------------|
+| **Baseline** | ✅ Complete | 050 |
+| **Phase 1** — credible daily use (12-month trend, lease expiry, void ledger line, date/notes on ledger rows) | 🔲 Not started — next up | needs 051 |
+| **Phase 2** — rent roll + delinquency | 🔲 Not started | needs 052 |
+| **Phase 3** — vendor finance / AP | 🔲 Not started | needs 053–054 |
+| **Phase 4** — budget vs actual | 🔲 Not started | needs 055 |
+| **Phase 5** — owner statements | 🔲 Not started | needs 056 |
+| **Phase 6** — full books | 🔲 Deferred (explicit decision gate) | — |
+
+**Next migration to write:** `051_tenant_ledger_effective_date_notes.sql` — adds `effective_date date` and `notes text` to `tenant_ledger_entries`. See Phase 1 in the roadmap.
+
+### Finance guardrails (always apply)
+- Browser **never** writes `ticket_cost_entries` directly — only V2 portal routes with finance flags.
+- **Manual ledger lines** and **unit lease** upserts go through **propera-app Next routes** with the tenant-mutation gate — not the V2 ticket-cost DAL.
+- Ticket economics stay **authoritative on tickets**. Manual ledger lines are PM/owner adjustments only.
+- Each phase needs **schema + API + propera-app surface**. No orphaned half-done migrations.
+- Placeholders in the UI must stay honest (say "not connected" rather than showing zero).
+
+---
+
 ## Current stance (explicit)
 
 - **Operator default: V2-first** for the **staff portal stack** (`propera-app` → `/webhooks/portal`, Supabase reads). **GAS + Sheets** is **legacy backup** for slices not retired (escape hatch / old ticket rows), not the default target for new portal PM features.  
@@ -68,6 +99,7 @@ Conversations **drift**: freeze lifts, scope shifts, priorities change, a port l
 | Portal preventive / program expansion or building-profile contract | **`docs/PM_PROGRAM_ENGINE_V1.md`** (+ **`docs/BRAIN_PORT_MAP.md`** portal PM row if routes/files move) |
 | Ticket Activity timeline (trigger kinds, view contract, V2 event kinds, duplicate rule) | **`docs/TICKET_TIMELINE.md`**, **`supabase/migrations/`** (new migration if SQL contract changes), **`propera-app/src/lib/timelineMapping.ts`**, **`tests/ticketTimelineV1Kinds.test.js`** (or successor) |
 | PM assignment override phases, acceptance criteria, per-phase status | **`docs/PM_ASSIGNMENT_OVERRIDE.md`** — update `Status` column when a phase ships or acceptance criteria change |
+| Finance phase ships, new migration lands, or roadmap priority changes | **`docs/PROPERA_FINANCE_ROADMAP.md`** (phase table + migration sequence) · **`AGENTS.md`** "Where the roadmap stands" table · **`docs/PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md`** §2.5a + §8 + Baseline row |
 
 **Rule:** Stale docs are a bug. **Do not** end a meaningful direction change with only chat context updated.
 
@@ -87,6 +119,11 @@ Conversations **drift**: freeze lifts, scope shifts, priorities change, a port l
 | Runnable code | `propera-v2/src/` |
 | Portal PM / preventive (program runs, expansion) | `docs/PM_PROGRAM_ENGINE_V1.md`; code: `src/dal/programRuns.js`, `src/pm/expandProgramLines.js`, `src/portal/registerPortalRoutes.js` |
 | PM assignment override (phases 1–5, what's done, what's next) | `docs/PM_ASSIGNMENT_OVERRIDE.md`; code: `src/dal/portalTicketAssignment.js`, `src/portal/registerPortalRoutes.js` |
+| **Finance roadmap** (phased plan, current phase, next migration) | **`docs/PROPERA_FINANCE_ROADMAP.md`** — **read before any finance work** |
+| Finance depth + capability snapshot (Layer 0–5, flags, propera-app surfaces) | `docs/PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md` |
+| Finance table / route / flag map | `docs/PROPERA_FINANCIAL_LAYER_MAP.md` |
+| Unit leases (schema, API) | `supabase/migrations/049_unit_leases.sql`; propera-app `src/app/api/properties/[code]/units/[unitId]/lease/route.ts` |
+| Unit tenant ledger (schema, API, manual POST) | `supabase/migrations/042_operational_finance_v1.sql` + `050_tenant_ledger_unit_property_idx.sql`; propera-app `src/app/api/properties/[code]/units/[unitId]/ledger/route.ts` |
 | Unit tests | `propera-v2/tests/` |
 | Supabase SQL | `propera-v2/supabase/migrations/` |
 | Portal ticket Activity / timeline V1+V2 contract | **`docs/TICKET_TIMELINE.md`**; SQL: `034`–`037` ticket timeline migrations; app: `propera-app/src/lib/timelineMapping.ts` |

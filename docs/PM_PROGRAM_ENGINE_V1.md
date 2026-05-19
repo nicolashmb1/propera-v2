@@ -216,7 +216,8 @@ Auth: same portal token pattern as existing portal routes (`X-Propera-Portal-Tok
 - **Create program run** sends **`includedScopeLabels`** when the preview had lines and at least one area remains checked.
 - Main column scrolls as a single **`page-scroll`** region (header through run list) so long previews and area lists are not clipped.
 - **Filter runs** by property; **Saved programs** strip (desktop) lists active definitions with **Start run**; run cards open right **checklist** panel (complete/reopen per line; **completed_at** / **completed_by** on lines).
-- **Proof of work:** optional photos per open line (upload to **`pm-attachments`**, then stored on complete as **`proof_photo_urls`**); thumbnails on completed lines; reopen clears photos.
+- **Vendor per line (2026-05-18):** optional **`assigned_vendor_id`** / display snapshot on `program_lines`; portal **`PATCH /api/portal/program-lines/:id/vendor`**; propera-app `/preventive` vendor dropdown (requires **`vendors`** table — migration **046**).
+- **Proof of work:** optional photos per open line (upload to **`pm-attachments`**, then stored on complete as **`proof_photo_urls`**); thumbnails on completed lines; reopen clears photos. **Mobile:** file input must stay focusable (avoid `display:none` only); accept images when **`file.type` is empty** but extension looks like a photo (iOS camera roll).
 - **Delete program run** from list or panel where portal role allows (V2 + app gate).
 
 ---
@@ -232,6 +233,7 @@ Auth: same portal token pattern as existing portal routes (`X-Propera-Portal-Tok
 | Staff NL → `createProgramRun` | Later |
 | **`saved_programs` + XOR `program_runs` + preview ephemeral + app proxies** | Done (`022_saved_programs.sql`, DAL, portal, propera-app) |
 | **Line completion proof photos** | Done (`040_program_lines_proof_photos.sql`, DAL + portal + **`/preventive`**) |
+| **Per-line vendor assignment** | Done (`046_vendors_and_program_line_vendor.sql`, `setProgramLineVendor`, portal PATCH, **`/preventive`**) |
 
 ---
 
