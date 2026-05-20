@@ -588,6 +588,7 @@ async function applyPortalTicketAssignment(o) {
 
 module.exports = {
   fetchTicketRowForAssignment,
+  resolveTicketForAssignment,
   listStaffAssignableToProperty,
   listVendorsForAssignment,
   applyPortalTicketAssignment,

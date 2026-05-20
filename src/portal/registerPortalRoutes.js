@@ -53,6 +53,10 @@ const {
   listStaffAssignableToProperty,
   listVendorsForAssignment,
 } = require("../dal/portalTicketAssignment");
+const {
+  applyPortalTicketTenantChange,
+  listTenantsForUnitTicket,
+} = require("../dal/portalTicketTenant");
 
 function registerPortalReadRoutes(app) {
   async function sendTickets(_req, res) {
@@ -223,6 +227,63 @@ function registerPortalReadRoutes(app) {
         return res.status(status).json({ ok: false, error: out.error || "list_failed" });
       }
       return res.status(200).json({ ok: true, vendors: out.vendors });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.get(
+    "/api/portal/properties/:code/tenants-for-unit",
+    gate(async (req, res) => {
+      try {
+        const sb = getSupabase();
+        if (!sb) {
+          return res.status(503).json({ ok: false, error: "no_db" });
+        }
+        const unit = String(req.query.unit ?? req.query.unit_label ?? "").trim();
+        const out = await listTenantsForUnitTicket(sb, req.params.code, unit);
+        if (!out.ok) {
+          const status = out.error === "invalid_property_or_unit" ? 400 : 500;
+          return res.status(status).json({ ok: false, error: out.error || "list_failed" });
+        }
+        return res.status(200).json({ ok: true, tenants: out.tenants });
+      } catch (err) {
+        return res.status(500).json({
+          ok: false,
+          error: String(err && err.message ? err.message : err),
+        });
+      }
+    })
+  );
+
+  app.post("/api/portal/tickets/:ticketId/tenant", gate(async (req, res) => {
+    try {
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const auth = String(req.get("authorization") || "").trim();
+      const m = /^Bearer\s+(\S+)/i.exec(auth);
+      const portalUserAccessToken = m ? m[1] : "";
+      const out = await applyPortalTicketTenantChange({
+        ticketLookupHint: req.params.ticketId,
+        ticketKeyHint: body.ticket_key ?? body.ticketKey,
+        ticketRowIdHint: body.ticket_row_id ?? body.ticketRowId,
+        tenantPhoneE164: body.tenant_phone_e164 ?? body.tenantPhoneE164,
+        traceId: req.traceId,
+        portalUserAccessToken,
+      });
+      if (!out.ok) {
+        const code = out.status >= 400 && out.status < 600 ? out.status : 400;
+        return res.status(code).json({ ok: false, error: out.error || "tenant_change_failed" });
+      }
+      return res.status(200).json({
+        ok: true,
+        ticketId: out.ticketId,
+        ticketRowId: out.ticketRowId,
+        tenantPhoneE164: out.tenantPhoneE164,
+        tenantDisplayName: out.tenantDisplayName,
+      });
     } catch (err) {
       return res.status(500).json({
         ok: false,

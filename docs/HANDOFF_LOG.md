@@ -7,6 +7,23 @@
 
 ---
 
+## 2026-05-19 — Phase 1.5 Leasehold import reverted (blocked on export samples)
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **Decision** | Speculative Phase 1.5 code removed — unknown Leasehold export shape. |
+| **Removed** | Migration **058**, `leaseholdCsv`, import API, snapshot wiring in `financialSnapshot.ts`. |
+| **UI** | `/financial` rent collected / delinquent back to placeholders; **Imports** page explains blocked state. |
+| **Docs** | `PROPERA_FINANCE_ROADMAP.md` §1.5 gated; `AGENTS.md` Phase 1.5 = **Blocked**. |
+
+### Resume when
+
+Accounting shares **real** rent roll + ledger CSV for one property → write import spec → implement **058** + import from spec (not guessed columns).
+
+---
+
 ## 2026-05-19 — Finance P0 slice (YTD + receipts + preventive line on create)
 
 ### Done

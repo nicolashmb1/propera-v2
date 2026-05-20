@@ -25,7 +25,7 @@ Optional: **`docs/GAS_ENGINE_PORT_PROGRAM.md`** (phased port for engines 10/12/1
 
 If the user says anything about **finances, ledger, rent, delinquency, owner statements, charges, lease, cost, vendor AP, budgets**, or working on the **`/financial` area** of propera-app, read these **before touching code**:
 
-1. **`docs/PROPERA_FINANCE_ROADMAP.md`** — **start here**. Six-phase plan from the current baseline to full owner finance. Shows exactly what is done, what is next, and the migration sequence. **Check which phase we are in before building anything.**
+1. **`docs/PROPERA_FINANCE_ROADMAP.md`** — **start here**. Six-phase plan + **§Finance inside Propera architecture** (channel-agnostic POS, package in/out, `/financial` module spine). Shows what is done, what is next, and the migration sequence. **Check which phase we are in before building anything.**
 2. **`docs/PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md`** — honest snapshot of what ships today (capabilities checklist, Layer 0–5 depth map, feature flags, §2.5a for propera-app finance surfaces).
 3. **`docs/PROPERA_FINANCIAL_LAYER_MAP.md`** — where tables live, portal routes, guardrails, app proxy pattern for cost/ledger data.
 
@@ -33,21 +33,23 @@ If the user says anything about **finances, ledger, rent, delinquency, owner sta
 
 | Phase | Status | Last migration |
 |-------|--------|---------------|
-| **Baseline** | ✅ Complete | 050 |
-| **Phase 1** — credible daily use (12-month trend, lease expiry, void ledger line, date/notes on ledger rows) | 🔲 Not started — next up | needs 051 |
-| **Phase 2** — rent roll + delinquency | 🔲 Not started | needs 052 |
-| **Phase 3** — vendor finance / AP | 🔲 Not started | needs 053–054 |
-| **Phase 4** — budget vs actual | 🔲 Not started | needs 055 |
-| **Phase 5** — owner statements | 🔲 Not started | needs 056 |
+| **Baseline** | ✅ Complete | 051 (051 = program_lines staff — ops, not finance) |
+| **Phase 1** — credible daily use (snapshot APIs, lease/rent on cards, ledger void/date/notes) | 🟡 In progress | **052** ledger columns next to apply |
+| **Phase 1.5** — incumbent accounting **read-only snapshot** (Leasehold rent roll / ledger export → `/financial`) | 🔲 **Blocked** — no code until export samples + column spec | see roadmap §1.5; **do not** apply **058** until spec exists |
+| **Phase 2** — rent roll + delinquency (native `rent_postings` or promoted import) | 🔲 Not started | needs 053 |
+| **Phase 3** — vendor finance / AP | 🔲 Not started | needs 054–055 |
+| **Phase 4** — budget vs actual | 🔲 Not started | needs 056 |
+| **Phase 5** — owner statements | 🔲 Not started | needs 057 |
 | **Phase 6** — full books | 🔲 Deferred (explicit decision gate) | — |
 
-**Next migration to write:** `051_tenant_ledger_effective_date_notes.sql` — adds `effective_date date` and `notes text` to `tenant_ledger_entries`. See Phase 1 in the roadmap.
+**Next finance migration to write:** `052_tenant_ledger_effective_date_notes.sql` — adds `effective_date date` and `notes text` to `tenant_ledger_entries`. **Do not reuse 051** (already `program_lines` staff assignment). See Phase 1 in the roadmap.
 
 ### Finance guardrails (always apply)
+- Finance is **layered on the property operation system** — channel-agnostic, package in/out. See roadmap **§Finance inside Propera architecture**. No finance logic in adapters; no lifecycle/resolver bypass.
 - Browser **never** writes `ticket_cost_entries` directly — only V2 portal routes with finance flags.
 - **Manual ledger lines** and **unit lease** upserts go through **propera-app Next routes** with the tenant-mutation gate — not the V2 ticket-cost DAL.
 - Ticket economics stay **authoritative on tickets**. Manual ledger lines are PM/owner adjustments only.
-- Each phase needs **schema + API + propera-app surface**. No orphaned half-done migrations.
+- Each phase needs **schema + API + propera-app surface** (+ financial snapshot read APIs for portfolio/property views). No orphaned half-done migrations.
 - Placeholders in the UI must stay honest (say "not connected" rather than showing zero).
 
 ---
