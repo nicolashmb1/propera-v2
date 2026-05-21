@@ -12,7 +12,7 @@ const {
 const { resolveLocationTarget } = require("../location/resolveLocationTarget");
 const { inferEmergency } = require("../../dal/ticketDefaults");
 const {
-  isPortalCreateTicketRouter,
+  usesStructuredPortalCreateDraft,
   extractScheduleHintStaffCapture,
   extractScheduleHintPortalStaff,
 } = require("./handleInboundCoreScheduleHints");
@@ -67,7 +67,7 @@ async function runCoreMaintenanceFastPath(x) {
   }
 
   const locSource =
-    mode === "MANAGER" && isPortalCreateTicketRouter(p)
+    usesStructuredPortalCreateDraft(p, mode)
       ? "structured_portal"
       : "draft_hints";
 
@@ -106,7 +106,7 @@ async function runCoreMaintenanceFastPath(x) {
               : locRes.error_code === "invalid_target_kind"
                 ? "Invalid location kind."
                 : "Could not resolve ticket location.";
-    const portalFail = mode === "MANAGER" && isPortalCreateTicketRouter(p);
+    const portalFail = usesStructuredPortalCreateDraft(p, mode);
     const brain = portalFail ? "portal_create_invalid" : "location_target_invalid";
     return {
       ok: false,
@@ -137,7 +137,7 @@ async function runCoreMaintenanceFastPath(x) {
       unitLabel: unitLabelResolved,
       location_kind: tgt.kind,
       reason:
-        mode === "MANAGER" && isPortalCreateTicketRouter(p)
+        usesStructuredPortalCreateDraft(p, mode)
           ? "portal_structured_create"
           : "single_message_parse",
     },
@@ -151,17 +151,17 @@ async function runCoreMaintenanceFastPath(x) {
   });
 
   const emFast =
-    mode === "MANAGER" && isPortalCreateTicketRouter(p)
+    usesStructuredPortalCreateDraft(p, mode)
       ? { emergency: "No", emergencyType: "" }
       : inferEmergency(fastDraft.issueText);
   const scheduleHintPortalFast =
-    mode === "MANAGER" && isPortalCreateTicketRouter(p)
+    usesStructuredPortalCreateDraft(p, mode)
       ? extractScheduleHintPortalStaff(fastDraft, effectiveBody, p)
       : "";
   const skipSchedulingFast =
     emFast.emergency === "Yes" ||
     commonAreaFast ||
-    (mode === "MANAGER" && isPortalCreateTicketRouter(p));
+    (usesStructuredPortalCreateDraft(p, mode));
 
   const trFast = await resolveManagerTenantIfNeeded(
     sb,
@@ -252,7 +252,7 @@ async function runCoreMaintenanceFastPath(x) {
         path: "fast",
         emergency: emFast.emergency === "Yes",
         portalStaffCreate:
-          mode === "MANAGER" && isPortalCreateTicketRouter(p) ? true : undefined,
+          usesStructuredPortalCreateDraft(p, mode) ? true : undefined,
       }),
     };
   }

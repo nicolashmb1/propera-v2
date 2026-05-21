@@ -1,5 +1,7 @@
 # Tenant roster (portal)
 
+**Staff roster CRUD** — not the resident tenant portal. For resident login, maintenance, notices, see **[TENANT_PORTAL_BUILD_PLAN.md](./TENANT_PORTAL_BUILD_PLAN.md)**.
+
 Source of truth: **`public.tenant_roster`** (migration `012`, email in `014`).
 
 ## HTTP (propera-v2)

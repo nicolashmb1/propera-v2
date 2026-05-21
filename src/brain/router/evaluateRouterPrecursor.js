@@ -41,6 +41,21 @@ function stripStaffAliasFromHashPayload(stripped) {
     .trim();
 }
 
+/** Resident portal structured create — must not hit staff lifecycle intercept. */
+function isTenantPortalStructuredCreate(parameter) {
+  const p = parameter || {};
+  if (String(p._portalAction || "").trim().toLowerCase() !== "create_ticket") return false;
+  if (String(p._portalChannel || "").trim().toLowerCase() === "tenant_portal") return true;
+  try {
+    const j = JSON.parse(String(p._portalPayloadJson || "{}"));
+    const ch = String(j.channel || "").trim().toLowerCase();
+    const actor = String(j.actor_type || "").trim().toUpperCase();
+    return ch === "tenant_portal" || actor === "TENANT";
+  } catch (_) {
+    return false;
+  }
+}
+
 /**
  * @param {object} opts
  * @param {Record<string, string | undefined>} opts.parameter — RouterParameter / e.parameter
@@ -109,8 +124,9 @@ function evaluateRouterPrecursor(opts) {
    * Staff senders (phone or Telegram identity in `staff` / `contacts`) must **never** fall through to
    * `PRECURSOR_EVALUATED` tenant maintenance — including **empty body** (media-only, adapter overrides).
    * Non-`#` traffic is staff lifecycle / PM amend / schedule outcomes, not tenant intake.
+   * Exception: resident portal `create_ticket` (`channel: tenant_portal`) — same phone may be on staff roster.
    */
-  if (staffCtx && staffCtx.isStaff) {
+  if (staffCtx && staffCtx.isStaff && !isTenantPortalStructuredCreate(p)) {
     return {
       outcome: "STAFF_LIFECYCLE_GATE",
       staffGate: {

@@ -23,6 +23,26 @@ test("create_ticket composes Body with Preferred line", () => {
   assert.ok(p.Body.includes("tomorrow afternoon"));
 });
 
+test("create_ticket tenant_portal uses structured noop Body and channel metadata", () => {
+  const p = buildRouterParameterFromPortal({
+    action: "create_ticket",
+    channel: "tenant_portal",
+    actor_type: "TENANT",
+    actorPhoneE164: "+12015551234",
+    property: "PENN",
+    unit: "14B",
+    category: "Plumbing",
+    message: "Sink leaking",
+  });
+  assert.equal(p.Body, "noop");
+  assert.equal(p._portalChannel, "tenant_portal");
+  assert.equal(p._portalActorType, "TENANT");
+  assert.equal(p._portalAction, "create_ticket");
+  const json = JSON.parse(p._portalPayloadJson);
+  assert.equal(json.channel, "tenant_portal");
+  assert.equal(json.message, "Sink leaking");
+});
+
 test("create_ticket common_area Body omits apt fragment", () => {
   const p = buildRouterParameterFromPortal({
     action: "create_ticket",

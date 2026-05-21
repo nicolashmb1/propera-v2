@@ -58,6 +58,28 @@ test("buildStructuredPortalCreateDraft returns null for unit kind without unit o
   assert.equal(buildStructuredPortalCreateDraft(rp, known, list), null);
 });
 
+test("buildStructuredPortalCreateDraft accepts tenant_portal field aliases", () => {
+  const known = new Set(["PENN"]);
+  const list = [{ code: "PENN", display_name: "The Grand at Penn", ticket_prefix: "", short_name: "", aliases: [] }];
+  const rp = {
+    _portalAction: "create_ticket",
+    _portalChannel: "tenant_portal",
+    _portalPayloadJson: JSON.stringify({
+      channel: "tenant_portal",
+      actor_type: "TENANT",
+      property_code: "PENN",
+      unit_label: "14B",
+      category: "Plumbing",
+      description: "Sink leaking under cabinet",
+    }),
+  };
+  const d = buildStructuredPortalCreateDraft(rp, known, list);
+  assert.ok(d);
+  assert.equal(d.propertyCode, "PENN");
+  assert.equal(d.unitLabel, "14B");
+  assert.equal(d.issueText, "Sink leaking under cabinet");
+});
+
 test("buildStructuredPortalCreateDraft allows common_area without unit", () => {
   const known = new Set(["WGRA"]);
   const list = [{ code: "WGRA", display_name: "X", ticket_prefix: "", short_name: "", aliases: [] }];

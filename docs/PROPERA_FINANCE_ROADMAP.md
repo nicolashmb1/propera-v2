@@ -4,7 +4,7 @@
 
 **Audience:** product, engineering, and the next agent picking up this work.
 
-**Related (do not duplicate here):** [PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md](./PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md) (capabilities + Layer 0–5), [PROPERA_FINANCIAL_LAYER_MAP.md](./PROPERA_FINANCIAL_LAYER_MAP.md) (tables, routes, app proxy), **[FINANCIAL_INTAKE_V1.md](./FINANCIAL_INTAKE_V1.md)** (conversational cost capture — chat/SMS marker, ticket pool, V1 scope; **build capture before deepening dashboards**).
+**Related (do not duplicate here):** [PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md](./PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md) (capabilities + Layer 0–5), [PROPERA_FINANCIAL_LAYER_MAP.md](./PROPERA_FINANCIAL_LAYER_MAP.md) (tables, routes, app proxy), **[FINANCIAL_INTAKE_V1.md](./FINANCIAL_INTAKE_V1.md)** — **design north** for the financial chat channel (V1 ticket cost → V2 four routes / LLM extract + brain validate → V3 queries/voice; **build capture before deepening dashboards**).
 
 **North compass:** Money always traces to real operational events. Finance is **layered on top of operations** — not a parallel app. The deterministic core (resolver, lifecycle, policy) stays authoritative. Finance is **expression and posting** on top — never ownership, lifecycle, or routing logic.
 

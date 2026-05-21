@@ -52,6 +52,7 @@ const {
   applyPortalTicketAssignment,
   listStaffAssignableToProperty,
   listVendorsForAssignment,
+  createVendorForPortal,
 } = require("../dal/portalTicketAssignment");
 const {
   applyPortalTicketTenantChange,
@@ -227,6 +228,32 @@ function registerPortalReadRoutes(app) {
         return res.status(status).json({ ok: false, error: out.error || "list_failed" });
       }
       return res.status(200).json({ ok: true, vendors: out.vendors });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.post("/api/portal/vendors", gate(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) {
+        return res.status(503).json({ ok: false, error: "no_db" });
+      }
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await createVendorForPortal(sb, body);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 && out.status < 600
+            ? out.status
+            : out.error === "vendors_migration_required"
+              ? 503
+              : 400;
+        return res.status(status).json({ ok: false, error: out.error || "create_failed" });
+      }
+      return res.status(201).json({ ok: true, vendor: out.vendor });
     } catch (err) {
       return res.status(500).json({
         ok: false,

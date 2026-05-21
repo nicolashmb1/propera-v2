@@ -32,7 +32,9 @@ function readPortalCreateTicketPresentation(routerParameter) {
       .toUpperCase();
     let urgency = "Normal";
     if (urgRaw === "URGENT" || urgRaw === "HIGH") urgency = "Urgent";
-    const status = String(j.status != null ? j.status : "OPEN").trim() || "OPEN";
+    const statusRaw = String(j.status != null ? j.status : "Open").trim() || "Open";
+    const status =
+      statusRaw.toLowerCase() === "open" ? "Open" : statusRaw;
     const serviceNote = String(j.serviceNote != null ? j.serviceNote : "").trim();
     return {
       category: cat || "General",
@@ -45,6 +47,7 @@ function readPortalCreateTicketPresentation(routerParameter) {
   }
 }
 const { parseMediaJson } = require("../brain/shared/mediaPayload");
+const { normalizePhoneE164 } = require("../utils/phone");
 const { getStaffDisplayNameByStaffId } = require("./staffPhoneByStaffId");
 const {
   normalizeLocationType,
@@ -57,11 +60,34 @@ function shortWiSuffix() {
 
 function buildTicketAttachmentsFromRouterParameter(routerParameter) {
   const p = routerParameter || {};
-  const media = parseMediaJson(p._mediaJson);
-  if (!media.length) return "";
-
   const lines = [];
   const seen = new Set();
+
+  const portalAct = String(p._portalAction || "").trim().toLowerCase();
+  if (portalAct === "create_ticket") {
+    try {
+      const j = JSON.parse(String(p._portalPayloadJson || "{}"));
+      const raw = Array.isArray(j.attachmentUrls)
+        ? j.attachmentUrls
+        : Array.isArray(j.photo_paths)
+          ? j.photo_paths
+          : Array.isArray(j.photoUrls)
+            ? j.photoUrls
+            : [];
+      for (const url of raw) {
+        const token = String(url || "").trim();
+        if (!token) continue;
+        const k = token.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        lines.push(token);
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  const media = parseMediaJson(p._mediaJson);
   for (const m of media) {
     const url = String((m && (m.url || m.file_url || m.fileUrl)) || "").trim();
     const provider = String((m && m.provider) || "").trim().toLowerCase();
@@ -79,6 +105,7 @@ function buildTicketAttachmentsFromRouterParameter(routerParameter) {
     seen.add(k);
     lines.push(token);
   }
+
   if (!lines.length) return "";
   const joined = lines.join("\n");
   return joined.length > 3800 ? joined.slice(0, 3800) : joined;
@@ -125,8 +152,8 @@ async function finalizeMaintenanceDraft(o) {
   const commonArea = isCommonAreaLocation(locationType);
   const tenantPhoneRaw =
     o.mode === "MANAGER"
-      ? resolvedTenant
-      : String(o.actorKey || "").trim();
+      ? normalizePhoneE164(resolvedTenant)
+      : normalizePhoneE164(String(o.actorKey || "").trim());
   const tenantPhone = commonArea ? "" : tenantPhoneRaw;
   const persistedUnit = commonArea ? "" : String(o.unitLabel || "").trim();
 

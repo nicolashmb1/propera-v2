@@ -18,7 +18,7 @@ validate, audit, and persist deterministically.
 | 2 | Portal routes + app cockpit UI | ✅ Complete |
 | 3 | Policy / automation respect for PM_OVERRIDE | ✅ Complete (see Phase 3 section) |
 | 4 | Assignment history in Activity tab | ⬜ Not started |
-| 5 | Vendor / team / PM targets beyond staff | ⬜ Partial (2026-05-18) — **Vendor shipped:** `vendors` table (`046`), ticket `assigned_type=VENDOR` via `applyPortalTicketAssignment`, `work_items.owner_type`/`owner_id` sync, `GET /api/portal/vendors-for-assignment`, preventive **`PATCH .../program-lines/:id/vendor`**. **Remaining:** teams, PM-as-target, Activity tab entries (Phase 4), grouped dropdown polish. |
+| 5 | Vendor / team / PM targets beyond staff | ⬜ Partial (2026-05-18) — **Vendor shipped:** `vendors` table (`046`), ticket `assigned_type=VENDOR` via `applyPortalTicketAssignment`, `work_items.owner_type`/`owner_id` sync, `GET /api/portal/vendors-for-assignment`, **`POST /api/portal/vendors`** (PM creates vendor inline; propera-app `POST /api/pm/vendors`), preventive **`PATCH .../program-lines/:id/vendor`**. **Remaining:** teams, PM-as-target, Activity tab entries (Phase 4), grouped dropdown polish. |
 
 ---
 

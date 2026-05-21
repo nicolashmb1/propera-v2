@@ -29,6 +29,8 @@ Run SQL files in **numeric order** in the Supabase SQL Editor (same project as `
 | **047_program_run_cost_entries.sql** | **`ticket_cost_entries`**: nullable **`ticket_id`**, **`program_run_id`** / **`program_line_id`**, parent XOR check, **`material`** entry type | **`ticketCostEntries.js`** program-run list/create + same PATCH as tickets; portal **`/api/portal/program-runs/:id/ticket-cost-entries`**; **`propera-app`** `/preventive` costs when finance on |
 | **048_portal_properties_maintenance_ytd.sql** | **`portal_properties_v1`**: **`maintenance_*_ytd`** columns (UTC year sum from monthly rollup) | **`portalTicketsRead.js`**, **`propera-app`** properties KPI + cards + financial property header; export CSV |
 | **052_tenant_ledger_effective_date_notes.sql** | **`tenant_ledger_entries.effective_date`**, **`notes`** | **`propera-app`** unit ledger manual POST + void |
+| **054_pm_attachments_audio_mime.sql** | **`pm-attachments`** bucket audio + PDF MIME types | **`/api/portal/chat-audio-upload`** voice notes |
+| **055_communication_engine.sql** | **`communication_*`** tables; **`organizations`**; property brand columns; **`tenant_roster.comm_broadcast_opt_out`** | **`docs/COMMUNICATION_ENGINE.md`** — broadcast SMS engine (separate Twilio number) |
 
 ### Minimum paths
 

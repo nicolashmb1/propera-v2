@@ -36,6 +36,12 @@ const CHARGE_STATUSES = new Set([
   "paid",
   "waived",
 ]);
+const RECEIPT_STATUSES = new Set([
+  "PHOTO_ATTACHED",
+  "OFFICE_HOLDS_PHYSICAL",
+  "MISSING",
+  "RECONCILED",
+]);
 
 function normStr(v) {
   return String(v || "").trim();
@@ -297,6 +303,13 @@ async function createTicketCostEntryForPortal(ticketRowId, body) {
     charge_decision_at: chargeDecisionAt,
     created_by: normStr(body.createdBy || body.created_by).slice(0, 200),
   };
+
+  const receiptRaw = normStr(body.receiptStatus || body.receipt_status).toUpperCase();
+  if (receiptRaw && RECEIPT_STATUSES.has(receiptRaw)) {
+    insertRow.receipt_status = receiptRaw;
+  }
+  const idemKey = normStr(body.captureIdempotencyKey || body.capture_idempotency_key);
+  if (idemKey) insertRow.capture_idempotency_key = idemKey.slice(0, 64);
 
   const { data, error } = await sb.from("ticket_cost_entries").insert(insertRow).select("*").single();
   if (error) return { ok: false, error: error.message };
@@ -697,11 +710,43 @@ async function updateTicketCostEntryForPortal(entryId, body) {
   return { ok: true, entry: mapRowToApi(updated) };
 }
 
+/**
+ * Chat undo — marks row voided; does not change ticket status.
+ * @param {string} entryId
+ * @param {string} [actorLabel]
+ */
+async function voidTicketCostEntryById(entryId, actorLabel) {
+  const sb = getSupabase();
+  if (!sb) return { ok: false, error: "no_db" };
+  const id = normStr(entryId);
+  if (!id || !TICKET_ROW_UUID_RE.test(id)) return { ok: false, error: "invalid_entry_id" };
+  const now = new Date().toISOString();
+  const { data, error } = await sb
+    .from("ticket_cost_entries")
+    .update({ voided_at: now, updated_at: now })
+    .eq("id", id)
+    .is("voided_at", null)
+    .select("id, ticket_id")
+    .maybeSingle();
+  if (error) return { ok: false, error: error.message };
+  if (!data) return { ok: false, error: "entry_not_found_or_already_voided" };
+  await insertTimeline(
+    sb,
+    data.ticket_id,
+    "cost_updated",
+    "Cost voided (undo)",
+    "",
+    actorLabel ? String(actorLabel).slice(0, 200) : "Staff"
+  );
+  return { ok: true, entryId: id };
+}
+
 module.exports = {
   listTicketCostEntriesForPortal,
   listProgramRunCostEntriesForPortal,
   createTicketCostEntryForPortal,
   createProgramRunCostEntryForPortal,
   updateTicketCostEntryForPortal,
+  voidTicketCostEntryById,
   mapRowToApi,
 };

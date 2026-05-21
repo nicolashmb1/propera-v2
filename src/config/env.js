@@ -265,6 +265,16 @@ function turnoverEngineEnabled() {
   return env("PROPERA_TURNOVER_ENGINE_ENABLED", "") === "1";
 }
 
+/** Access Engine `/api/portal/access/*` — amenity reservations (`PROPERA_ACCESS_ENGINE_ENABLED=1`). */
+function accessEngineEnabled() {
+  return env("PROPERA_ACCESS_ENGINE_ENABLED", "") === "1";
+}
+
+/** Encrypt access PINs at rest (`ACCESS_CREDENTIAL_SECRET`). Dev may omit (base64 only). */
+function accessCredentialSecret() {
+  return String(env("ACCESS_CREDENTIAL_SECRET", "")).trim();
+}
+
 /** Operational finance master — default off (`PROPERA_FINANCE_ENABLED=1`). */
 function financeCoreEnabled() {
   return env("PROPERA_FINANCE_ENABLED", "") === "1";
@@ -278,6 +288,79 @@ function financeTicketCostsEnabled() {
 /** Post approved ticket charges to `tenant_ledger_entries` (`PROPERA_FINANCE_LEDGER_ENABLED=1`). */
 function financeLedgerEnabled() {
   return financeCoreEnabled() && env("PROPERA_FINANCE_LEDGER_ENABLED", "") === "1";
+}
+
+/** Chat/marker `$$` expense capture (`PROPERA_FINANCE_COST_CAPTURE_CHAT=1`). */
+function financeCostCaptureChatEnabled() {
+  return financeTicketCostsEnabled() && env("PROPERA_FINANCE_COST_CAPTURE_CHAT", "") === "1";
+}
+
+/**
+ * Optional comma-separated property codes; empty = all properties when chat capture on.
+ * @returns {Set<string>|null} null = no allowlist filter
+ */
+function financeCostCapturePropertyAllowlist() {
+  const raw = env("PROPERA_FINANCE_COST_CAPTURE_PROPERTIES", "").trim();
+  if (!raw) return null;
+  const set = new Set();
+  for (const p of raw.split(",")) {
+    const c = p.trim().toUpperCase();
+    if (c) set.add(c);
+  }
+  return set.size ? set : null;
+}
+
+/** Resident portal JWT (`/api/tenant/*`). */
+function tenantJwtSecret() {
+  return String(env("TENANT_JWT_SECRET", "")).trim();
+}
+
+function tenantOtpTtlMinutes() {
+  const n = parseInt(env("TENANT_OTP_TTL_MINUTES", "10"), 10);
+  return isFinite(n) && n > 0 ? n : 10;
+}
+
+function tenantOtpMaxAttempts() {
+  const n = parseInt(env("TENANT_OTP_MAX_ATTEMPTS", "3"), 10);
+  return isFinite(n) && n > 0 ? n : 3;
+}
+
+function tenantOtpRateLimitPer15Min() {
+  const n = parseInt(env("TENANT_OTP_RATE_LIMIT_PER_15MIN", "3"), 10);
+  return isFinite(n) && n > 0 ? n : 3;
+}
+
+function tenantSessionDays() {
+  const n = parseInt(env("TENANT_SESSION_DAYS", "30"), 10);
+  return isFinite(n) && n > 0 ? n : 30;
+}
+
+function tenantDocsBucket() {
+  return String(env("SUPABASE_TENANT_DOCS_BUCKET", "tenant-documents")).trim();
+}
+
+function commMainNumberDisplay() {
+  const d = String(env("COMM_MAIN_NUMBER_DISPLAY", "")).trim();
+  if (d) return d;
+  return twilioSmsFrom();
+}
+
+function devOrgSubdomain() {
+  return String(env("DEV_ORG_SUBDOMAIN", "thegrand")).trim().toLowerCase();
+}
+
+/**
+ * Local dev only — skip SMS; expose fixed OTP on request-otp and accept on verify.
+ * Hard-off when NODE_ENV=production even if env is set.
+ */
+function tenantDevOtpBypass() {
+  if (env("NODE_ENV", "development") === "production") return false;
+  return envFlagTrue("TENANT_DEV_OTP_BYPASS", false);
+}
+
+function tenantDevOtpCode() {
+  const c = String(env("TENANT_DEV_OTP_CODE", "000000")).trim();
+  return /^\d{6}$/.test(c) ? c : "000000";
 }
 
 module.exports = {
@@ -314,9 +397,13 @@ module.exports = {
   lifecycleCronSecret,
   portalApiToken,
   turnoverEngineEnabled,
+  accessEngineEnabled,
+  accessCredentialSecret,
   financeCoreEnabled,
   financeTicketCostsEnabled,
   financeLedgerEnabled,
+  financeCostCaptureChatEnabled,
+  financeCostCapturePropertyAllowlist,
   intakeAudioEnabled,
   intakeAudioTranscriptionEnabled,
   openaiAudioTranscriptionEnabled,
@@ -326,4 +413,14 @@ module.exports = {
   intakeAudioStorageBucket,
   intakeAudioStoragePathPrefix,
   openaiAudioTranscriptionModel,
+  tenantJwtSecret,
+  tenantOtpTtlMinutes,
+  tenantOtpMaxAttempts,
+  tenantOtpRateLimitPer15Min,
+  tenantSessionDays,
+  tenantDocsBucket,
+  commMainNumberDisplay,
+  devOrgSubdomain,
+  tenantDevOtpBypass,
+  tenantDevOtpCode,
 };

@@ -17,7 +17,7 @@ If the user says **“keep working on V2”** or **“continue Propera V2”**, 
 9. **`docs/OUTSIDE_CURSOR.md`** — SQL/env steps operators run outside the editor.  
 10. **`docs/TICKET_TIMELINE.md`** — portal **Activity** / `ticket_timeline_events`: V1 trigger contract, **`timeline_json`** shape, duplicate rule vs **Timeline V2** semantic writers, migrations **`034`–`037`**, app mapping (`propera-app` `timelineMapping.ts`).
 
-Optional: **`docs/GAS_ENGINE_PORT_PROGRAM.md`** (phased port for engines 10/12/14/20), **`docs/TESTING_STRATEGY.md`**, **`docs/STRUCTURED_LOGS.md`**, **`docs/HANDOFF_LOG.md`** (what changed recently — read **latest dated section** before deep-diving).
+Optional: **`docs/GAS_ENGINE_PORT_PROGRAM.md`** (phased port for engines 10/12/14/20), **`docs/TESTING_STRATEGY.md`**, **`docs/STRUCTURED_LOGS.md`**, **`docs/HANDOFF_LOG.md`** (what changed recently — read **latest dated section** before deep-diving). **Access / amenity reservations (smart locks):** **`docs/ACCESS_ENGINE_BUILD_PLAN.md`** — read before any access-engine work (not started).
 
 ---
 
@@ -129,6 +129,8 @@ Conversations **drift**: freeze lifts, scope shifts, priorities change, a port l
 | Unit tests | `propera-v2/tests/` |
 | Supabase SQL | `propera-v2/supabase/migrations/` |
 | Portal ticket Activity / timeline V1+V2 contract | **`docs/TICKET_TIMELINE.md`**; SQL: `034`–`037` ticket timeline migrations; app: `propera-app/src/lib/timelineMapping.ts` |
+| **Communication Engine** (broadcast SMS, dedicated Twilio number) | **`docs/COMMUNICATION_ENGINE.md`**; SQL: **`055_communication_engine.sql`**; code: `src/communication/` (planned), `src/webhooks/communicationsSms.js` |
+| **Tenant portal** (resident `/tenant/*` in propera-app + `/api/tenant/*` in V2) | **`docs/TENANT_PORTAL_BUILD_PLAN.md`**; SQL: **`056_tenant_portal.sql`** (planned); not started in repo |
 | Env template | `propera-v2/.env.example` |
 | Intake attach classify (deterministic slice) | `src/brain/core/intakeAttachClassify.js` (used by `mergeMaintenanceDraft.js`) |
 | Attach clarify latch (DB) | `src/dal/conversationCtxAttach.js` — sets `conversation_ctx.pending_expected = ATTACH_CLARIFY` |

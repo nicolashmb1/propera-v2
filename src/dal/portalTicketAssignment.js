@@ -301,6 +301,120 @@ async function listVendorsForAssignment(sb) {
   return { ok: true, vendors };
 }
 
+const VENDOR_ID_EXPLICIT_RE = /^[A-Za-z0-9_]{2,64}$/;
+
+/**
+ * Build a stable `vendors.vendor_id` slug from display name (VND_ACME_PLUMBING).
+ * @param {string} displayName
+ */
+function vendorIdSlugFromDisplayName(displayName) {
+  const raw = String(displayName || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!raw) return "";
+  const core = raw.length > 48 ? raw.slice(0, 48) : raw;
+  return `VND_${core}`;
+}
+
+/**
+ * @param {import("@supabase/supabase-js").SupabaseClient} sb
+ * @param {string} baseId
+ */
+async function resolveUniqueVendorId(sb, baseId) {
+  const root = String(baseId || "").trim();
+  if (!root) return { ok: false, error: "invalid_vendor_id" };
+  let candidate = root;
+  for (let n = 0; n < 50; n += 1) {
+    const { data: row, error } = await sb
+      .from("vendors")
+      .select("vendor_id")
+      .eq("vendor_id", candidate)
+      .maybeSingle();
+    if (error) {
+      if (error.code === "42P01" || /relation.*vendors.*does not exist/i.test(String(error.message || ""))) {
+        return { ok: false, error: "vendors_migration_required" };
+      }
+      return { ok: false, error: error.message };
+    }
+    if (!row) return { ok: true, vendorId: candidate };
+    candidate = `${root}_${n + 2}`;
+  }
+  return { ok: false, error: "vendor_id_collision" };
+}
+
+/**
+ * PM portal: create an active vendor for assignment dropdowns.
+ * @param {import("@supabase/supabase-js").SupabaseClient} sb
+ * @param {object} input
+ * @param {string} input.displayName
+ * @param {string} [input.vendorId] — optional explicit slug; otherwise derived from display name
+ * @param {string} [input.notes]
+ */
+async function createVendorForPortal(sb, input) {
+  if (!sb) {
+    return { ok: false, error: "no_db" };
+  }
+  const displayName = String((input && input.displayName) || (input && input.display_name) || "")
+    .trim()
+    .slice(0, 200);
+  if (!displayName) {
+    return { ok: false, error: "missing_display_name", status: 400 };
+  }
+
+  const explicitId = String((input && input.vendorId) || (input && input.vendor_id) || "").trim();
+  let baseId = "";
+  if (explicitId) {
+    if (!VENDOR_ID_EXPLICIT_RE.test(explicitId)) {
+      return { ok: false, error: "invalid_vendor_id", status: 400 };
+    }
+    baseId = explicitId;
+  } else {
+    baseId = vendorIdSlugFromDisplayName(displayName);
+    if (!baseId) {
+      return { ok: false, error: "invalid_display_name", status: 400 };
+    }
+  }
+
+  const unique = await resolveUniqueVendorId(sb, baseId);
+  if (!unique.ok) {
+    const status = unique.error === "vendors_migration_required" ? 503 : 500;
+    return { ok: false, error: unique.error, status };
+  }
+
+  const notes = String((input && input.notes) || "")
+    .trim()
+    .slice(0, 2000);
+  const now = new Date().toISOString();
+  const { error: insErr } = await sb.from("vendors").insert({
+    vendor_id: unique.vendorId,
+    display_name: displayName,
+    active: true,
+    notes,
+    created_at: now,
+    updated_at: now,
+  });
+
+  if (insErr) {
+    if (insErr.code === "42P01" || /relation.*vendors.*does not exist/i.test(String(insErr.message || ""))) {
+      return { ok: false, error: "vendors_migration_required", status: 503 };
+    }
+    if (insErr.code === "23505") {
+      return { ok: false, error: "vendor_id_exists", status: 409 };
+    }
+    return { ok: false, error: insErr.message, status: 500 };
+  }
+
+  return {
+    ok: true,
+    vendor: {
+      vendorId: unique.vendorId,
+      displayName,
+    },
+  };
+}
+
 function sanitizeAssignmentNote(raw) {
   return String(raw || "")
     .trim()
@@ -591,6 +705,7 @@ module.exports = {
   resolveTicketForAssignment,
   listStaffAssignableToProperty,
   listVendorsForAssignment,
+  createVendorForPortal,
   applyPortalTicketAssignment,
   UNASSIGNED_TOKEN,
 };

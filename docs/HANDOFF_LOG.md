@@ -7,6 +7,67 @@
 
 ---
 
+## 2026-05-21 — Access Engine V1 slice (schema + staff cockpit)
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **Migration 057** | `057_access_engine_v1.sql` — `access_*` tables + PENN Gameroom seed |
+| **propera-v2** | `src/access/*`, `src/dal/accessEngine.js`, `registerAccessRoutes.js` — policy, `canReserve`, noop PIN adapter, portal CRUD |
+| **propera-app** | `/access` command center, `/api/access/*` proxies, feature flags |
+| **Tests** | `tests/accessReservationRules.test.js` |
+
+### Ops before smoke test
+
+1. Apply **057** in Supabase (after **056**).
+2. Set **`PROPERA_ACCESS_ENGINE_ENABLED=1`** in `propera-v2/.env`.
+3. Set **`NEXT_PUBLIC_PROPERA_ACCESS_ENABLED=1`** in `propera-app/.env.local`.
+4. Restart V2 + app; open `/access` — should list Gameroom (PENN).
+
+### Next
+
+Inbound ACCESS_* router + outgate; tenant `/tenant/access`; scheduler ACTIVE→COMPLETED.
+
+---
+
+## 2026-05-21 — Access staff override + config UI + command center design
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **propera-app** | **Book for tenant** modal (`AccessOverrideModal`) — roster pick, date/time, staff_override |
+| **propera-app** | **`/access/locations/[id]/config`** — tabs: Hours, Booking rules, Approval & pricing, Notifications |
+| **propera-app** | Command center layout refresh — page header, location sidebar, stats, legend, now-line, Config link |
+| **API proxies** | `policy`, `schedules`, `locations/[id]`, `regenerate-pin`; `proxyV2PortalRequest` supports **PUT** |
+
+---
+
+## 2026-05-20 — Tenant portal Phase A (auth + domain shell)
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **Migration 056** | `056_tenant_portal.sql` — OTP, documents, roster/ticket/org domain columns |
+| **propera-v2** | `src/tenant/*`, `registerTenantRoutes` — `GET /api/tenant/brand`, auth OTP, `GET /api/tenant/me` |
+| **propera-app** | `/tenant/login`, `(portal)/dashboard` shell, `/api/tenant/*` proxies, `proxy.ts` org + cookie guard |
+| **Tests** | `tests/tenantJwt.test.js` |
+
+### Ops before smoke test
+
+1. Apply **056** in Supabase (after **055**).
+2. Set **`TENANT_JWT_SECRET`** in `propera-v2/.env` (long random).
+3. Set **`DEV_ORG_SUBDOMAIN=thegrand`** in `propera-app/.env.local`.
+4. Restart V2 + app; open `http://localhost:3000/tenant/login` — OTP logs to stderr in dev if Twilio off.
+
+### Next
+
+Phase B–F per **`docs/TENANT_PORTAL_BUILD_PLAN.md`** (maintenance, notices, documents, lease/balance).
+
+---
+
 ## 2026-05-19 — Phase 1.5 Leasehold import reverted (blocked on export samples)
 
 ### Done

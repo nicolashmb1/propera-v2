@@ -5,6 +5,8 @@ const { test, describe } = require("node:test");
 const assert = require("node:assert/strict");
 const {
   isPortalCreateTicketRouter,
+  isTenantPortalStructuredCreate,
+  usesStructuredPortalCreateDraft,
   extractScheduleHintStaffCapture,
   extractScheduleHintStaffCaptureFromTurn,
   extractScheduleHintPortalStaff,
@@ -23,6 +25,37 @@ describe("handleInboundCoreScheduleHints", () => {
     assert.equal(isPortalCreateTicketRouter({ _portalAction: "create_ticket" }), true);
     assert.equal(isPortalCreateTicketRouter({ _portalAction: "Create_Ticket" }), true);
     assert.equal(isPortalCreateTicketRouter({ _portalAction: "  CREATE_TICKET  " }), true);
+  });
+
+  test("tenant_portal structured create — TENANT mode uses structured draft path", () => {
+    const rp = {
+      _portalAction: "create_ticket",
+      _portalChannel: "tenant_portal",
+      _portalPayloadJson: JSON.stringify({
+        channel: "tenant_portal",
+        actor_type: "TENANT",
+        property: "PENN",
+        unit: "14B",
+        message: "Leak",
+      }),
+    };
+    assert.equal(isTenantPortalStructuredCreate(rp), true);
+    assert.equal(usesStructuredPortalCreateDraft(rp, "TENANT"), true);
+    assert.equal(usesStructuredPortalCreateDraft(rp, "MANAGER"), true);
+  });
+
+  test("PM create_ticket without tenant channel — TENANT mode does not use structured draft", () => {
+    const rp = {
+      _portalAction: "create_ticket",
+      _portalPayloadJson: JSON.stringify({
+        property: "PENN",
+        unit: "303",
+        message: "Icemaker",
+      }),
+    };
+    assert.equal(isTenantPortalStructuredCreate(rp), false);
+    assert.equal(usesStructuredPortalCreateDraft(rp, "TENANT"), false);
+    assert.equal(usesStructuredPortalCreateDraft(rp, "MANAGER"), true);
   });
 
   test("extractScheduleHintStaffCapture — scheduleRaw wins when long enough", () => {

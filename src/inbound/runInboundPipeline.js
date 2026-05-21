@@ -24,6 +24,9 @@ const {
 const { setSmsOptOut, isSmsOptedOut } = require("../dal/smsOptOut");
 const { handleStaffLifecycleCommand } = require("../brain/staff/handleStaffLifecycleCommand");
 const { tryPortalPmTicketMutation } = require("../dal/portalTicketMutations");
+const { tryStaffExpenseCapture } = require("../dal/staffExpenseCapture");
+const { financeCostCaptureChatEnabled } = require("../config/env");
+const { isExpenseCaptureMessage } = require("../brain/staff/expenseCaptureParse");
 const { portalPostImpliesPmTicketSave } = require("../contracts/buildRouterParameterFromPortal");
 const { resolvePortalTicketMutationActor } = require("../portal/resolvePortalStaffActor");
 const { handleInboundCore } = require("../brain/core/handleInboundCore");
@@ -268,30 +271,58 @@ async function runInboundPipeline(o) {
           resolution: { error: portalActorGateError },
         };
       } else {
-        staffRun = await tryPortalPmTicketMutation({
-          traceId,
-          traceStartMs,
-          routerParameter,
-          transportChannel,
-          portalUserAccessToken: o.portalUserAccessToken,
-          staffAmendContext:
-            staffContext && staffContext.isStaff && staffContext.staff
-              ? {
-                  staffId: String(staffContext.staff.staff_id || "").trim(),
-                  staffActorKey: String(staffContext.staffActorKey || "").trim(),
-                }
-              : null,
-        });
+        if (financeCostCaptureChatEnabled()) {
+          staffRun = await tryStaffExpenseCapture({
+            traceId,
+            routerParameter,
+            transportChannel,
+            staffActorKey:
+              staffContext && staffContext.staffActorKey
+                ? String(staffContext.staffActorKey || "").trim()
+                : String(routerParameter.From || "").trim(),
+            messageId: String(routerParameter.MessageSid || routerParameter.SmsSid || "").trim(),
+          });
+        }
+        if (!staffRun) {
+          staffRun = await tryPortalPmTicketMutation({
+            traceId,
+            traceStartMs,
+            routerParameter,
+            transportChannel,
+            portalUserAccessToken: o.portalUserAccessToken,
+            staffAmendContext:
+              staffContext && staffContext.isStaff && staffContext.staff
+                ? {
+                    staffId: String(staffContext.staff.staff_id || "").trim(),
+                    staffActorKey: String(staffContext.staffActorKey || "").trim(),
+                  }
+                : null,
+          });
+        }
       }
     }
   }
   if (!staffRun && shouldInvokeStaffLifecycle(precursor, staffContext)) {
-    staffRun = await handleStaffLifecycleCommand({
-      traceId,
-      staffActorKey: staffContext.staffActorKey,
-      staffRow: staffContext.staff,
-      routerParameter,
-    });
+    const portalMode = String(routerParameter._portalChatMode || "").toLowerCase();
+    const bodyTrim = String(routerParameter.Body || "").trim();
+    const isCostIntent =
+      portalMode === "cost" || isExpenseCaptureMessage(bodyTrim);
+    if (isCostIntent) {
+      staffRun = {
+        ok: true,
+        brain: "staff_expense_capture",
+        replyText: financeCostCaptureChatEnabled()
+          ? "Which ticket is this for? Include the ticket id (e.g. WGRA-MMDDYY-####) or pick a ticket card, then send amount + vendor again."
+          : "Cost capture is not enabled on this server. Set PROPERA_FINANCE_COST_CAPTURE_CHAT=1 on propera-v2 and redeploy.",
+      };
+    } else {
+      staffRun = await handleStaffLifecycleCommand({
+        traceId,
+        staffActorKey: staffContext.staffActorKey,
+        staffRow: staffContext.staff,
+        routerParameter,
+      });
+    }
   }
 
   let complianceRun = null;

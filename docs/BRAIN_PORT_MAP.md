@@ -26,6 +26,19 @@
 
 **Keep docs current:** When you change behavior, update **this file**, **[PROPERA_V2_GAS_EXIT_PLAN.md](./PROPERA_V2_GAS_EXIT_PLAN.md)** (todos + narrative), and **[OUTSIDE_CURSOR.md](./OUTSIDE_CURSOR.md)** if operators must run new SQL or env steps. See *Documentation discipline* at the bottom.
 
+### Access Engine (planned — separate from maintenance brain)
+
+**Not started.** Spec: **[ACCESS_ENGINE_BUILD_PLAN.md](./ACCESS_ENGINE_BUILD_PLAN.md)**.
+
+| Piece | Location (planned) |
+|-------|---------------------|
+| Engine (policy, reservations, state machine) | `src/access/*` |
+| Lock adapters | `src/access/lockAdapter/*` (`noop` pilot) |
+| Portal / staff API | `src/portal/registerPortalRoutes.js` or `registerAccessRoutes.js` |
+| Staff UI | `propera-app` `/access/*` |
+
+Inbound ACCESS_* intents route **beside** `handleInboundCore` — same channel adapters, dedicated domain engine.
+
 ### Portal: preventive / program runs (separate from inbound brain)
 
 **Not** part of `runInboundPipeline` / `handleInboundCore`. Owner-portal HTTP on the same Express app:

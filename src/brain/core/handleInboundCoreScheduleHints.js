@@ -12,6 +12,50 @@ function isPortalCreateTicketRouter(routerParameter) {
   );
 }
 
+/** `channel` from router param or `_portalPayloadJson`. */
+function portalPayloadChannel(routerParameter) {
+  const direct = String(
+    routerParameter && routerParameter._portalChannel ? routerParameter._portalChannel : ""
+  )
+    .trim()
+    .toLowerCase();
+  if (direct) return direct;
+  try {
+    const j = JSON.parse(
+      String(routerParameter && routerParameter._portalPayloadJson ? routerParameter._portalPayloadJson : "{}")
+    );
+    return String(j.channel || "").trim().toLowerCase();
+  } catch (_) {
+    return "";
+  }
+}
+
+/**
+ * Resident portal structured create — no synthetic `# prop apt …` NL intake.
+ */
+function isTenantPortalStructuredCreate(routerParameter) {
+  if (!isPortalCreateTicketRouter(routerParameter)) return false;
+  if (portalPayloadChannel(routerParameter) === "tenant_portal") return true;
+  try {
+    const j = JSON.parse(
+      String(routerParameter && routerParameter._portalPayloadJson ? routerParameter._portalPayloadJson : "{}")
+    );
+    return String(j.actor_type || "").trim().toUpperCase() === "TENANT";
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * PM portal MANAGER create_ticket + tenant_portal structured create (TENANT mode).
+ * Uses `buildStructuredPortalCreateDraft` — not `parseMaintenanceDraftAsync`.
+ */
+function usesStructuredPortalCreateDraft(routerParameter, mode) {
+  if (!isPortalCreateTicketRouter(routerParameter)) return false;
+  if (mode === "MANAGER") return true;
+  return isTenantPortalStructuredCreate(routerParameter);
+}
+
 /**
  * `#` staff capture (same turn as report): `compileTurn` `scheduleRaw`, or `Preferred:` line
  * (aligned with `extractScheduleHintPortalStaff` minus portal JSON).
@@ -63,6 +107,9 @@ function extractScheduleHintPortalStaffMulti(merged, effectiveBody, routerParame
 
 module.exports = {
   isPortalCreateTicketRouter,
+  portalPayloadChannel,
+  isTenantPortalStructuredCreate,
+  usesStructuredPortalCreateDraft,
   extractScheduleHintStaffCapture,
   extractScheduleHintStaffCaptureFromTurn,
   extractScheduleHintPortalStaff,

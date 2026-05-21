@@ -1,13 +1,16 @@
 /**
  * Phase 4 — portal structured `create_ticket` → maintenance fastDraft (or validation failure).
- * Tenant path continues to use `parseMaintenanceDraftAsync` here so dispatch stays one call site.
+ * PM MANAGER + tenant_portal (`channel: tenant_portal`) use structured draft; SMS-style NL parse otherwise.
  */
 
 const { appendEventLog } = require("../../dal/appendEventLog");
 const { emitTimed } = require("../../logging/structuredLog");
 const { buildStructuredPortalCreateDraft } = require("./portalStructuredCreateDraft");
 const { parseMaintenanceDraftAsync } = require("./parseMaintenanceDraft");
-const { isPortalCreateTicketRouter } = require("./handleInboundCoreScheduleHints");
+const {
+  usesStructuredPortalCreateDraft,
+  portalPayloadChannel,
+} = require("./handleInboundCoreScheduleHints");
 const { outgateMeta } = require("./handleInboundCoreMechanics");
 
 /**
@@ -36,13 +39,13 @@ async function buildFastDraftForMaintenanceCore(o) {
     staffMeta,
   } = o;
 
-  if (mode === "MANAGER" && isPortalCreateTicketRouter(p)) {
+  if (usesStructuredPortalCreateDraft(p, mode)) {
     const structured = buildStructuredPortalCreateDraft(p, known, propertiesList);
     if (!structured) {
       await appendEventLog({
         traceId,
         event: "PORTAL_CREATE_VALIDATION_FAILED",
-        payload: { mode },
+        payload: { mode, channel: portalPayloadChannel(p) },
       });
       emitTimed(traceStartMs, {
         level: "warn",

@@ -70,14 +70,16 @@ function buildStructuredPortalCreateDraft(
   }
 
   const propertyCode = resolvePortalPropertyCode(
-    j.property,
+    j.property != null ? j.property : j.property_code,
     knownPropertyCodesUpper,
     propertiesList
   );
   const locationKind = normalizeTargetKindFromPortal(
     j.location_kind != null ? j.location_kind : j.locationKind
   );
-  const unitLabel = String(j.unit != null ? j.unit : "").trim();
+  const unitLabel = String(
+    j.unit != null ? j.unit : j.unit_label != null ? j.unit_label : ""
+  ).trim();
   const unitCatalogRaw = String(
     j.unit_catalog_id != null
       ? j.unit_catalog_id
@@ -85,7 +87,9 @@ function buildStructuredPortalCreateDraft(
         ? j.unitCatalogId
         : ""
   ).trim();
-  const issueText = String(j.message != null ? j.message : "").trim();
+  const issueText = String(
+    j.message != null ? j.message : j.description != null ? j.description : ""
+  ).trim();
   const scheduleRaw = String(
     j.preferredWindow != null ? j.preferredWindow : ""
   ).trim();

@@ -92,6 +92,29 @@ describe("evaluateRouterPrecursor ordering", () => {
     assert.equal(p.compliance, null);
     assert.equal(p.tenantCommand, null);
   });
+  test("staff phone + tenant_portal create_ticket → tenant path (not lifecycle gate)", () => {
+    const p = evaluateRouterPrecursor({
+      parameter: {
+        Body: "noop",
+        From: "+19083380390",
+        _portalAction: "create_ticket",
+        _portalChannel: "tenant_portal",
+        _portalPayloadJson: JSON.stringify({
+          channel: "tenant_portal",
+          actor_type: "TENANT",
+          action: "create_ticket",
+          property: "PENN",
+          unit: "14B",
+          message: "Replace HVAC Filter",
+        }),
+      },
+      staffContext: { isStaff: true, staffActorKey: "+19083380390" },
+      transportChannel: "portal",
+    });
+    assert.equal(p.outcome, "PRECURSOR_EVALUATED");
+    assert.equal(p.compliance, null);
+    assert.equal(p.tenantCommand, null);
+  });
   test("staff empty body + enriched media narrative → maintenance media intake (Telegram)", () => {
     const p = evaluateRouterPrecursor({
       parameter: {

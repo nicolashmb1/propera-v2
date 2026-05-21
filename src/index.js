@@ -33,6 +33,8 @@ const { runInboundPipeline } = require("./inbound/runInboundPipeline");
 const { registerDashboardRoutes } = require("./dashboard/registerDashboard");
 const { registerPortalReadRoutes } = require("./portal/registerPortalRoutes");
 const { registerMeterRunRoutes } = require("./meterRuns/registerMeterRunRoutes");
+const { registerTenantRoutes } = require("./tenant/registerTenantRoutes");
+const { registerAccessRoutes } = require("./portal/registerAccessRoutes");
 const {
   buildInboundKey,
   isSeen,
@@ -49,6 +51,8 @@ app.use(requestContext);
 registerDashboardRoutes(app);
 registerPortalReadRoutes(app);
 registerMeterRunRoutes(app);
+registerTenantRoutes(app);
+registerAccessRoutes(app);
 
 app.post("/internal/cron/lifecycle-timers", async (req, res) => {
   const secret = lifecycleCronSecret();

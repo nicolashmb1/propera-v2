@@ -20,7 +20,7 @@ const {
 } = require("../shared/commonArea");
 const { resolveLocationTarget } = require("../location/resolveLocationTarget");
 const {
-  isPortalCreateTicketRouter,
+  usesStructuredPortalCreateDraft,
   extractScheduleHintPortalStaffMulti,
   extractScheduleHintStaffCaptureFromTurn,
 } = require("./handleInboundCoreScheduleHints");
@@ -170,7 +170,7 @@ async function runCoreMaintenanceMultiTurn(x) {
     );
     const restartCommon = isCommonAreaLocation(restartLocType);
     const emRestart =
-      mode === "MANAGER" && isPortalCreateTicketRouter(p)
+      usesStructuredPortalCreateDraft(p, mode)
         ? { emergency: "No", emergencyType: "" }
         : inferEmergency(restartedIssueFin || restarted.draft_issue);
     const recNew = recomputeDraftExpected({
@@ -223,7 +223,7 @@ async function runCoreMaintenanceMultiTurn(x) {
   );
   const commonAreaDraft = isCommonAreaLocation(draftLocationType);
   const em =
-    mode === "MANAGER" && isPortalCreateTicketRouter(p)
+    usesStructuredPortalCreateDraft(p, mode)
       ? { emergency: "No", emergencyType: "" }
       : inferEmergency(issueForFinalize || merged.draft_issue);
   const skipScheduling = em.emergency === "Yes" || commonAreaDraft;
@@ -457,11 +457,11 @@ async function runCoreMaintenanceMultiTurn(x) {
         : `Ticket logged: ${fin.ticketId} (${merged.draft_property} ${commonAreaDraftFinal ? "COMMON AREA" : unitResolvedMt}).`;
 
     const scheduleHintPortalMt =
-      mode === "MANAGER" && isPortalCreateTicketRouter(p)
+      usesStructuredPortalCreateDraft(p, mode)
         ? extractScheduleHintPortalStaffMulti(merged, effectiveBody, p)
         : "";
     const skipSchedulingAfterFinalize =
-      skipScheduling || (mode === "MANAGER" && isPortalCreateTicketRouter(p));
+      skipScheduling || (usesStructuredPortalCreateDraft(p, mode));
 
     if (skipSchedulingAfterFinalize) {
       if (scheduleHintPortalMt) {
@@ -486,7 +486,7 @@ async function runCoreMaintenanceMultiTurn(x) {
           path: "multi_turn",
           emergency: em.emergency === "Yes",
           portalStaffCreate:
-            mode === "MANAGER" && isPortalCreateTicketRouter(p) ? true : undefined,
+            usesStructuredPortalCreateDraft(p, mode) ? true : undefined,
         }),
       };
     }

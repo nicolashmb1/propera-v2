@@ -124,24 +124,34 @@ function buildRouterParameterFromPortal(payload) {
   /** @type {string} */
   let mediaJson = "";
 
+  const portalChannel = String(p.channel || "").trim().toLowerCase();
+  const portalActorType = String(p.actor_type || p.actorType || "").trim().toUpperCase();
+  const isTenantPortalStructured =
+    portalChannel === "tenant_portal" || portalActorType === "TENANT";
+
   if (action === "create_ticket") {
-    const prop = String(p.property || "").trim();
-    const unit = String(p.unit || "").trim();
-    const cat = String(p.category || "").trim();
-    const msg = String(p.message || "").trim();
-    const pw = String(p.preferredWindow || "").trim();
-    const lk = String(
-      p.location_kind != null ? p.location_kind : p.locationKind != null ? p.locationKind : "unit"
-    )
-      .trim()
-      .toLowerCase();
-    const isCommonLike = lk === "common_area" || lk === "property" || lk === "commonarea";
-    if (isCommonLike) {
-      body = `# ${prop} ${cat}: ${msg}`.replace(/\s+/g, " ").trim();
+    if (isTenantPortalStructured) {
+      /** Structured signal only — brain uses `_portalPayloadJson`, not NL parse on Body. */
+      body = "noop";
     } else {
-      body = `# ${prop} apt ${unit} ${cat}: ${msg}`.replace(/\s+/g, " ").trim();
+      const prop = String(p.property || p.property_code || "").trim();
+      const unit = String(p.unit || p.unit_label || "").trim();
+      const cat = String(p.category || "").trim();
+      const msg = String(p.message || p.description || "").trim();
+      const pw = String(p.preferredWindow || "").trim();
+      const lk = String(
+        p.location_kind != null ? p.location_kind : p.locationKind != null ? p.locationKind : "unit"
+      )
+        .trim()
+        .toLowerCase();
+      const isCommonLike = lk === "common_area" || lk === "property" || lk === "commonarea";
+      if (isCommonLike) {
+        body = `# ${prop} ${cat}: ${msg}`.replace(/\s+/g, " ").trim();
+      } else {
+        body = `# ${prop} apt ${unit} ${cat}: ${msg}`.replace(/\s+/g, " ").trim();
+      }
+      if (pw) body += "\nPreferred: " + pw.trim();
     }
-    if (pw) body += "\nPreferred: " + pw.trim();
   } else if (action === "portal_chat") {
     /**
      * Propera app command bar — adapter only. Client sends final text (e.g. `#…` for staff capture)
@@ -183,6 +193,15 @@ function buildRouterParameterFromPortal(payload) {
     throw new Error("buildRouterParameterFromPortal: empty body");
   }
 
+  const portalChatMode =
+    action === "portal_chat"
+      ? String(p.portal_chat_mode || p.portalChatMode || "").trim().toLowerCase()
+      : "";
+
+  const costCtx = p.portal_cost_context ?? p.portalCostContext;
+  const costCtxJson =
+    costCtx && typeof costCtx === "object" ? JSON.stringify(costCtx) : "";
+
   return {
     _mode: "",
     _internal: "",
@@ -193,7 +212,11 @@ function buildRouterParameterFromPortal(payload) {
     _mediaJson: mediaJson,
     _portalAction: action,
     _portalPayloadJson: JSON.stringify(p),
-    _tenantPhoneE164: String(p.tenantPhoneE164 || "").trim(),
+    _portalChannel: portalChannel || (isTenantPortalStructured ? "tenant_portal" : ""),
+    _portalActorType: portalActorType,
+    _tenantPhoneE164: String(p.tenantPhoneE164 || p.phone || actor).trim(),
+    _portalChatMode: portalChatMode,
+    _portalCostContextJson: costCtxJson,
   };
 }
 
