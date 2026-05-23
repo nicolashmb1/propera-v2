@@ -125,7 +125,7 @@ async function parseMaintenanceDraftAsync(bodyTrim, knownPropertyCodesUpper, opt
       knownPropertyCodesUpper,
       opts && Array.isArray(opts.propertiesList) ? opts.propertiesList : []
     );
-    return { ...d, structuredIssues: null };
+    return { ...d, structuredIssues: null, safety: null };
   }
   const { compileTurn } = require("../intake/compileTurn");
   const tf = await compileTurn(
@@ -159,6 +159,14 @@ async function parseMaintenanceDraftAsync(bodyTrim, knownPropertyCodesUpper, opt
     unitLabel: String(tf.unit || "").trim(),
     issueText,
     structuredIssues,
+    safety:
+      tf.safety && tf.safety.isEmergency
+        ? {
+            isEmergency: true,
+            emergencyType: String(tf.safety.emergencyType || "").trim(),
+            skipScheduling: !!tf.safety.skipScheduling,
+          }
+        : null,
     scheduleRaw:
       tf && tf.schedule && tf.schedule.raw ? String(tf.schedule.raw).trim() : "",
     openerNext:

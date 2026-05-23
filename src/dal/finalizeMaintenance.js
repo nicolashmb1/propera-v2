@@ -132,6 +132,8 @@ function buildTicketAttachmentsFromRouterParameter(routerParameter) {
  * @param {string} [o.reportSourcePhone] — report context only (not persisted as tenant phone for common-area)
  * @param {string} [o.turnoverId] — optional `public.turnovers.id`
  * @param {string} [o.turnoverItemId] — optional `public.turnover_items.id`
+ * @param {string} [o.programRunId] — optional `public.program_runs.id`
+ * @param {string} [o.programLineId] — optional `public.program_lines.id`
  * @param {Record<string, string>} [o.portalTicketAudit] — `changed_by_actor_*` when portal passes explicit audit (e.g. turnover create)
  */
 async function finalizeMaintenanceDraft(o) {
@@ -190,6 +192,14 @@ async function finalizeMaintenanceDraft(o) {
     serviceNotesCol = portalPresentation.serviceNote;
     const urgUpper = String(portalPresentation.urgency || "").toUpperCase();
     priorityCol = urgUpper === "URGENT" ? "URGENT" : "";
+  } else if (o.emergencyOverride) {
+    emergency = "Yes";
+    emergencyType = String(o.emergencyOverride.emergencyType || "").trim();
+    categoryLabel = localCategoryFromText(o.issueText);
+    urgencyCol = "Normal";
+    ticketStatus = "OPEN";
+    priorityCol = "";
+    serviceNotesCol = "";
   } else {
     const inf = inferEmergency(o.issueText);
     emergency = inf.emergency;
@@ -363,6 +373,8 @@ async function finalizeMaintenanceDraft(o) {
 
     turnover_id: o.turnoverId || null,
     turnover_item_id: o.turnoverItemId || null,
+    program_run_id: o.programRunId || null,
+    program_line_id: o.programLineId || null,
     ...mergeChangedByIntoTicketPatch({}, ticketAudit),
   };
 
@@ -404,6 +416,7 @@ async function finalizeMaintenanceDraft(o) {
     location_label_snapshot: String(o.locationLabelSnapshot || "").trim(),
     unit_catalog_id: o.unitCatalogId || null,
     turnover_id: o.turnoverId || null,
+    program_run_id: o.programRunId || null,
   });
 
   if (wErr) return { ok: false, error: "work_item:" + wErr.message };

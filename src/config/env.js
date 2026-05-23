@@ -260,6 +260,11 @@ function portalApiToken() {
   ).trim();
 }
 
+/** Open deck day chart `GET /api/portal/tickets/day-curve` — opt-in (`PROPERA_OPEN_DECK_DAY_CHART_ENABLED=1`). */
+function openDeckDayChartEnabled() {
+  return env("PROPERA_OPEN_DECK_DAY_CHART_ENABLED", "") === "1";
+}
+
 /** Turnover Engine `/api/portal/turnovers*` — opt-in until GA (`PROPERA_TURNOVER_ENGINE_ENABLED=1`). */
 function turnoverEngineEnabled() {
   return env("PROPERA_TURNOVER_ENGINE_ENABLED", "") === "1";
@@ -363,6 +368,11 @@ function tenantDevOtpCode() {
   return /^\d{6}$/.test(c) ? c : "000000";
 }
 
+/** Outgate Phase 4 — property header, SMS footer, Telegram Markdown at dispatch. */
+function outgateChannelRenderEnabled() {
+  return envFlagTrue("OUTGATE_CHANNEL_RENDER", true);
+}
+
 module.exports = {
   env,
   nodeEnv: env("NODE_ENV", "development"),
@@ -386,6 +396,7 @@ module.exports = {
   openaiApiKey,
   openaiModelExtract,
   intakeMediaOcrEnabled,
+  outgateChannelRenderEnabled,
   intakeMediaSignalEnabled,
   intakeMediaVisionEnabled,
   openaiModelVision,
@@ -396,6 +407,7 @@ module.exports = {
   dashboardToken,
   lifecycleCronSecret,
   portalApiToken,
+  openDeckDayChartEnabled,
   turnoverEngineEnabled,
   accessEngineEnabled,
   accessCredentialSecret,

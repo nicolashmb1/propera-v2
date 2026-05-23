@@ -100,10 +100,10 @@ Checklist / progress rows.
 
 | expansion_type | Used for | Line generation |
 |----------------|----------|-----------------|
-| `UNIT_PLUS_COMMON` | HVAC, water heater, filters, smoke detectors | Active units from roster + **`common_paint_scopes`** as **COMMON_AREA** lines when set on the property; else one **“Common Area”** line |
-| `FLOOR_BASED` | Painting, hallway cleaning, floor inspections | Floors from `program_expansion_profile.floor_paint_scopes`, then **common-area scopes** from `common_paint_scopes` (same card as Properties → building structure), then template defaults |
-| `COMMON_AREA_ONLY` | Lobby repair, exterior lights, boiler room | Common-area lines only (`scope_type` **`COMMON_AREA`**) |
-| `CUSTOM_MANUAL` | One-offs | Minimal or empty initial lines; staff add lines later (later phase) |
+| `UNIT_PLUS_COMMON` | HVAC, water heater, filters, smoke detectors | Active units from roster + **common-area labels** merged from **`program_expansion_profile.common_paint_scopes`** and active **`property_locations`** (`kind = common_area`); else one **“Common Area”** line |
+| `FLOOR_BASED` | Painting, hallway cleaning, floor inspections | Floors from `program_expansion_profile.floor_paint_scopes`, then **common-area labels** (profile + **`property_locations`**, same merge as above), then template defaults |
+| `COMMON_AREA_ONLY` | Lobby repair, exterior lights, boiler room | Common-area lines only (`scope_type` **`COMMON_AREA`**) from the same merged label list |
+| `CUSTOM_MANUAL` | One-offs | No lines at create; staff **add lines** via portal (`POST …/lines`) |
 
 **Pattern:** resolve **definition** (legacy `program_templates` row **or** `saved_programs` row **or** ephemeral preview shape) → `expansion_type` → **`expandProgramLines`** (no second expansion implementation).
 
@@ -180,6 +180,11 @@ propera-app **does not** write DB directly. It calls V2; V2 validates, persists,
 | Preview expansion (no DB) | POST | `/api/portal/program-runs/preview` |
 | Start program | POST | `/api/portal/program-runs` |
 | Delete run + lines | DELETE | `/api/portal/program-runs/:id` |
+| **Add checklist line** | POST | `/api/portal/program-runs/:id/lines` — body `{ scopeType, scopeLabel, sortOrder? }`. When the property has building structure (roster units + `program_expansion_profile` + `property_locations`), labels must match that list unless **`scopeType` is `SITE`** (custom one-off). Portal UI uses a structure picker + **Custom (other)**. |
+| **Create ticket from line** | POST | `/api/portal/program-lines/:id/create-ticket` — body `{ issueText, category?, urgency? }`; **`finalizeMaintenanceDraft`** (not `handleInboundCore`); sets `program_lines.linked_ticket_*` + `tickets.program_*`. Requires migration **`060`**. propera-app proxies with session Bearer JWT. |
+| **Remove checklist line** | DELETE | `/api/portal/program-lines/:id` (line row only, not the run) |
+| **Reorder lines** | PATCH | `/api/portal/program-runs/:id/lines/reorder` — body `{ lineIds: uuid[] }` full permutation |
+| List runs (filtered) | GET | `/api/portal/program-runs?propertyCode=&status=&inProgress=true` |
 | Mark line complete | PATCH | `/api/portal/program-lines/:id/complete` |
 | Reopen line | PATCH | `/api/portal/program-lines/:id/reopen` |
 
@@ -192,7 +197,7 @@ or
 
 **POST body (preview):** one of templateKey / savedProgramId / expansionType bodies above; optional **`includedScopeLabels`**.
 
-**PATCH complete body:** `{ "completedBy": "STAFF_NICK", "notes": "", "proofPhotoUrls": ["https://…"] }` — **`notes`** / **`proofPhotoUrls`** optional. **`proofPhotoUrls`** is an array of public **http(s)** image URLs (max **12**); staff uploads images via **propera-app** (same **`pm-attachments`** storage as ticket photos), then sends URLs on complete. Reopening a line clears **`proof_photo_urls`**.
+**PATCH complete body:** `{ "completedBy": "STAFF_NICK", "notes": "", "proofPhotoUrls": ["https://…"] }` — **`notes`** / **`proofPhotoUrls`** optional. **`notes`** (max **2000** chars) is shown on completed lines in **propera-app** `/preventive`. **`proofPhotoUrls`** is an array of public **http(s)** image URLs (max **12**); staff uploads images via **propera-app** (same **`pm-attachments`** storage as ticket photos), then sends URLs on complete. Reopening a line clears **`notes`** and **`proof_photo_urls`**.
 
 Auth: same portal token pattern as existing portal routes (`X-Propera-Portal-Token` / `PROPERA_PORTAL_TOKEN`).
 
@@ -217,6 +222,7 @@ Auth: same portal token pattern as existing portal routes (`X-Propera-Portal-Tok
 - Main column scrolls as a single **`page-scroll`** region (header through run list) so long previews and area lists are not clipped.
 - **Filter runs** by property; **Saved programs** strip (desktop) lists active definitions with **Start run**; run cards open right **checklist** panel (complete/reopen per line; **completed_at** / **completed_by** on lines).
 - **Vendor per line (2026-05-18):** optional **`assigned_vendor_id`** / display snapshot on `program_lines`; portal **`PATCH /api/portal/program-lines/:id/vendor`**; propera-app `/preventive` vendor dropdown (requires **`vendors`** table — migration **046**).
+- **Completion notes:** optional textarea per open line; persisted on complete and shown on completed lines (reopen clears).
 - **Proof of work:** optional photos per open line (upload to **`pm-attachments`**, then stored on complete as **`proof_photo_urls`**); thumbnails on completed lines; reopen clears photos. **Mobile:** file input must stay focusable (avoid `display:none` only); accept images when **`file.type` is empty** but extension looks like a photo (iOS camera roll).
 - **Delete program run** from list or panel where portal role allows (V2 + app gate).
 
@@ -234,12 +240,15 @@ Auth: same portal token pattern as existing portal routes (`X-Propera-Portal-Tok
 | **`saved_programs` + XOR `program_runs` + preview ephemeral + app proxies** | Done (`022_saved_programs.sql`, DAL, portal, propera-app) |
 | **Line completion proof photos** | Done (`040_program_lines_proof_photos.sql`, DAL + portal + **`/preventive`**) |
 | **Per-line vendor assignment** | Done (`046_vendors_and_program_line_vendor.sql`, `setProgramLineVendor`, portal PATCH, **`/preventive`**) |
+| **Mutable lines (add / remove / reorder)** | Done — portal routes + **`/preventive`** UI (`059` not required for lines; uses existing `program_lines`) |
+| **Program Activity timeline** | Done — `059_program_timeline_v1.sql`, `program_timeline_events`, DAL writers on run/line mutations |
+| **Run list filters** | Done — `listProgramRuns({ propertyCode, status, inProgress })` + app filter chips |
 
 ---
 
 ## Strategic reuse — building structure beyond preventive (roadmap)
 
-**What exists today:** `properties.program_expansion_profile` (JSON: **`floor_paint_scopes`**, **`common_paint_scopes`**) is the **per-property building model** maintained once in the owner portal (**Preventive · Building structure**). It feeds **`expandProgramLines`** for **program runs** (preview, optional **`includedScopeLabels`** on create) and keeps preventive checklists aligned with the real building.
+**What exists today:** `properties.program_expansion_profile` (JSON: **`floor_paint_scopes`**, **`common_paint_scopes`**) is edited in the owner portal (**Preventive · Building structure**). Saving **`common_paint_scopes`** syncs rows in **`property_locations`** (`kind = common_area`). **`expandProgramLines`** merges profile labels with active **`property_locations`** on preview/create so preventive checklists match ticket/access location labels even when profile JSON was empty or stale.
 
 **Product direction (partially or not yet wired in code):** the same structured scopes are intended to **assist other flows** without duplicating ad-hoc property lists:
 

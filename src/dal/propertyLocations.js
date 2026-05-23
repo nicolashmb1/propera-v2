@@ -136,8 +136,49 @@ async function syncCommonAreaLocationsFromLabels(sb, propertyCodeUpper, labelsOr
   }
 }
 
+/**
+ * Active common-area labels for preventive expansion (sorted by sort_order, label).
+ * @param {string} propertyCode
+ * @returns {Promise<string[]>}
+ */
+/**
+ * @param {import('@supabase/supabase-js').SupabaseClient} sb
+ * @param {string} propertyCodeUpper
+ * @param {string} label
+ * @returns {Promise<object|null>}
+ */
+async function findActiveCommonAreaByLabel(sb, propertyCodeUpper, label) {
+  const code = String(propertyCodeUpper || "").trim().toUpperCase();
+  const want = String(label || "").trim().toLowerCase();
+  if (!sb || !code || !want) return null;
+
+  const { data, error } = await sb
+    .from("property_locations")
+    .select("id, property_code, kind, label, active")
+    .eq("property_code", code)
+    .eq("kind", "common_area")
+    .eq("active", true);
+
+  if (error || !data) return null;
+  for (const row of data) {
+    if (String(row.label || "").trim().toLowerCase() === want) return row;
+  }
+  return null;
+}
+
+async function loadActiveCommonAreaLabelsForProperty(propertyCode) {
+  const out = await listPropertyLocationsForPortal(propertyCode);
+  if (!out.ok || !Array.isArray(out.locations)) return [];
+  return out.locations
+    .filter((r) => String(r.kind || "").trim() === "common_area")
+    .map((r) => String(r.label || "").trim())
+    .filter(Boolean);
+}
+
 module.exports = {
   listPropertyLocationsForPortal,
   getActivePropertyLocationById,
+  findActiveCommonAreaByLabel,
   syncCommonAreaLocationsFromLabels,
+  loadActiveCommonAreaLabelsForProperty,
 };

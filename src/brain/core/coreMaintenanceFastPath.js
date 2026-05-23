@@ -15,7 +15,10 @@ const {
   usesStructuredPortalCreateDraft,
   extractScheduleHintStaffCapture,
   extractScheduleHintPortalStaff,
+  extractScheduleHintTenant,
 } = require("./handleInboundCoreScheduleHints");
+const { MIN_SCHEDULE_LEN } = require("../../dal/ticketPreferredWindow");
+const { buildMaintenanceReceipt } = require("../../outgate/buildMaintenanceReceipt");
 const { reconcileFinalizeTicketRows } = require("./finalizeTicketGroups");
 const { appendPortalStaffScheduleNote } = require("./appendPortalStaffScheduleNote");
 const {
@@ -153,7 +156,9 @@ async function runCoreMaintenanceFastPath(x) {
   const emFast =
     usesStructuredPortalCreateDraft(p, mode)
       ? { emergency: "No", emergencyType: "" }
-      : inferEmergency(fastDraft.issueText);
+      : fastDraft.safety && fastDraft.safety.isEmergency
+        ? { emergency: "Yes", emergencyType: String(fastDraft.safety.emergencyType || "") }
+        : inferEmergency(fastDraft.issueText);
   const scheduleHintPortalFast =
     usesStructuredPortalCreateDraft(p, mode)
       ? extractScheduleHintPortalStaff(fastDraft, effectiveBody, p)
@@ -176,6 +181,10 @@ async function runCoreMaintenanceFastPath(x) {
   const mergedFast =
     String(fastDraft.issueText || "").trim() || String(effectiveBody || "").trim();
   const turnoverIdsFast = readTurnoverIdsFromPortalPayload(p);
+  const _emergencyOverrideFast =
+    fastDraft.safety && fastDraft.safety.isEmergency
+      ? { emergencyType: String(fastDraft.safety.emergencyType || "") }
+      : undefined;
   const { rows: groupsFast } = reconcileFinalizeTicketRows({
     structuredIssues: fastDraft.structuredIssues,
     mergedIssueText: mergedFast,
@@ -189,6 +198,7 @@ async function runCoreMaintenanceFastPath(x) {
       propertyCode: fastDraft.propertyCode,
       unitLabel: commonAreaFast ? "" : unitLabelResolved,
       issueText: g.issueText,
+      emergencyOverride: _emergencyOverrideFast,
       actorKey: canonicalBrainActorKey,
       mode,
       locationType: fastLocationType,
@@ -224,10 +234,16 @@ async function runCoreMaintenanceFastPath(x) {
     "core_finalized_fast"
   );
 
-  let receiptFast =
-    finsFast.length > 1
-      ? `Tickets logged: ${finsFast.map((x) => x.ticketId).join(", ")} (${fastDraft.propertyCode} ${commonAreaFast ? "COMMON AREA" : unitLabelResolved}).`
-      : `Ticket logged: ${fin.ticketId} (${fastDraft.propertyCode} ${commonAreaFast ? "COMMON AREA" : unitLabelResolved}).`;
+  const receiptBuilt = buildMaintenanceReceipt({
+    fins: finsFast,
+    groups: groupsFast,
+    emergency: emFast.emergency === "Yes",
+    commonArea: commonAreaFast,
+    unitLabel: unitLabelResolved,
+    locationLabelSnapshot: tgt.location_label_snapshot || "",
+  });
+  let receiptFast = receiptBuilt.body;
+  const receiptTemplateKey = receiptBuilt.templateKey;
 
   if (skipSchedulingFast) {
     if (scheduleHintPortalFast) {
@@ -248,7 +264,7 @@ async function runCoreMaintenanceFastPath(x) {
       path: "fast",
       replyText: receiptFast,
       ...staffMeta(),
-      ...outgateMeta("MAINTENANCE_RECEIPT_ONLY", {
+      ...outgateMeta(receiptTemplateKey, {
         path: "fast",
         emergency: emFast.emergency === "Yes",
         portalStaffCreate:
@@ -275,6 +291,44 @@ async function runCoreMaintenanceFastPath(x) {
     });
   }
 
+  const tenantSchedHint = extractScheduleHintTenant(fastDraft, null, effectiveBody);
+  if (String(tenantSchedHint).trim().length >= MIN_SCHEDULE_LEN) {
+    receiptFast = await appendPortalStaffScheduleNote(
+      receiptFast,
+      tenantSchedHint,
+      fin.ticketKey,
+      traceId,
+      traceStartMs
+    );
+    await enterScheduleWaitAndLogTicketCreatedAskSchedule({
+      setScheduleWaitLike,
+      canonicalBrainActorKey,
+      fin,
+      waitOpts: {
+        ticketKey: fin.ticketKey,
+        draft_issue: fastDraft.issueText,
+        draft_property: fastDraft.propertyCode,
+        draft_unit: commonAreaFast ? "" : unitLabelResolved,
+      },
+      traceId,
+      traceStartMs,
+      path: "fast",
+    });
+    return {
+      ok: true,
+      brain: "core_finalized",
+      draft: fastDraft,
+      finalize: fin,
+      path: "fast",
+      replyText: receiptFast,
+      ...staffMeta(),
+      ...outgateMeta(receiptTemplateKey, {
+        path: "fast",
+        tenant_inline_schedule: true,
+      }),
+    };
+  }
+
   await enterScheduleWaitAndLogTicketCreatedAskSchedule({
     setScheduleWaitLike,
     canonicalBrainActorKey,
@@ -292,8 +346,12 @@ async function runCoreMaintenanceFastPath(x) {
 
   return coreInboundResult(
     staffMeta,
-    maintenanceTemplateKeyForNext("SCHEDULE"),
-    { promptComposite: "after_receipt", path: "fast" },
+    receiptTemplateKey,
+    {
+      promptComposite: "after_receipt",
+      path: "fast",
+      scheduleTemplateKey: maintenanceTemplateKeyForNext("SCHEDULE"),
+    },
     {
       ok: true,
       brain: "core_finalized",

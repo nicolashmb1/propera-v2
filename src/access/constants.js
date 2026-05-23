@@ -19,6 +19,7 @@ const RESERVATION_CHANNELS = new Set([
   "whatsapp",
   "telegram",
   "tenant_portal",
+  "qr_portal",
   "portal",
   "staff_override",
 ]);

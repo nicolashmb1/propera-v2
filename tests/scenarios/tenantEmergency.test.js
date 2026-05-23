@@ -56,8 +56,9 @@ describe("scenarios — tenant emergency (in-memory)", { concurrency: false }, (
       "no pre-filled schedule suggestion in emergency receipt"
     );
     assert.ok(
-      r.coreRun.outgate && r.coreRun.outgate.templateKey === "MAINTENANCE_RECEIPT_ONLY",
-      "outgate receipt-only for skip-scheduling path"
+      r.coreRun.outgate &&
+        r.coreRun.outgate.templateKey === "MAINTENANCE_RECEIPT_EMERGENCY",
+      "outgate emergency receipt template"
     );
   });
 });

@@ -9,7 +9,7 @@ const { emit } = require("../logging/structuredLog");
 const API = "https://api.telegram.org";
 
 /**
- * @param {{ chatId: string, text: string, traceId?: string | null }} opts
+ * @param {{ chatId: string, text: string, traceId?: string | null, parseMode?: string | null }} opts
  * @returns {Promise<{ ok: boolean, error?: string, messageId?: number }>}
  */
 async function sendTelegramMessage(opts) {
@@ -23,17 +23,21 @@ async function sendTelegramMessage(opts) {
     return { ok: false, error: "missing_chat_or_text" };
   }
 
+  const parseMode = String(opts.parseMode || "").trim();
+  const payload = {
+    chat_id: chatId,
+    text,
+    disable_web_page_preview: true,
+  };
+  if (parseMode) payload.parse_mode = parseMode;
+
   const url = `${API}/bot${encodeURIComponent(token)}/sendMessage`;
   let res;
   try {
     res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        disable_web_page_preview: true,
-      }),
+      body: JSON.stringify(payload),
     });
   } catch (err) {
     const msg = err && err.message ? String(err.message) : "fetch_failed";

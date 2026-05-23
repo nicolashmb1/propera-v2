@@ -33,9 +33,16 @@ const { handleInboundCore } = require("../brain/core/handleInboundCore");
 const {
   buildOutboundIntent,
   renderOutboundIntent,
+  renderForChannel,
   dispatchOutbound,
 } = require("../outgate");
 const { messageSpecForComplianceBrain } = require("../outgate/messageSpecs");
+const { resolveOutgatePropertyDisplayName } = require("../outgate/resolveOutgatePropertyDisplayName");
+const {
+  isFirstTenantOutboundToday,
+  markTenantOutboundToday,
+} = require("../dal/tenantOutboundDayMark");
+const { outgateChannelRenderEnabled } = require("../config/env");
 const { CHANNEL_TELEGRAM } = require("../signal/inboundSignal");
 const { coreEnabled } = require("../config/env");
 const { complianceSmsOnly } = require("./transportCompliance");
@@ -524,19 +531,76 @@ async function runInboundPipeline(o) {
 
   const rendered = renderOutboundIntent({ intent, messageSpec });
 
+  let channelBody = rendered.body;
+  let channelMeta = null;
+  let telegramParseMode = null;
+  let markedFirstOutboundToday = false;
+
+  if (
+    rendered.body &&
+    outgateChannelRenderEnabled() &&
+    transportChannel !== "portal"
+  ) {
+    const tenantActorForMark = String(
+      routerParameter._canonicalBrainActorKey ||
+        routerParameter._phoneE164 ||
+        actorFrom ||
+        ""
+    ).trim();
+    const firstToday =
+      audience === "tenant" && tenantActorForMark
+        ? await isFirstTenantOutboundToday(tenantActorForMark)
+        : false;
+    const propertyDisplayName =
+      audience === "tenant" ? await resolveOutgatePropertyDisplayName(coreRun) : "";
+
+    const ch = renderForChannel({
+      transportChannel,
+      body: rendered.body,
+      audience,
+      includeFirstContactExtras: firstToday,
+      propertyDisplayName,
+    });
+    channelBody = ch.body;
+    channelMeta = ch.meta;
+    telegramParseMode = ch.parseMode;
+    markedFirstOutboundToday = firstToday;
+  }
+
   let outbound = null;
-  if (rendered.body) {
+  if (channelBody) {
     outbound = await dispatchOutbound({
       traceId,
       transportChannel,
-      body: rendered.body,
+      body: channelBody,
       telegramSignal: signal,
       twilioTo: actorFrom,
+      telegramParseMode,
       dispatchMeta: {
         intentType,
-        outgate: rendered.meta,
+        outgate: {
+          ...(rendered.meta || {}),
+          ...(channelMeta || {}),
+        },
       },
     });
+    if (
+      channelBody &&
+      markedFirstOutboundToday &&
+      audience === "tenant" &&
+      channelMeta &&
+      (channelMeta.smsComplianceFooter || channelMeta.propertyHeader)
+    ) {
+      const tenantActorForMark = String(
+        routerParameter._canonicalBrainActorKey ||
+          routerParameter._phoneE164 ||
+          actorFrom ||
+          ""
+      ).trim();
+      if (tenantActorForMark) {
+        await markTenantOutboundToday(tenantActorForMark);
+      }
+    }
   }
 
   const brain = resolveDefaultBrain({
@@ -580,6 +644,8 @@ async function runInboundPipeline(o) {
     precursor,
     staffContext,
     outbound,
+    channelRenderedBody: channelBody || rendered.body || "",
+    channelRenderMeta: channelMeta,
     json: {
       ok: pipelineHttpOk,
       brain,
@@ -625,9 +691,18 @@ async function runInboundPipeline(o) {
         ? {
             ok: outbound.ok,
             error: outbound.error || null,
-            outgate: rendered.body ? rendered.meta : null,
+            body: channelBody || rendered.body || "",
+            outgate: rendered.body
+              ? { ...rendered.meta, ...(channelMeta || {}) }
+              : null,
           }
-        : { skipped: true, outgate: rendered.body ? rendered.meta : null },
+        : {
+            skipped: true,
+            body: channelBody || rendered.body || "",
+            outgate: rendered.body
+              ? { ...rendered.meta, ...(channelMeta || {}) }
+              : null,
+          },
     },
   };
 }

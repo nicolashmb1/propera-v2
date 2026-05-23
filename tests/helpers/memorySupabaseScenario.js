@@ -43,6 +43,7 @@ function tableKey(tableName) {
     property_locations: "property_locations",
     turnovers: "turnovers",
     turnover_items: "turnover_items",
+    tenant_outbound_day_mark: "tenant_outbound_day_mark",
   };
   return map[tableName] || null;
 }
@@ -69,6 +70,7 @@ function createScenarioMemorySupabase(seed) {
     property_locations: (seed.property_locations || []).map((r) => ({ ...r })),
     turnovers: (seed.turnovers || []).map((r) => ({ ...r })),
     turnover_items: (seed.turnover_items || []).map((r) => ({ ...r })),
+    tenant_outbound_day_mark: (seed.tenant_outbound_day_mark || []).map((r) => ({ ...r })),
   };
 
   function rowsFor(tableName) {

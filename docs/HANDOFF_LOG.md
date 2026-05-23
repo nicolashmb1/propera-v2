@@ -7,6 +7,59 @@
 
 ---
 
+## 2026-05-21 — Preventive P2: program line → maintenance ticket bridge
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **Migration 060** | `program_lines.linked_ticket_*`; `tickets.program_run_id` / `program_line_id` |
+| **V2** | `createTicketFromProgramLine.js` → `finalizeMaintenanceDraft` (turnover pattern) |
+| **Portal** | `POST /api/portal/program-lines/:id/create-ticket` |
+| **propera-app** | Report issue modal + Ticket link (`/tickets?ticket=…`) |
+| **Timeline** | `ticket_linked` event kind |
+
+### Ops
+
+Apply **`060_program_line_ticket_bridge.sql`** after **059**. Restart V2.
+
+---
+
+## 2026-05-21 — Preventive P1: mutable lines + Activity timeline + run filters
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **Migration 059** | `program_timeline_events` — append-only Activity |
+| **V2 DAL** | `addProgramLine`, `deleteProgramLine`, `reorderProgramLines`; timeline on all run/line mutations; `listProgramRuns` filters |
+| **Portal routes** | `POST …/lines`, `DELETE program-lines/:id`, `PATCH …/reorder`; `GET program-runs?propertyCode&status&inProgress` |
+| **propera-app** | `/preventive` — add/remove/reorder lines, Activity panel, status filter chips |
+| **Tests** | `programLineFlex.test.js` |
+
+### Ops
+
+Apply **`059_program_timeline_v1.sql`** in Supabase. Restart V2. Timeline is empty for old runs until new actions occur.
+
+---
+
+## 2026-05-21 — Preventive: completion notes UI + canonical common-area expansion
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **propera-app `/preventive`** | Optional **completion notes** per open line (sent on Complete); shown on completed lines |
+| **V2 expansion** | `expandProgramLines` merges **`common_paint_scopes`** with active **`property_locations`** (`common_area`); `buildProgramLineSpecs` loads canonical labels |
+| **Tests** | `expandProgramLines.test.js` — merge + fallback cases |
+| **Docs** | `PM_PROGRAM_ENGINE_V1.md` — expansion merge + notes UI |
+
+### Ops
+
+No new migration. Restart V2 after pull if running. Refresh preventive checklist to see notes on newly completed lines.
+
+---
+
 ## 2026-05-21 — Access Engine V1 slice (schema + staff cockpit)
 
 ### Done

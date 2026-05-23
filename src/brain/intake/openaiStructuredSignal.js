@@ -12,6 +12,16 @@ const DEFAULT_MODEL = "gpt-4o-mini";
 const MAX_INPUT = 3500;
 const TIMEOUT_MS = 22000;
 
+let _testLlmExtractor = null;
+
+function setLlmExtractorForTests(fn) {
+  _testLlmExtractor = typeof fn === "function" ? fn : null;
+}
+
+function clearLlmExtractorForTests() {
+  _testLlmExtractor = null;
+}
+
 /**
  * @param {object} opts
  * @param {string} opts.text
@@ -23,6 +33,7 @@ const TIMEOUT_MS = 22000;
  * @returns {Promise<{ ok: boolean, signal: object|null, err: string }>}
  */
 async function properaExtractStructuredSignalLLM(opts) {
+  if (_testLlmExtractor) return _testLlmExtractor(opts);
   const phone = String(opts.phone || "").trim();
   const apiKey = String(opts.apiKey || "").trim();
   let input = String(opts.text || "").trim();
@@ -148,4 +159,6 @@ async function openaiChatJson(o) {
 module.exports = {
   properaExtractStructuredSignalLLM,
   openaiChatJson,
+  setLlmExtractorForTests,
+  clearLlmExtractorForTests,
 };

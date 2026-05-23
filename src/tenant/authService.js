@@ -56,6 +56,53 @@ function timingSafeEqual(a, b) {
   return crypto.timingSafeEqual(ba, bb);
 }
 
+/** Normalize unit label for roster match (pilot QR identify). */
+function normalizeUnitLabel(label) {
+  return String(label || "").trim().toUpperCase();
+}
+
+/**
+ * Match tenant by unit + phone at a specific property (org-scoped).
+ * @param {import("@supabase/supabase-js").SupabaseClient} sb
+ * @param {string} phone
+ * @param {string} unitLabel
+ * @param {string} propertyCode
+ * @param {string} orgId
+ */
+async function findRosterForOrgByUnitAndPhone(sb, phone, unitLabel, propertyCode, orgId) {
+  const pc = String(propertyCode || "").trim().toUpperCase();
+  const unitNorm = normalizeUnitLabel(unitLabel);
+  if (!pc || !unitNorm) return null;
+
+  const { data: prop } = await sb
+    .from("properties")
+    .select("code, org_id, display_name, display_name_short")
+    .eq("code", pc)
+    .maybeSingle();
+  if (!prop || String(prop.org_id || "").trim() !== String(orgId || "").trim()) {
+    return null;
+  }
+
+  const { data: rows, error } = await sb
+    .from("tenant_roster")
+    .select(
+      "id, property_code, unit_label, phone_e164, resident_name, active, portal_enabled"
+    )
+    .eq("phone_e164", phone)
+    .eq("property_code", pc)
+    .eq("active", true);
+  if (error || !rows?.length) return null;
+
+  const row = rows.find((r) => normalizeUnitLabel(r.unit_label) === unitNorm);
+  if (!row) return null;
+  if (row.portal_enabled === false) {
+    const err = new Error("portal_disabled");
+    err.code = "PORTAL_ACCESS_DENIED";
+    throw err;
+  }
+  return { row, prop };
+}
+
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} sb
  * @param {string} phone
@@ -334,10 +381,59 @@ async function verifyOtp(phoneRaw, codeRaw, orgId) {
   return issueTokenFromRosterMatch(sb, match, org, phone);
 }
 
+/**
+ * QR / door flow — no SMS OTP. Unit + phone must match roster at property.
+ * @param {string} phoneRaw
+ * @param {string} unitLabel
+ * @param {string} propertyCode
+ * @param {string} orgId
+ */
+async function identifyTenantByUnitAndPhone(phoneRaw, unitLabel, propertyCode, orgId) {
+  const sb = getSupabase();
+  if (!sb) {
+    const err = new Error("no_db");
+    err.code = "NO_DB";
+    throw err;
+  }
+
+  const phone = normalizePhoneE164(phoneRaw);
+  if (!phone) {
+    const err = new Error("invalid_phone");
+    err.code = "INVALID_PHONE";
+    throw err;
+  }
+
+  const org = String(orgId || "").trim();
+  if (!org) {
+    const err = new Error("org_required");
+    err.code = "ORG_REQUIRED";
+    throw err;
+  }
+
+  checkOtpRateLimit(phone, org);
+
+  const match = await findRosterForOrgByUnitAndPhone(
+    sb,
+    phone,
+    unitLabel,
+    propertyCode,
+    org
+  );
+  if (!match) {
+    const err = new Error("tenant_not_found");
+    err.code = "TENANT_NOT_FOUND";
+    throw err;
+  }
+
+  return issueTokenFromRosterMatch(sb, match, org, phone);
+}
+
 module.exports = {
   requestOtp,
   verifyOtp,
+  identifyTenantByUnitAndPhone,
   findRosterForOrg,
+  findRosterForOrgByUnitAndPhone,
   buildOtpMessage,
   loadTenantSessionBrand,
 };

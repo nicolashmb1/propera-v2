@@ -4,6 +4,7 @@ const {
   expandProgramLines,
   formatUnitScopeLabel,
   sortUnitRows,
+  mergeCommonAreaScopeLabels,
 } = require("../src/pm/expandProgramLines");
 
 test("formatUnitScopeLabel prefixes Unit when missing", () => {
@@ -34,6 +35,26 @@ test("UNIT_PLUS_COMMON expands units + Common Area", () => {
   assert.equal(lines[0].scope_label, "Unit 101");
   assert.equal(lines[2].scope_type, "COMMON_AREA");
   assert.equal(lines[2].scope_label, "Common Area");
+});
+
+test("mergeCommonAreaScopeLabels dedupes profile + canonical case-insensitively", () => {
+  assert.deepEqual(mergeCommonAreaScopeLabels(["Gym", "Lobby"], ["lobby", "Terrace"]), [
+    "Gym",
+    "Lobby",
+    "Terrace",
+  ]);
+});
+
+test("UNIT_PLUS_COMMON falls back to canonical common areas when profile empty", () => {
+  const template = { expansion_type: "UNIT_PLUS_COMMON", default_scope_labels: null };
+  const lines = expandProgramLines(template, [{ unit_label: "101" }], {
+    expansionProfile: {},
+    canonicalCommonAreaLabels: ["Gym", "Lobby"],
+  });
+  assert.deepEqual(
+    lines.map((l) => l.scope_label),
+    ["Unit 101", "Gym", "Lobby"]
+  );
 });
 
 test("UNIT_PLUS_COMMON uses common_paint_scopes from profile when set", () => {
@@ -107,6 +128,18 @@ test("FLOOR_BASED appends common_paint_scopes as COMMON_AREA lines after floors"
     ]
   );
   assert.deepEqual(lines.map((l) => l.sort_order), [0, 1, 2, 3]);
+});
+
+test("COMMON_AREA_ONLY uses canonical locations when profile empty", () => {
+  const template = { expansion_type: "COMMON_AREA_ONLY", default_scope_labels: null };
+  const lines = expandProgramLines(template, [], {
+    expansionProfile: {},
+    canonicalCommonAreaLabels: ["Roof", "Exterior"],
+  });
+  assert.deepEqual(
+    lines.map((l) => l.scope_label),
+    ["Roof", "Exterior"]
+  );
 });
 
 test("COMMON_AREA_ONLY uses common_paint_scopes when set", () => {

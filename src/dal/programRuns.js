@@ -7,6 +7,18 @@ const { appendEventLog } = require("./appendEventLog");
 const { resolvePortalStaffActorFromJwt } = require("../portal/resolvePortalStaffActor");
 const { resolvePropertyCodeFromLabel } = require("./portalTenants");
 const { expandProgramLines } = require("../pm/expandProgramLines");
+const { loadActiveCommonAreaLabelsForProperty } = require("./propertyLocations");
+const {
+  appendProgramTimelineEvent,
+  listProgramTimelineForRun,
+} = require("./programTimeline");
+const {
+  loadPropertyStructureScopeSpecs,
+  validateManualLineAgainstStructure,
+} = require("../pm/programLineScopeOptions");
+
+const PROGRAM_LINE_SCOPE_TYPES = new Set(["UNIT", "COMMON_AREA", "FLOOR", "SITE"]);
+const MAX_SCOPE_LABEL_LEN = 120;
 const {
   getSavedProgram,
   parseIncludedLabelsJson,
@@ -175,8 +187,11 @@ async function buildProgramLineSpecs(propertyCode, templateShape, includedScopeL
       ? await loadActiveUnitRows(code)
       : [];
 
+  const canonicalCommonAreaLabels = await loadActiveCommonAreaLabelsForProperty(code);
+
   let lineSpecs = expandProgramLines(templateShape, unitRows, {
     expansionProfile: propRow.program_expansion_profile,
+    canonicalCommonAreaLabels,
   });
 
   const req = normalizeIncludedArray(includedScopeLabels);
@@ -415,6 +430,15 @@ async function createProgramRun(o) {
     },
   });
 
+  await appendProgramTimelineEvent({
+    sb,
+    programRunId: runId,
+    eventKind: "run_created",
+    headline: "Program run created",
+    detail: `${insertedLines.length} checklist line(s)`,
+    actorLabel: createdBy,
+  });
+
   return {
     ok: true,
     run,
@@ -442,6 +466,15 @@ async function deleteProgramRun(runId, o) {
 
   if (fetchErr) return { ok: false, error: fetchErr.message || "fetch_failed" };
   if (!existing) return { ok: false, error: "not_found" };
+
+  await appendProgramTimelineEvent({
+    sb,
+    programRunId: id,
+    eventKind: "run_deleted",
+    headline: "Program run deleted",
+    detail: String(existing.title || "").trim(),
+    actorLabel: "Portal",
+  });
 
   const { error: delErr } = await sb.from("program_runs").delete().eq("id", id);
   if (delErr) return { ok: false, error: delErr.message || "delete_failed" };
@@ -559,18 +592,44 @@ async function previewProgramRunExpansion(o) {
 }
 
 /**
+ * @param {object} [filters]
+ * @param {string} [filters.propertyCode]
+ * @param {string} [filters.status] — OPEN | IN_PROGRESS | COMPLETE
+ * @param {boolean} [filters.inProgress] — when true, exclude COMPLETE runs
  * @returns {Promise<object[]>}
  */
-async function listProgramRuns() {
+async function listProgramRuns(filters) {
   const sb = getSupabase();
   if (!sb) return [];
 
-  const { data: runs, error } = await sb
+  const propertyCode = String(filters?.propertyCode || "")
+    .trim()
+    .toUpperCase();
+  const statusFilter = String(filters?.status || "")
+    .trim()
+    .toUpperCase();
+  const inProgress =
+    filters?.inProgress === true ||
+    String(filters?.inProgress || "").toLowerCase() === "true" ||
+    filters?.inProgress === "1";
+
+  let q = sb
     .from("program_runs")
     .select(
       "id, property_code, template_key, saved_program_id, title, status, created_by, created_at, updated_at"
     )
     .order("created_at", { ascending: false });
+
+  if (propertyCode) {
+    q = q.eq("property_code", propertyCode);
+  }
+  if (statusFilter && ["OPEN", "IN_PROGRESS", "COMPLETE"].includes(statusFilter)) {
+    q = q.eq("status", statusFilter);
+  } else if (inProgress) {
+    q = q.in("status", ["OPEN", "IN_PROGRESS"]);
+  }
+
+  const { data: runs, error } = await q;
 
   if (error || !runs) return [];
 
@@ -666,11 +725,13 @@ async function getProgramRunById(runId) {
   const { data: lines } = await sb
     .from("program_lines")
     .select(
-      "id, program_run_id, scope_type, scope_label, sort_order, status, completed_by, completed_at, notes, proof_photo_urls, assigned_vendor_id, assigned_vendor_display"
+      "id, program_run_id, scope_type, scope_label, sort_order, status, completed_by, completed_at, notes, proof_photo_urls, assigned_vendor_id, assigned_vendor_display, assigned_staff_id, assigned_staff_display, linked_ticket_id, linked_work_item_id"
     )
     .eq("program_run_id", id)
     .order("sort_order", { ascending: true })
     .order("scope_label", { ascending: true });
+
+  const timeline = await listProgramTimelineForRun(id);
 
   let template_label = "";
   let expansion_type = "";
@@ -702,7 +763,243 @@ async function getProgramRunById(runId) {
     lines: lines || [],
     line_total: total,
     line_complete: complete,
+    timeline,
   };
+}
+
+/**
+ * @param {string[]} orderedIds
+ * @param {string[]} existingIds
+ * @returns {{ ok: boolean; error?: string }}
+ */
+function validateProgramLineReorder(orderedIds, existingIds) {
+  const want = orderedIds.map((x) => String(x || "").trim()).filter(Boolean);
+  const have = new Set(existingIds.map((x) => String(x || "").trim()).filter(Boolean));
+  if (want.length !== have.size) {
+    return { ok: false, error: "reorder_count_mismatch" };
+  }
+  for (const id of want) {
+    if (!have.has(id)) return { ok: false, error: "reorder_unknown_line" };
+  }
+  if (new Set(want).size !== want.length) {
+    return { ok: false, error: "reorder_duplicate_id" };
+  }
+  return { ok: true };
+}
+
+/**
+ * @param {string} programRunId
+ * @param {object} o
+ * @param {string} o.scopeType
+ * @param {string} o.scopeLabel
+ * @param {number} [o.sortOrder]
+ * @param {string} [o.actorLabel]
+ * @param {string} [o.traceId]
+ */
+async function addProgramLine(programRunId, o) {
+  const sb = getSupabase();
+  if (!sb) return { ok: false, error: "no_db" };
+
+  const runId = String(programRunId || "").trim();
+  if (!runId) return { ok: false, error: "missing_run_id" };
+
+  const scopeType = String(o?.scopeType || "")
+    .trim()
+    .toUpperCase();
+  const scopeLabel = String(o?.scopeLabel || "").trim().slice(0, MAX_SCOPE_LABEL_LEN);
+  if (!PROGRAM_LINE_SCOPE_TYPES.has(scopeType)) {
+    return { ok: false, error: "invalid_scope_type" };
+  }
+  if (!scopeLabel) return { ok: false, error: "missing_scope_label" };
+
+  const { data: run, error: runErr } = await sb
+    .from("program_runs")
+    .select("id, title, property_code")
+    .eq("id", runId)
+    .maybeSingle();
+  if (runErr || !run) return { ok: false, error: "not_found" };
+
+  const propertyCode = String(run.property_code || "").trim().toUpperCase();
+  const allowedSpecs = await loadPropertyStructureScopeSpecs(sb, propertyCode);
+  const structCheck = validateManualLineAgainstStructure({
+    allowedSpecs,
+    scopeType,
+    scopeLabel,
+  });
+  if (!structCheck.ok) {
+    return { ok: false, error: structCheck.error || "invalid_scope" };
+  }
+
+  const { data: existing } = await sb
+    .from("program_lines")
+    .select("id, sort_order")
+    .eq("program_run_id", runId);
+
+  const rows = Array.isArray(existing) ? existing : [];
+  let sortOrder = Number(o?.sortOrder);
+  if (!Number.isFinite(sortOrder)) {
+    const max = rows.reduce((m, r) => Math.max(m, Number(r.sort_order) || 0), -1);
+    sortOrder = max + 1;
+  }
+
+  const actorLabel = String(o?.actorLabel || "PORTAL").slice(0, 200);
+
+  const { data: line, error: insErr } = await sb
+    .from("program_lines")
+    .insert({
+      program_run_id: runId,
+      scope_type: scopeType,
+      scope_label: scopeLabel,
+      sort_order: sortOrder,
+      status: "OPEN",
+      completed_by: "",
+      notes: "",
+    })
+    .select(
+      "id, program_run_id, scope_type, scope_label, sort_order, status, completed_by, completed_at, notes, proof_photo_urls, assigned_vendor_id, assigned_vendor_display, assigned_staff_id, assigned_staff_display, linked_ticket_id, linked_work_item_id"
+    )
+    .maybeSingle();
+
+  if (insErr || !line) {
+    return { ok: false, error: insErr?.message || "insert_failed" };
+  }
+
+  await recalcProgramRunStatus(sb, runId);
+
+  await appendProgramTimelineEvent({
+    sb,
+    programRunId: runId,
+    programLineId: line.id,
+    eventKind: "line_added",
+    headline: "Checklist line added",
+    detail: `${scopeType}: ${scopeLabel}`,
+    actorLabel,
+  });
+
+  await appendEventLog({
+    traceId: String(o?.traceId || ""),
+    log_kind: "portal",
+    event: "PROGRAM_LINE_ADDED",
+    payload: {
+      program_run_id: runId,
+      program_line_id: line.id,
+      scope_type: scopeType,
+      scope_label: scopeLabel,
+    },
+  });
+
+  const runOut = await getProgramRunById(runId);
+  return { ok: true, line, run: runOut };
+}
+
+/**
+ * @param {string} lineId
+ * @param {object} [o]
+ * @param {string} [o.actorLabel]
+ * @param {string} [o.traceId]
+ */
+async function deleteProgramLine(lineId, o) {
+  const sb = getSupabase();
+  if (!sb) return { ok: false, error: "no_db" };
+
+  const lid = String(lineId || "").trim();
+  if (!lid) return { ok: false, error: "missing_line_id" };
+
+  const { data: line, error: lineErr } = await sb
+    .from("program_lines")
+    .select("id, program_run_id, scope_type, scope_label, status")
+    .eq("id", lid)
+    .maybeSingle();
+
+  if (lineErr || !line) return { ok: false, error: "not_found" };
+
+  const actorLabel = String(o?.actorLabel || "PORTAL").slice(0, 200);
+  const runId = line.program_run_id;
+
+  await appendProgramTimelineEvent({
+    sb,
+    programRunId: runId,
+    programLineId: lid,
+    eventKind: "line_removed",
+    headline: "Checklist line removed",
+    detail: `${line.scope_type}: ${line.scope_label}`,
+    actorLabel,
+  });
+
+  const { error: delErr } = await sb.from("program_lines").delete().eq("id", lid);
+  if (delErr) return { ok: false, error: delErr.message || "delete_failed" };
+
+  await recalcProgramRunStatus(sb, runId);
+
+  await appendEventLog({
+    traceId: String(o?.traceId || ""),
+    log_kind: "portal",
+    event: "PROGRAM_LINE_REMOVED",
+    payload: { program_line_id: lid, program_run_id: runId },
+  });
+
+  const run = await getProgramRunById(runId);
+  return { ok: true, run };
+}
+
+/**
+ * @param {string} programRunId
+ * @param {object} o
+ * @param {string[]} o.lineIds — full permutation of line ids for this run
+ * @param {string} [o.actorLabel]
+ * @param {string} [o.traceId]
+ */
+async function reorderProgramLines(programRunId, o) {
+  const sb = getSupabase();
+  if (!sb) return { ok: false, error: "no_db" };
+
+  const runId = String(programRunId || "").trim();
+  if (!runId) return { ok: false, error: "missing_run_id" };
+
+  const lineIds = Array.isArray(o?.lineIds) ? o.lineIds : [];
+  if (!lineIds.length) return { ok: false, error: "missing_line_ids" };
+
+  const { data: existing, error: fetchErr } = await sb
+    .from("program_lines")
+    .select("id")
+    .eq("program_run_id", runId);
+
+  if (fetchErr) return { ok: false, error: fetchErr.message || "fetch_failed" };
+
+  const existingIds = (existing || []).map((r) => String(r.id));
+  const check = validateProgramLineReorder(lineIds, existingIds);
+  if (!check.ok) return { ok: false, error: check.error || "reorder_invalid" };
+
+  const actorLabel = String(o?.actorLabel || "PORTAL").slice(0, 200);
+
+  for (let i = 0; i < lineIds.length; i++) {
+    const id = String(lineIds[i]).trim();
+    const { error: upErr } = await sb
+      .from("program_lines")
+      .update({ sort_order: i })
+      .eq("id", id)
+      .eq("program_run_id", runId);
+    if (upErr) return { ok: false, error: upErr.message || "reorder_failed" };
+  }
+
+  await appendProgramTimelineEvent({
+    sb,
+    programRunId: runId,
+    eventKind: "line_reordered",
+    headline: "Checklist order updated",
+    detail: `${lineIds.length} line(s)`,
+    actorLabel,
+  });
+
+  await appendEventLog({
+    traceId: String(o?.traceId || ""),
+    log_kind: "portal",
+    event: "PROGRAM_LINES_REORDERED",
+    payload: { program_run_id: runId, line_count: lineIds.length },
+  });
+
+  const run = await getProgramRunById(runId);
+  return { ok: true, run };
 }
 
 /**
@@ -748,6 +1045,12 @@ async function completeProgramLine(lineId, o) {
 
   await recalcProgramRunStatus(sb, line.program_run_id);
 
+  const { data: lineRow } = await sb
+    .from("program_lines")
+    .select("scope_type, scope_label")
+    .eq("id", lid)
+    .maybeSingle();
+
   await appendEventLog({
     traceId: String(o?.traceId || ""),
     log_kind: "portal",
@@ -758,6 +1061,18 @@ async function completeProgramLine(lineId, o) {
       completed_by: completedBy,
       proof_photo_count: proofPhotoUrls.length,
     },
+  });
+
+  await appendProgramTimelineEvent({
+    sb,
+    programRunId: line.program_run_id,
+    programLineId: lid,
+    eventKind: "line_completed",
+    headline: "Line completed",
+    detail: lineRow
+      ? `${lineRow.scope_type}: ${lineRow.scope_label}${notes ? ` — ${notes.slice(0, 120)}` : ""}`
+      : "",
+    actorLabel: completedBy,
   });
 
   const run = await getProgramRunById(line.program_run_id);
@@ -807,6 +1122,16 @@ async function reopenProgramLine(lineId, o) {
       program_line_id: lid,
       program_run_id: line.program_run_id,
     },
+  });
+
+  await appendProgramTimelineEvent({
+    sb,
+    programRunId: line.program_run_id,
+    programLineId: lid,
+    eventKind: "line_reopened",
+    headline: "Line reopened",
+    detail: "",
+    actorLabel: "Portal",
   });
 
   const run = await getProgramRunById(line.program_run_id);
@@ -899,6 +1224,16 @@ async function setProgramLineVendor(lineId, o) {
     },
   });
 
+  await appendProgramTimelineEvent({
+    sb,
+    programRunId: line.program_run_id,
+    programLineId: lid,
+    eventKind: "line_vendor_set",
+    headline: vid ? "Vendor assigned" : "Vendor cleared",
+    detail: vid ? display || vid : "",
+    actorLabel: changedBy,
+  });
+
   const run = await getProgramRunById(line.program_run_id);
   return { ok: true, run };
 }
@@ -983,6 +1318,16 @@ async function setProgramLineStaff(lineId, o) {
     },
   });
 
+  await appendProgramTimelineEvent({
+    sb,
+    programRunId: line.program_run_id,
+    programLineId: lid,
+    eventKind: "line_staff_set",
+    headline: sid ? "Staff assigned" : "Staff cleared",
+    detail: sid ? display || sid : "",
+    actorLabel: changedBy,
+  });
+
   const run = await getProgramRunById(line.program_run_id);
   return { ok: true, run };
 }
@@ -993,10 +1338,15 @@ module.exports = {
   deleteProgramRun,
   listProgramRuns,
   getProgramRunById,
+  addProgramLine,
+  deleteProgramLine,
+  reorderProgramLines,
+  validateProgramLineReorder,
   completeProgramLine,
   reopenProgramLine,
   setProgramLineVendor,
   setProgramLineStaff,
   getTemplate,
   resolveProgramDefinitionForRun,
+  PROGRAM_LINE_SCOPE_TYPES,
 };

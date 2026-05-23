@@ -177,7 +177,7 @@ function looksActionableIssue_(s) {
   if (/^(ok|okay|k|yes|no|yep|nope|sure|thanks|thank you|cool|great|\?)$/.test(t))
     return false;
   if (
-    /(leak|leaking|drip|dripping|clog|backup|flood|water|toilet|sink|shower|tub|heater|\bac\b|a\/c|\bheat\b|no heat|no hot|hot water|electric|outlet|breaker|sparks|smoke|gas|odor|mold|roach|bug|mouse|lock|door|key|window|broken|not working|doesn'?t work|maintenance)/.test(
+    /(leak|leaking|drip|dripping|clog|backup|flood|water|toilet|sink|shower|tub|heater|\bac\b|a\/c|\bheat\b|no heat|no hot|hot water|electric|outlet|breaker|sparks|smoke|gas|odor|mold|roach|bug|mouse|lock|door|key|window|broken|not working|doesn'?t work|maintenance|freezer|alarm|beeping|beep|console|malfunction)/.test(
       t
     )
   )

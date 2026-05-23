@@ -77,6 +77,45 @@ async function listTenantAccessLocations(tenantCtx) {
  * @param {{ propertyCode: string }} tenantCtx
  * @param {string} slug
  */
+/**
+ * Public preview for QR deep link (org + property + slug).
+ * @param {string} orgId
+ * @param {string} propertyCode
+ * @param {string} slug
+ */
+async function getPublicAccessLocation(orgId, propertyCode, slug) {
+  if (!accessEngineEnabled()) return null;
+  const sb = getSupabase();
+  const org = String(orgId || "").trim();
+  const pc = String(propertyCode || "").trim().toUpperCase();
+  const s = String(slug || "").trim().toLowerCase();
+  if (!sb || !org || !pc || !s) return null;
+
+  const { data } = await sb
+    .from("access_locations")
+    .select("*")
+    .eq("org_id", org)
+    .eq("property_code", pc)
+    .eq("slug", s)
+    .eq("active", true)
+    .maybeSingle();
+  if (!data) return null;
+
+  const policy = await getActivePolicy(sb, data.id);
+  if (!policy) return null;
+
+  return mapTenantLocation(
+    {
+      id: data.id,
+      slug: data.slug,
+      name: data.name,
+      description: data.description,
+      propertyCode: data.property_code,
+    },
+    policy
+  );
+}
+
 async function getTenantAccessLocationBySlug(tenantCtx, slug) {
   if (!accessEngineEnabled()) return null;
   const code = tenantPropertyCode(tenantCtx);
@@ -207,7 +246,10 @@ async function createTenantAccessReservation(tenantCtx, body) {
       tenantId: tenantCtx.tenantId,
       startAt: body.startAt,
       endAt: body.endAt,
-      channel: "tenant_portal",
+      channel:
+        String(body.channel || "").trim() === "qr_portal"
+          ? "qr_portal"
+          : "tenant_portal",
     },
     `tenant:${tenantCtx.tenantId}`
   );
@@ -262,6 +304,7 @@ async function listDayReservationsForTenantLocation(tenantCtx, locationId, day) 
 
 module.exports = {
   listTenantAccessLocations,
+  getPublicAccessLocation,
   getTenantAccessLocationBySlug,
   listTenantAccessReservations,
   getTenantAccessReservation,

@@ -105,6 +105,21 @@ function extractScheduleHintPortalStaffMulti(merged, effectiveBody, routerParame
   );
 }
 
+/**
+ * Tenant same-turn schedule hint (compile `scheduleRaw` / session draft field).
+ */
+function extractScheduleHintTenant(fastDraft, merged, effectiveBody) {
+  const fromMerge = String(merged && merged.draft_schedule_raw ? merged.draft_schedule_raw : "")
+    .trim();
+  if (fromMerge.length >= MIN_SCHEDULE_LEN) return fromMerge;
+  const sr = String(fastDraft && fastDraft.scheduleRaw ? fastDraft.scheduleRaw : "").trim();
+  if (sr.length >= MIN_SCHEDULE_LEN) return sr;
+  const body = String(effectiveBody || "");
+  const m = body.match(/(?:^|\n)\s*Preferred:\s*(.+?)(?:\n|$)/im);
+  if (m && String(m[1]).trim().length >= MIN_SCHEDULE_LEN) return String(m[1]).trim();
+  return "";
+}
+
 module.exports = {
   isPortalCreateTicketRouter,
   portalPayloadChannel,
@@ -114,4 +129,5 @@ module.exports = {
   extractScheduleHintStaffCaptureFromTurn,
   extractScheduleHintPortalStaff,
   extractScheduleHintPortalStaffMulti,
+  extractScheduleHintTenant,
 };

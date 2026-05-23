@@ -4,10 +4,12 @@
 
 const { buildOutboundIntent } = require("./outboundIntent");
 const { renderOutboundIntent } = require("./renderOutboundIntent");
+const { renderForChannel } = require("./renderForChannel");
 const { dispatchOutbound } = require("./dispatchOutbound");
 
 module.exports = {
   buildOutboundIntent,
   renderOutboundIntent,
+  renderForChannel,
   dispatchOutbound,
 };

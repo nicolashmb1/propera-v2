@@ -17,6 +17,7 @@ const { appendEventLog } = require("../dal/appendEventLog");
  * @param {object | null} [opts.telegramSignal] — normalized Telegram signal (`transport.chat_id`)
  * @param {string} [opts.twilioTo] — E.164 or whatsapp:… From address for reply
  * @param {object} [opts.dispatchMeta] — merged into `event_log` payload (intentType, outgate meta)
+ * @param {string | null} [opts.telegramParseMode] — e.g. Markdown for Phase 4 channel render
  * @returns {Promise<{ ok: boolean, error?: string, skipped?: boolean, messageId?: number }>}
  */
 async function dispatchOutbound(opts) {
@@ -51,6 +52,7 @@ async function dispatchOutbound(opts) {
         chatId: signal.transport.chat_id,
         text: body,
         traceId,
+        parseMode: opts.telegramParseMode || null,
       });
     }
   } else if (transportChannel === "sms" || transportChannel === "whatsapp") {

@@ -6,7 +6,12 @@ const { getSupabase, isDbConfigured } = require("../db/supabase");
 const { tenantJwtSecret } = require("../config/env");
 const { resolveOrgFromHost } = require("./resolveOrgFromHost");
 const { loadOrgBrandById } = require("./tenantBrandResolve");
-const { requestOtp, verifyOtp, loadTenantSessionBrand } = require("./authService");
+const {
+  requestOtp,
+  verifyOtp,
+  identifyTenantByUnitAndPhone,
+  loadTenantSessionBrand,
+} = require("./authService");
 const { requireTenantAuth } = require("../middleware/tenantAuth");
 const {
   listTenantTickets,
@@ -17,6 +22,7 @@ const {
 const { accessEngineEnabled } = require("../config/env");
 const {
   listTenantAccessLocations,
+  getPublicAccessLocation,
   getTenantAccessLocationBySlug,
   listTenantAccessReservations,
   getTenantAccessReservation,
@@ -147,6 +153,47 @@ function registerTenantRoutes(app) {
     return res.json({ ok: true, success: true });
   });
 
+  /** QR door flow — unit + phone, no SMS OTP (campaign not approved). */
+  app.post("/api/tenant/auth/identify", async (req, res) => {
+    if (!tenantJwtSecret()) {
+      return res.status(503).json({ ok: false, error: "tenant_auth_not_configured" });
+    }
+    if (!isDbConfigured()) {
+      return res.status(503).json({ ok: false, error: "no_db" });
+    }
+
+    const orgCtx = await resolveOrgForRequest(req);
+    if (!orgCtx?.id) {
+      return res.status(404).json({ ok: false, error: "org_not_found" });
+    }
+
+    const body = req.body || {};
+    try {
+      const out = await identifyTenantByUnitAndPhone(
+        body.phone,
+        body.unitLabel || body.unit_label,
+        body.propertyCode || body.property_code,
+        orgCtx.id
+      );
+      return res.json({ ok: true, ...out });
+    } catch (err) {
+      const c = err.code || "identify_failed";
+      if (c === "TENANT_NOT_FOUND" || c === "PROPERTY_NOT_FOUND") {
+        return res.status(404).json({ ok: false, error: "not_found" });
+      }
+      if (c === "PORTAL_ACCESS_DENIED") {
+        return res.status(403).json({ ok: false, error: "access_denied" });
+      }
+      if (c === "RATE_LIMITED") {
+        return res.status(429).json({ ok: false, error: "rate_limited" });
+      }
+      if (c === "INVALID_PHONE" || c === "VALIDATION_ERROR") {
+        return res.status(400).json({ ok: false, error: "invalid" });
+      }
+      return res.status(400).json({ ok: false, error: c });
+    }
+  });
+
   app.get("/api/tenant/me", requireTenantAuth, async (req, res) => {
     const sb = getSupabase();
     if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
@@ -225,6 +272,38 @@ function registerTenantRoutes(app) {
   });
 
   // ── Amenity / Access reservations (building-scoped) ─────────────────────────
+
+  app.get(
+    "/api/tenant/access/public/:propertyCode/:slug",
+    async (req, res) => {
+      const off = accessDisabled(res);
+      if (off) return off;
+      const orgCtx = await resolveOrgForRequest(req);
+      if (!orgCtx?.id) {
+        return res.status(404).json({ ok: false, error: "org_not_found" });
+      }
+      try {
+        const location = await getPublicAccessLocation(
+          orgCtx.id,
+          req.params.propertyCode,
+          req.params.slug
+        );
+        if (!location) {
+          return res.status(404).json({ ok: false, error: "not_found" });
+        }
+        return res.json({
+          ok: true,
+          location,
+          brand: {
+            orgBrandShort: orgCtx.orgBrandShort || "",
+            propertyDisplayName: orgCtx.propertyDisplayName || "",
+          },
+        });
+      } catch (err) {
+        return res.status(500).json({ ok: false, error: String(err.message || err) });
+      }
+    }
+  );
 
   function accessDisabled(res) {
     if (!accessEngineEnabled()) {
@@ -332,6 +411,7 @@ function registerTenantRoutes(app) {
         locationId: body.locationId || body.location_id,
         startAt: body.startAt || body.start_at,
         endAt: body.endAt || body.end_at,
+        channel: body.channel,
       });
       return res.status(201).json({ ok: true, reservation });
     } catch (err) {

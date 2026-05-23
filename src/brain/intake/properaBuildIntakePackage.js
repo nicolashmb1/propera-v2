@@ -291,6 +291,35 @@ async function properaBuildIntakePackage(opts) {
     sig.safety.requiresImmediateInstructions = !!em.requiresImmediateInstructions;
   }
 
+  // Supplement: multilingual gas-smell phrases that evaluateEmergencySignal_ (English-only) misses.
+  // Explicit phrases only — no bare /gas/ — to avoid false positives on gas bill, appliances, etc.
+  if (!(sig.safety && sig.safety.isEmergency) && tRaw) {
+    const _lb = tRaw.toLowerCase();
+    const _gasSmell =
+      /(huele\s+a?\s*gas|smells?\s+gas|gas\s+smell|gas\s+leak)/.test(_lb);
+    const _gasCtxExclude =
+      /\b(gas\s+bill|gas\s+station|utility\s+bill|stove|range|oven|burner)\b/.test(_lb);
+    if (_gasSmell && !_gasCtxExclude) {
+      sig.safety = sig.safety || {};
+      sig.safety.isEmergency = true;
+      sig.safety.emergencyType = "GAS";
+      sig.safety.skipScheduling = true;
+      sig.safety.requiresImmediateInstructions = true;
+    }
+  }
+
+  // Supplement: informal "beepin" (typo for beeping) + red light → fire/safety panel alarm.
+  if (!(sig.safety && sig.safety.isEmergency) && tRaw) {
+    const _lb = tRaw.toLowerCase();
+    if (/\bbeepin\b/.test(_lb) && /red\s*light/.test(_lb)) {
+      sig.safety = sig.safety || {};
+      sig.safety.isEmergency = true;
+      sig.safety.emergencyType = "FIRE_PANEL";
+      sig.safety.skipScheduling = false;
+      sig.safety.requiresImmediateInstructions = false;
+    }
+  }
+
   const issueHead = issueHeadFromStructuredIssues(sig.issues);
   const issuePartsForMeta = issueClausePartsFromStructuredIssues(sig.issues);
 

@@ -18,7 +18,11 @@ const {
   reopenProgramLine,
   setProgramLineVendor,
   setProgramLineStaff,
+  addProgramLine,
+  deleteProgramLine,
+  reorderProgramLines,
 } = require("../dal/programRuns");
+const { createTicketFromProgramLine } = require("../pm/createTicketFromProgramLine");
 const {
   createSavedProgram,
   listSavedPrograms,
@@ -40,7 +44,12 @@ const {
 } = require("../dal/turnovers");
 const { getSupabase } = require("../db/supabase");
 const { verifyPortalRequest } = require("./portalAuth");
-const { turnoverEngineEnabled, financeTicketCostsEnabled } = require("../config/env");
+const {
+  turnoverEngineEnabled,
+  financeTicketCostsEnabled,
+  openDeckDayChartEnabled,
+} = require("../config/env");
+const { fetchTicketDayCurve, defaultCurveDate } = require("./ticketDayCurve");
 const {
   listTicketCostEntriesForPortal,
   listProgramRunCostEntriesForPortal,
@@ -125,6 +134,16 @@ function registerPortalReadRoutes(app) {
     });
   }
 
+  /** Mobile open-deck day chart — `PROPERA_OPEN_DECK_DAY_CHART_ENABLED=1`. */
+  function gateOpenDeckDayChart(handler) {
+    return gate(async (req, res, next) => {
+      if (!openDeckDayChartEnabled()) {
+        return res.status(404).json({ ok: false, error: "open_deck_day_chart_disabled" });
+      }
+      return handler(req, res, next);
+    });
+  }
+
   /** GAS web-app style: `baseUrl?path=tickets` (propera-app remote mode). */
   app.get("/api/portal/gas-compat", gate(async (req, res) => {
     const path = String(req.query.path || "").trim().toLowerCase();
@@ -133,6 +152,27 @@ function registerPortalReadRoutes(app) {
     if (path === "tenants") return sendTenants(req, res);
     return res.status(400).json({ ok: false, error: "unknown_path" });
   }));
+
+  app.get(
+    "/api/portal/tickets/day-curve",
+    gateOpenDeckDayChart(async (req, res) => {
+      try {
+        const date = defaultCurveDate(req.query.date);
+        const propertyCode = String(req.query.propertyCode || req.query.property || "").trim();
+        const out = await fetchTicketDayCurve({ date, propertyCode });
+        if (!out.ok) {
+          const status = out.error === "invalid_date" ? 400 : 500;
+          return res.status(status).json(out);
+        }
+        return res.status(200).json(out);
+      } catch (err) {
+        return res.status(500).json({
+          ok: false,
+          error: String(err && err.message ? err.message : err),
+        });
+      }
+    })
+  );
 
   /**
    * Same portal token as GET gas-compat — POST body carries payload.
@@ -863,9 +903,14 @@ function registerPortalReadRoutes(app) {
     }
   }));
 
-  app.get("/api/portal/program-runs", gate(async (_req, res) => {
+  app.get("/api/portal/program-runs", gate(async (req, res) => {
     try {
-      const rows = await listProgramRuns();
+      const q = req.query || {};
+      const rows = await listProgramRuns({
+        propertyCode: q.propertyCode || q.property_code,
+        status: q.status,
+        inProgress: q.inProgress || q.in_progress,
+      });
       return res.status(200).json(rows);
     } catch (err) {
       return res.status(500).json({
@@ -981,6 +1026,67 @@ function registerPortalReadRoutes(app) {
         return res.status(code).json({ ok: false, error: out.error || "delete_failed" });
       }
       return res.status(200).json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.post("/api/portal/program-runs/:programRunId/lines", gate(async (req, res) => {
+    try {
+      const body = req.body || {};
+      const out = await addProgramLine(req.params.programRunId, {
+        scopeType: body.scopeType || body.scope_type,
+        scopeLabel: body.scopeLabel || body.scope_label,
+        sortOrder: body.sortOrder ?? body.sort_order,
+        actorLabel: body.actorLabel || body.actor_label || body.createdBy,
+        traceId: req.traceId,
+      });
+      if (!out.ok) {
+        const code =
+          out.error === "not_found"
+            ? 404
+            : out.error === "invalid_scope_type" || out.error === "missing_scope_label"
+              ? 400
+              : 400;
+        return res.status(code).json({ ok: false, error: out.error || "add_line_failed" });
+      }
+      return res.status(201).json({ ok: true, line: out.line, run: out.run });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.patch("/api/portal/program-runs/:programRunId/lines/reorder", gate(async (req, res) => {
+    try {
+      const body = req.body || {};
+      const lineIds = Array.isArray(body.lineIds)
+        ? body.lineIds
+        : Array.isArray(body.line_ids)
+          ? body.line_ids
+          : [];
+      const out = await reorderProgramLines(req.params.programRunId, {
+        lineIds,
+        actorLabel: body.actorLabel || body.actor_label,
+        traceId: req.traceId,
+      });
+      if (!out.ok) {
+        const code =
+          out.error === "not_found"
+            ? 404
+            : out.error === "reorder_count_mismatch" ||
+                out.error === "reorder_unknown_line" ||
+                out.error === "reorder_duplicate_id"
+              ? 400
+              : 400;
+        return res.status(code).json({ ok: false, error: out.error || "reorder_failed" });
+      }
+      return res.status(200).json({ ok: true, run: out.run });
     } catch (err) {
       return res.status(500).json({
         ok: false,
@@ -1119,6 +1225,80 @@ function registerPortalReadRoutes(app) {
               ? 503
               : 400;
         return res.status(code).json({ ok: false, error: out.error || "staff_assign_failed" });
+      }
+      return res.status(200).json({ ok: true, run: out.run });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.post("/api/portal/program-lines/:id/create-ticket", gate(async (req, res) => {
+    try {
+      const body = req.body || {};
+      const sb = getSupabase();
+      if (!sb) {
+        return res.status(503).json({ ok: false, error: "no_db" });
+      }
+      const auth = String(req.get("authorization") || "").trim();
+      const m = /^Bearer\s+(\S+)/i.exec(auth);
+      const jwt = m ? m[1] : "";
+      let portalTicketAudit;
+      if (jwt) {
+        const { resolvePortalStaffActorFromJwt } = require("../portal/resolvePortalStaffActor");
+        const rAct = await resolvePortalStaffActorFromJwt(sb, jwt);
+        if (!rAct.ok || !rAct.changedBy) {
+          return res.status(403).json({ ok: false, error: rAct.error || "portal_actor_unresolved" });
+        }
+        portalTicketAudit = rAct.changedBy;
+      }
+      const out = await createTicketFromProgramLine({
+        lineId: req.params.id,
+        issueText: body.issueText ?? body.issue_text,
+        category: body.category,
+        urgency: body.urgency,
+        actorPhoneE164: body.actor_phone_e164 ?? body.actorPhoneE164 ?? "",
+        traceId: req.traceId,
+        portalTicketAudit,
+      });
+      if (!out.ok) {
+        const code =
+          out.error === "not_found" || out.error === "run_not_found"
+            ? 404
+            : out.error === "line_already_linked"
+              ? 409
+              : out.error === "program_line_ticket_bridge_migration_required"
+                ? 503
+                : 400;
+        return res.status(code).json({ ok: false, error: out.error || "create_ticket_failed" });
+      }
+      return res.status(201).json({
+        ok: true,
+        ticket_id: out.ticket_id,
+        work_item_id: out.work_item_id,
+        ticket_key: out.ticket_key,
+        run: out.run,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.delete("/api/portal/program-lines/:id", gate(async (req, res) => {
+    try {
+      const body = req.body || {};
+      const out = await deleteProgramLine(req.params.id, {
+        actorLabel: body.actorLabel || body.actor_label,
+        traceId: req.traceId,
+      });
+      if (!out.ok) {
+        const code = out.error === "not_found" ? 404 : 400;
+        return res.status(code).json({ ok: false, error: out.error || "delete_line_failed" });
       }
       return res.status(200).json({ ok: true, run: out.run });
     } catch (err) {

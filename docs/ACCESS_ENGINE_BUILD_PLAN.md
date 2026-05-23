@@ -364,10 +364,19 @@ Staff must always see:
 | Surface | Path | Notes |
 |---------|------|--------|
 | **SMS / WA / Telegram** | Existing webhooks → access router branch | Conversational confirm flow |
-| **Tenant portal** | `/tenant/access` (planned) | Structured slot picker; same engine |
+| **Tenant portal** | `/tenant/amenities` | Full portal nav; OTP login |
+| **QR door (pilot)** | `/tenant/reserve/{propertyCode}/{slug}` | No OTP; unit + phone identify |
 | **Owner app** | Future | Same signal package |
 
-Tenant portal phase can follow **TENANT_PORTAL_BUILD_PLAN** Phase G+ — do not block pilot on portal if SMS + staff override suffice.
+### QR door flow (pilot constraints)
+
+- **No SMS OTP** — Twilio campaign not approved; QR must not use `/tenant/login`.
+- **Location-scoped URL** — e.g. `https://thegrand.usepropera.com/tenant/reserve/PENN/gameroom` (org from host).
+- **Identify** — `POST /api/tenant/auth/identify` with unit + phone; must match `tenant_roster` at that `property_code`.
+- **Book** — same Access Engine APIs; reservation `channel = qr_portal`.
+- **Branded** — minimal shell (no full portal nav); success shows door code when issued.
+
+Tenant portal amenities list still requires normal OTP login. QR path is intentionally narrow.
 
 ---
 

@@ -23,7 +23,10 @@ const {
   usesStructuredPortalCreateDraft,
   extractScheduleHintPortalStaffMulti,
   extractScheduleHintStaffCaptureFromTurn,
+  extractScheduleHintTenant,
 } = require("./handleInboundCoreScheduleHints");
+const { MIN_SCHEDULE_LEN } = require("../../dal/ticketPreferredWindow");
+const { buildMaintenanceReceipt } = require("../../outgate/buildMaintenanceReceipt");
 const {
   draftFlagsFromSlots,
   computePendingExpiresAtIso,
@@ -172,7 +175,9 @@ async function runCoreMaintenanceMultiTurn(x) {
     const emRestart =
       usesStructuredPortalCreateDraft(p, mode)
         ? { emergency: "No", emergencyType: "" }
-        : inferEmergency(restartedIssueFin || restarted.draft_issue);
+        : fastDraft.safety && fastDraft.safety.isEmergency
+          ? { emergency: "Yes", emergencyType: String(fastDraft.safety.emergencyType || "") }
+          : inferEmergency(restartedIssueFin || restarted.draft_issue);
     const recNew = recomputeDraftExpected({
       hasIssue: flagsNew.hasIssue,
       hasProperty: flagsNew.hasProperty,
@@ -225,7 +230,9 @@ async function runCoreMaintenanceMultiTurn(x) {
   const em =
     usesStructuredPortalCreateDraft(p, mode)
       ? { emergency: "No", emergencyType: "" }
-      : inferEmergency(issueForFinalize || merged.draft_issue);
+      : fastDraft.safety && fastDraft.safety.isEmergency
+        ? { emergency: "Yes", emergencyType: String(fastDraft.safety.emergencyType || "") }
+        : inferEmergency(issueForFinalize || merged.draft_issue);
   const skipScheduling = em.emergency === "Yes" || commonAreaDraft;
 
   const pendingTicketRow =
@@ -409,6 +416,10 @@ async function runCoreMaintenanceMultiTurn(x) {
         : [],
       effectiveBody,
     });
+    const _emergencyOverrideMt =
+      fastDraft.safety && fastDraft.safety.isEmergency
+        ? { emergencyType: String(fastDraft.safety.emergencyType || "") }
+        : undefined;
     const frMt = await finalizeTicketRowGroups({
       groups: groupsMt,
       buildFinalizeParams: (g) => ({
@@ -416,6 +427,7 @@ async function runCoreMaintenanceMultiTurn(x) {
         propertyCode: merged.draft_property,
         unitLabel: commonAreaDraftFinal ? "" : unitResolvedMt,
         issueText: g.issueText,
+        emergencyOverride: _emergencyOverrideMt,
         actorKey: canonicalBrainActorKey,
         mode,
         locationType: draftLocationTypeFinal,
@@ -451,10 +463,16 @@ async function runCoreMaintenanceMultiTurn(x) {
       "core_finalized_multi"
     );
 
-    let receiptMt =
-      finsMt.length > 1
-        ? `Tickets logged: ${finsMt.map((x) => x.ticketId).join(", ")} (${merged.draft_property} ${commonAreaDraftFinal ? "COMMON AREA" : unitResolvedMt}).`
-        : `Ticket logged: ${fin.ticketId} (${merged.draft_property} ${commonAreaDraftFinal ? "COMMON AREA" : unitResolvedMt}).`;
+    const receiptBuilt = buildMaintenanceReceipt({
+      fins: finsMt,
+      groups: groupsMt,
+      emergency: em.emergency === "Yes",
+      commonArea: commonAreaDraftFinal,
+      unitLabel: unitResolvedMt,
+      locationLabelSnapshot: tgtMt.location_label_snapshot || "",
+    });
+    let receiptMt = receiptBuilt.body;
+    const receiptTemplateKey = receiptBuilt.templateKey;
 
     const scheduleHintPortalMt =
       usesStructuredPortalCreateDraft(p, mode)
@@ -482,7 +500,7 @@ async function runCoreMaintenanceMultiTurn(x) {
         path: "multi_turn",
         replyText: receiptMt,
         ...staffMeta(),
-        ...outgateMeta("MAINTENANCE_RECEIPT_ONLY", {
+        ...outgateMeta(receiptTemplateKey, {
           path: "multi_turn",
           emergency: em.emergency === "Yes",
           portalStaffCreate:
@@ -512,6 +530,45 @@ async function runCoreMaintenanceMultiTurn(x) {
       });
     }
 
+    const tenantSchedHint = extractScheduleHintTenant(fastDraft, merged, effectiveBody);
+    if (String(tenantSchedHint).trim().length >= MIN_SCHEDULE_LEN) {
+      receiptMt = await appendPortalStaffScheduleNote(
+        receiptMt,
+        tenantSchedHint,
+        fin.ticketKey,
+        traceId,
+        traceStartMs
+      );
+      await enterScheduleWaitAndLogTicketCreatedAskSchedule({
+        setScheduleWaitLike,
+        canonicalBrainActorKey,
+        fin,
+        waitOpts: {
+          ticketKey: fin.ticketKey,
+          draft_issue: merged.draft_issue,
+          issue_buf_json: merged.draft_issue_buf_json,
+          draft_property: merged.draft_property,
+          draft_unit: merged.draft_unit,
+        },
+        traceId,
+        traceStartMs,
+        path: "multi_turn",
+      });
+      return {
+        ok: true,
+        brain: "core_finalized",
+        draft: merged,
+        finalize: fin,
+        path: "multi_turn",
+        replyText: receiptMt,
+        ...staffMeta(),
+        ...outgateMeta(receiptTemplateKey, {
+          path: "multi_turn",
+          tenant_inline_schedule: true,
+        }),
+      };
+    }
+
     await enterScheduleWaitAndLogTicketCreatedAskSchedule({
       setScheduleWaitLike,
       canonicalBrainActorKey,
@@ -530,8 +587,12 @@ async function runCoreMaintenanceMultiTurn(x) {
 
     return coreInboundResult(
       staffMeta,
-      maintenanceTemplateKeyForNext("SCHEDULE"),
-      { promptComposite: "after_receipt", path: "multi_turn" },
+      receiptTemplateKey,
+      {
+        promptComposite: "after_receipt",
+        path: "multi_turn",
+        scheduleTemplateKey: maintenanceTemplateKeyForNext("SCHEDULE"),
+      },
       {
         ok: true,
         brain: "core_finalized",

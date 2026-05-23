@@ -34,6 +34,49 @@ function sortUnitRows(unitRows) {
  * @param {unknown} raw
  * @returns {Record<string, unknown>}
  */
+/**
+ * Merge Building structure labels with canonical `property_locations` (common_area).
+ * Profile order wins; append active location labels not already present (case-insensitive).
+ *
+ * @param {string[]} [profileLabels] — `program_expansion_profile.common_paint_scopes`
+ * @param {string[]} [canonicalLabels] — active `property_locations` labels for the property
+ * @returns {string[]}
+ */
+function mergeCommonAreaScopeLabels(profileLabels, canonicalLabels) {
+  const out = [];
+  const seen = new Set();
+  const push = (label) => {
+    const s = String(label == null ? "" : label).trim();
+    if (!s) return;
+    const k = s.toLowerCase();
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push(s);
+  };
+  if (Array.isArray(profileLabels)) {
+    for (const x of profileLabels) push(x);
+  }
+  if (Array.isArray(canonicalLabels)) {
+    for (const x of canonicalLabels) push(x);
+  }
+  return out;
+}
+
+/**
+ * @param {Record<string, unknown>} profile
+ * @param {string[]} [canonicalCommonAreaLabels]
+ * @returns {string[]}
+ */
+function resolveCommonAreaLabelsForExpansion(profile, canonicalCommonAreaLabels) {
+  let fromProfile = [];
+  const fromCommon = profile.common_paint_scopes;
+  if (Array.isArray(fromCommon) && fromCommon.length) {
+    fromProfile = fromCommon.map((x) => String(x).trim()).filter(Boolean);
+  }
+  const merged = mergeCommonAreaScopeLabels(fromProfile, canonicalCommonAreaLabels);
+  return merged;
+}
+
 function normalizeExpansionProfile(raw) {
   if (raw == null) return {};
   if (typeof raw === "string") {
@@ -51,13 +94,18 @@ function normalizeExpansionProfile(raw) {
 /**
  * @param {object} template — row from program_templates
  * @param {{ unit_label?: string }[]} unitRows — from tenant_roster for property (active only)
- * @param {{ expansionProfile?: unknown }} [options] — `properties.program_expansion_profile` (per-property overrides)
+ * @param {{ expansionProfile?: unknown; canonicalCommonAreaLabels?: string[] }} [options]
+ *   — `properties.program_expansion_profile` plus active `property_locations` common-area labels
  * @returns {{ scope_type: string, scope_label: string, sort_order: number }[]}
  */
 function expandProgramLines(template, unitRows, options) {
   const expansionType = String(template?.expansion_type || "").trim();
   const defaults = template?.default_scope_labels;
   const profile = normalizeExpansionProfile(options && options.expansionProfile);
+  const canonicalCommon =
+    options && Array.isArray(options.canonicalCommonAreaLabels)
+      ? options.canonicalCommonAreaLabels
+      : [];
 
   if (expansionType === "UNIT_PLUS_COMMON") {
     const sorted = sortUnitRows(unitRows);
@@ -70,12 +118,8 @@ function expandProgramLines(template, unitRows, options) {
         sort_order: order++,
       });
     }
-    /** Building structure common scopes (Gym, Lobby, …); else legacy single "Common Area" line */
-    let commonLabels = [];
-    const fromCommon = profile.common_paint_scopes;
-    if (Array.isArray(fromCommon) && fromCommon.length) {
-      commonLabels = fromCommon.map((x) => String(x).trim()).filter(Boolean);
-    }
+    /** Building structure + canonical locations; else legacy single "Common Area" line */
+    let commonLabels = resolveCommonAreaLabelsForExpansion(profile, canonicalCommon);
     if (!commonLabels.length) {
       commonLabels = ["Common Area"];
     }
@@ -107,12 +151,8 @@ function expandProgramLines(template, unitRows, options) {
       sort_order: i,
     }));
 
-    /** Same keys as property UI — gym, lobby, terrace, etc. */
-    let commonLabels = [];
-    const fromCommon = profile.common_paint_scopes;
-    if (Array.isArray(fromCommon) && fromCommon.length) {
-      commonLabels = fromCommon.map((x) => String(x).trim()).filter(Boolean);
-    }
+    /** Same keys as property UI + canonical `property_locations` */
+    const commonLabels = resolveCommonAreaLabelsForExpansion(profile, canonicalCommon);
     let order = floorLines.length;
     const commonLines = commonLabels.map((scope_label) => ({
       scope_type: "COMMON_AREA",
@@ -124,11 +164,7 @@ function expandProgramLines(template, unitRows, options) {
   }
 
   if (expansionType === "COMMON_AREA_ONLY") {
-    let labels = [];
-    const fromProfile = profile.common_paint_scopes;
-    if (Array.isArray(fromProfile) && fromProfile.length) {
-      labels = fromProfile.map((x) => String(x).trim()).filter(Boolean);
-    }
+    let labels = resolveCommonAreaLabelsForExpansion(profile, canonicalCommon);
     if (!labels.length && Array.isArray(defaults) && defaults.length) {
       labels = defaults.map((x) => String(x));
     }
@@ -154,4 +190,6 @@ module.exports = {
   formatUnitScopeLabel,
   sortUnitRows,
   normalizeExpansionProfile,
+  mergeCommonAreaScopeLabels,
+  resolveCommonAreaLabelsForExpansion,
 };
