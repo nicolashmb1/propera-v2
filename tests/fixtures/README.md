@@ -24,3 +24,5 @@ Run:
 npm test -- tests/tenantMessagesCompile.test.js          # baseline (≤9 compile gaps OK)
 TENANT_GOLDEN_STRICT=1 npm test -- tests/tenantMessagesCompile.test.js  # agent must hit zero
 ```
+
+**Pipeline scenarios:** require `tests/helpers/legacyPipelineEnv.js` first so `.env` `TENANT_AGENT_ENABLED=1` does not affect legacy slot-machine tests. Agent tests set `TENANT_AGENT_ENABLED=1` in-file.

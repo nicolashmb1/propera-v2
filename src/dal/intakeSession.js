@@ -133,7 +133,7 @@ async function setScheduleWaitAfterFinalize(phoneE164, o) {
  * `GLOBAL` stays in `properties` for staff assignments + roster; it must not appear here.
  * Policy defaults use `property_policy.property_code = 'GLOBAL'` (separate table), not this list.
  *
- * @returns {Promise<Array<{ code: string, display_name: string, ticket_prefix?: string, short_name?: string, address?: string, aliases: string[] }>>}
+ * @returns {Promise<Array<{ code: string, display_name: string, display_name_short?: string, ticket_prefix?: string, short_name?: string, address?: string, aliases: string[] }>>}
  */
 async function listPropertiesForMenu() {
   const sb = getSupabase();
@@ -141,7 +141,7 @@ async function listPropertiesForMenu() {
 
   const { data, error } = await sb
     .from("properties")
-    .select("code, display_name, ticket_prefix, short_name, address")
+    .select("code, display_name, display_name_short, ticket_prefix, short_name, address")
     .eq("active", true)
     .neq("code", "GLOBAL")
     .order("code");
@@ -171,6 +171,7 @@ async function listPropertiesForMenu() {
   return data.map((r) => ({
     code: String(r.code || "").toUpperCase(),
     display_name: String(r.display_name || ""),
+    display_name_short: String(r.display_name_short || ""),
     ticket_prefix: String(r.ticket_prefix || ""),
     short_name: String(r.short_name || ""),
     address: String(r.address || ""),

@@ -21,18 +21,28 @@ function maintenanceReceiptTemplateKey(tier, multi) {
 }
 
 /**
- * @param {{ commonArea?: boolean, unitLabel?: string, locationLabelSnapshot?: string }} loc
+ * @param {string} [displayName]
+ * @param {string} [propertyCode]
+ * @returns {string}
+ */
+function formatPropertyAtLabel(displayName, propertyCode) {
+  const display = String(displayName || "").trim();
+  if (display) return display;
+  const code = String(propertyCode || "").trim();
+  if (!code) return "the building";
+  return code.charAt(0).toUpperCase() + code.slice(1).toLowerCase();
+}
+
+/**
+ * @param {{ commonArea?: boolean, unitLabel?: string, locationLabelSnapshot?: string, propertyDisplayName?: string, propertyCode?: string }} loc
  * @param {"confirm"|"report"|"short"} mode
  */
 function formatLocationFragment(loc, mode) {
   const commonArea = !!loc.commonArea;
   if (commonArea) {
-    const snap = String(loc.locationLabelSnapshot || "").trim();
-    const lower = snap.toLowerCase();
-    if (snap && lower !== "common area" && lower !== "common_area") {
-      return mode === "short" ? `the ${lower}` : `the ${lower}`;
-    }
-    return "the common area";
+    const propertyAt = formatPropertyAtLabel(loc.propertyDisplayName, loc.propertyCode);
+    if (mode === "short") return propertyAt;
+    return propertyAt;
   }
   const unit = String(loc.unitLabel || "").trim();
   if (!unit) return mode === "short" ? "your unit" : "your unit";
@@ -56,6 +66,9 @@ function phraseForSentence(phrase) {
  * @param {boolean} o.commonArea
  * @param {string} [o.unitLabel]
  * @param {string} [o.locationLabelSnapshot]
+ * @param {string} [o.propertyDisplayName]
+ * @param {string} [o.propertyCode]
+ * @param {string} [o.emergencyType]
  * @returns {string}
  */
 function buildSingleMaintenanceReceipt(o) {
@@ -63,30 +76,47 @@ function buildSingleMaintenanceReceipt(o) {
     commonArea: o.commonArea,
     unitLabel: o.unitLabel,
     locationLabelSnapshot: o.locationLabelSnapshot,
+    propertyDisplayName: o.propertyDisplayName,
+    propertyCode: o.propertyCode,
   };
   const issue = phraseForSentence(o.issuePhrase);
   const where = formatLocationFragment(loc, "confirm");
   const ref = String(o.ticketId || "").trim();
+  const propertyAt = formatPropertyAtLabel(o.propertyDisplayName, o.propertyCode);
 
   if (o.tier === "emergency") {
+    const reportedWhere = o.commonArea
+      ? `at ${propertyAt}`
+      : `for ${where}`;
+    const gasNote =
+      String(o.emergencyType || "").toUpperCase().includes("GAS")
+        ? " If the smell gets stronger, leave your apartment and call 911."
+        : "";
     return [
       "We're treating this as an emergency.",
-      `Ref #${ref} — ${issue.toLowerCase()} reported for ${where}. Someone is being contacted now.`,
+      `Ref #${ref} — ${issue.toLowerCase()} reported ${reportedWhere}. Someone is being contacted now.${gasNote}`,
       "Please stay safe.",
     ].join("\n");
   }
 
   if (o.tier === "urgent") {
+    const urgentWhere = o.commonArea
+      ? `at ${propertyAt}`
+      : `for ${where}`;
     return [
       `Ref #${ref} — we're on it.`,
-      `Noted — we're prioritizing the ${issue.toLowerCase()} for ${where}.`,
+      `Noted — we're prioritizing the ${issue.toLowerCase()} ${urgentWhere}.`,
       "Someone will be there as soon as possible.",
     ].join("\n");
   }
 
+  const confirmLine = o.commonArea
+    ? `${issue} confirmed at ${propertyAt}.`
+    : `${issue} confirmed for ${where}.`;
+
   return [
     `Ref #${ref} — we're on it.`,
-    `${issue} confirmed for ${where}.`,
+    confirmLine,
     "We'll be in touch shortly.",
   ].join("\n");
 }
@@ -99,6 +129,8 @@ function buildSingleMaintenanceReceipt(o) {
  * @param {boolean} [o.commonArea]
  * @param {string} [o.unitLabel]
  * @param {string} [o.locationLabelSnapshot]
+ * @param {string} [o.propertyDisplayName]
+ * @param {string} [o.propertyCode]
  * @returns {{ body: string, templateKey: string, tier: ReceiptTier }}
  */
 function buildMaintenanceReceipt(o) {
@@ -109,6 +141,8 @@ function buildMaintenanceReceipt(o) {
     commonArea: !!o.commonArea,
     unitLabel: o.unitLabel,
     locationLabelSnapshot: o.locationLabelSnapshot,
+    propertyDisplayName: o.propertyDisplayName,
+    propertyCode: o.propertyCode,
   };
   const whereShort = formatLocationFragment(loc, "short");
 
@@ -131,10 +165,13 @@ function buildMaintenanceReceipt(o) {
   }
 
   if (items.length > 1) {
-    const lines = items.map(
-      (item) =>
-        `Ref #${item.ticketId} — ${phraseForSentence(item.issuePhrase)}, ${whereShort}.`
-    );
+    const lines = items.map((item) => {
+      const phrase = phraseForSentence(item.issuePhrase);
+      if (loc.commonArea) {
+        return `Ref #${item.ticketId} — ${phrase} at ${whereShort}.`;
+      }
+      return `Ref #${item.ticketId} — ${phrase}, ${whereShort}.`;
+    });
     const closing =
       items.length === 2
         ? "Both are being handled. We'll be in touch shortly."
@@ -163,6 +200,7 @@ function buildMaintenanceReceipt(o) {
       ticketId: one.ticketId,
       issuePhrase: one.issuePhrase,
       tier,
+      emergencyType: String(one.emergencyType || o.emergencyType || "").trim(),
       ...loc,
     }),
     templateKey: maintenanceReceiptTemplateKey(tier, false),
@@ -174,4 +212,5 @@ module.exports = {
   buildMaintenanceReceipt,
   buildSingleMaintenanceReceipt,
   maintenanceReceiptTemplateKey,
+  formatPropertyAtLabel,
 };

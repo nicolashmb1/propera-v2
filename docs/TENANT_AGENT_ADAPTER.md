@@ -18,6 +18,37 @@ If any of these conflict with a proposed change, stop and keep guardrails.
 
 ---
 
+## Implementation snapshot (2026-05-24 — code reality)
+
+**Status:** Sprints **1–3** and §15 **Phases 4–6** are **implemented in repo**. **Phase 7** (`request_staff_update`) deferred. Default CI keeps **`TENANT_AGENT_ENABLED=0`**.
+
+| Area | Shipped | Not yet |
+|------|---------|---------|
+| Gather + structured `create_ticket` handoff | ✅ deterministic + LLM (`tenantAgentLlmTurn.js`) | — |
+| Post-create receipt shaping | ✅ `shapeBrainReply.js`, `tenantAgentChannelRender.js` | Outgate localize (English only) |
+| 48h conversation TTL | ✅ `conversationExpiry.js` + Phase 6 lookup on expiry | — |
+| Post-complete clarify | ✅ `postCompleteTurn.js`, natural-language same/new (no 1/2 menu) | — |
+| Append to open ticket | ✅ `append_to_ticket` → `handleTenantAppendToTicket.js` → `tenantTicketAppend.js` | Portal timeline / `changed_by_*` on append |
+| Same/new LLM | ✅ **LLM first** when `TENANT_AGENT_LLM_ENABLED=1`; receives `pending_follow_up`; returns `append_note` | — |
+| Append message to brain | ✅ `resolveAppendHandoffContent.js` — pending substance, **not** `"yep same"` | — |
+| Schedule after receipt | ✅ `deferToCoreSchedule.js` skips agent when brain `expected === SCHEDULE` | Full post-complete schedule scenario test |
+| Pilot allowlist | ✅ `propertyAllowlist.js` | — |
+| `find_related_ticket` after 48h | ✅ `findRelatedTenantTickets.js`, `handleTenantFindRelatedTicket.js`, `applyFindRelatedLookupResult.js` | Phase 7 staff ETA |
+| Maintenance-only lane | ✅ `classifyNonMaintenanceRequest.js`, `handleNonMaintenanceDeflect.js` | Access / lease portal links (Phase 8+) |
+
+**Brain handlers (tenant-agent operations):**
+
+| Operation | Code |
+|-----------|------|
+| `create_ticket` | Structured portal path — `buildHandoffRouterParameter.js` → `handleInboundCore` |
+| `append_to_ticket` | `buildAppendHandoffRouterParameter.js` → `tryHandleTenantAppendToTicket` in `coreMaintenanceLoadContext.js` |
+| `supply_schedule` | Agent defers; core `intake_sessions` SCHEDULE path (unchanged) |
+| `find_related_ticket` | `findRelatedTenantTickets.js` → `tryHandleTenantFindRelatedTicket` |
+
+**Migration:** `063_tenant_conversations.sql` is **in repo** — operators must **apply in Supabase** before pilot (`docs/OUTSIDE_CURSOR.md`).
+
+---
+
 ## 1) Read before coding
 
 1. `../AGENTS.md`
@@ -63,7 +94,7 @@ SMS / Telegram / WhatsApp webhook
 ```
 
 **Core invariant:** handoff calls the **same** `runInboundPipeline` / `handleInboundCore` entry as today.  
-Router must not branch on “came from agent” for policy. Optional `_portalChannel: tenant_agent` is metadata only.
+Router must not branch on transport (`tenant_agent` vs portal vs SMS). Optional `_portalChannel: tenant_agent` is metadata only. **Post-create behavior** is declared in payload `postCreate.scheduleMode` (see §5).
 
 **Outbound:** only **`src/outgate/dispatchOutbound.js`** sends user-facing messages. The agent module calls it; it must not import Twilio/Telegram senders directly.
 
@@ -77,7 +108,7 @@ Router must not branch on “came from agent” for policy. Optional `_portalCha
 
 ## 3) `tenant_conversations` table schema
 
-**Migration:** `supabase/migrations/062_tenant_conversations.sql` (planned — not applied until implementation PR).
+**Migration:** `supabase/migrations/063_tenant_conversations.sql` — **in repo**; apply in Supabase before enabling agent in prod (see **`docs/OUTSIDE_CURSOR.md`**).
 
 One active conversation per **tenant actor + channel** (or per `conversation_id` if you prefer explicit UUID primary key).
 
@@ -92,7 +123,7 @@ create table if not exists public.tenant_conversations (
   -- sms | whatsapp | telegram
   transport_channel text not null default 'sms',
 
-  -- gathering | handoff_pending | handoff_done | closed | escalated
+  -- gathering | handoff_pending | handoff_done | complete | same_or_new_pending | closed | escalated
   status text not null default 'gathering',
 
   -- Partial package built across turns (property, unit, issue, preferredWindow, lang, …)
@@ -161,13 +192,15 @@ Before firing the brain, **rules** (not LLM alone) must pass:
 
 LLM may **propose** `handoff_ready: true`; adapter **confirms** with `completenessCheck(partial_package)` before brain call.
 
+**LLM gather guard (2026-05-24):** While slots are incomplete, outbound text uses **`resolveGatherReply`** → deterministic **`promptForMissingField`**. Required before handoff: **property, unit, issue, schedule** (`preferredWindow`). **No roster auto-fill** — ask explicitly. Transport identity (`TG:…` or E.164) passes through handoff → brain → `tenant_phone_e164` on ticket.
+
 ---
 
 ## 5) Handoff `RouterParameter` shape (portal JSON)
 
 Handoff reuses **structured portal create** so core skips NL slot machine (`buildStructuredPortalCreateDraft`).
 
-Build via `buildHandoffRouterParameterFromAgent()` in `src/adapters/tenantAgent/` (planned), mirroring `buildRouterParameterFromPortal` output but preserving **real transport channel** (`sms` / `telegram` / `whatsapp`), not `_channel: PORTAL`.
+Build via `buildHandoffRouterParameterFromAgent()` in `src/adapters/tenantAgent/buildHandoffRouterParameter.js`, mirroring `buildRouterParameterFromPortal` output but preserving **real transport channel** (`sms` / `telegram` / `whatsapp`), not `_channel: PORTAL`.
 
 ### `_portalPayloadJson` (canonical)
 
@@ -183,11 +216,26 @@ Build via `buildHandoffRouterParameterFromAgent()` in `src/adapters/tenantAgent/
   "location_kind": "unit",
   "message": "Heat not working since yesterday",
   "description": "Heat not working since yesterday",
-  "preferredWindow": "Friday 9am–12pm",
+  "category": "HVAC",
+  "preferredWindow": null,
+  "postCreate": { "scheduleMode": "ASK_OPTIONAL" },
   "tenant_locale": "en",
   "conversation_id": "uuid-from-tenant_conversations.id"
 }
 ```
+
+**`postCreate.scheduleMode`** — operational intent after ticket exists (not channel identity):
+
+| Mode | Who sends | Brain behavior after finalize |
+|------|-----------|-------------------------------|
+| `NONE` | PM portal / tenant_portal (default when omitted) | Receipt only; no tenant schedule interview |
+| `ASK_OPTIONAL` | Tenant agent handoff | Receipt + optional schedule ask when issue is schedulable and no `preferredWindow` |
+
+Contract module: `src/contracts/postCreateContract.js`. Brain reads `postCreate` from `_portalPayloadJson`; it does **not** ask “who sent this?”.
+
+**Category:** adapter sets `category` via `resolveHandoffCategory()` (`localCategoryFromText(issue)`) so structured create does not default to General.
+
+When `intake_sessions.expected === 'SCHEDULE'` (post-receipt follow-up), pipeline **defers** to core (`deferToCoreSchedule.js`) so schedule policy stays in the brain.
 
 Common area example:
 
@@ -231,7 +279,7 @@ Reference tests: `tests/portalStructuredCreateDraft.test.js`, `tests/scenarios/p
 
 ## 6) `TENANT_AGENT_ENABLED` flag behavior
 
-**Env (planned):** add to `.env.example` when implemented.
+**Env:** documented in **`propera-v2/.env.example`** (read via `src/config/env.js`).
 
 ```bash
 # Master switch — default off
@@ -245,6 +293,8 @@ TENANT_AGENT_PROPERTY_ALLOWLIST=
 
 # Max conversation turns before escalation (override table default)
 TENANT_AGENT_MAX_TURNS=12
+# Lazy delete tenant_conversations after N hours idle (default 48; 0 = off)
+TENANT_AGENT_CONVERSATION_TTL_HOURS=48
 ```
 
 Read flags in `src/config/env.js`; do not read `process.env` in adapter ad hoc.
@@ -252,7 +302,7 @@ Read flags in `src/config/env.js`; do not read `process.env` in adapter ad hoc.
 | Flag | `0` / unset | `1` |
 |------|-------------|-----|
 | `TENANT_AGENT_ENABLED` | **Legacy path only** — current slot machine + Phase 1 outgate receipts | Tenant maintenance on SMS/TG/WA routes through agent adapter when eligible |
-| `TENANT_AGENT_LLM_ENABLED` | Deterministic scripted prompts (Sprint 1 skeleton) | LLM conversation turns |
+| `TENANT_AGENT_LLM_ENABLED` | Deterministic scripted gather prompts | LLM gather turns **and** same/new classify (**LLM first** on `same_or_new_pending` when key present) |
 | `TENANT_AGENT_PROPERTY_ALLOWLIST` | N/A | If non-empty, only listed property codes use agent after property known |
 
 ### Eligibility (all must hold for agent path)
@@ -322,7 +372,7 @@ On each inbound message while `status = gathering`:
      ```
 
    - Do **not** call brain with partial package unless emergency keywords detected → then optional **emergency fast handoff** with best-effort package + flag `emergency_forced: true` in payload metadata (implementation choice; document in PARITY_LEDGER when built)
-   - Stop agent loop until staff clears conversation or TTL expires (e.g. 24h → `closed`)
+   - Stop agent loop until staff clears conversation or TTL expires (default **48h** — `TENANT_AGENT_CONVERSATION_TTL_HOURS`; lazy delete + `TENANT_AGENT_CONVERSATION_EXPIRED` in `event_log`)
 
 Reset `turn_count` when `status` transitions to `handoff_done` and tenant starts a **new** issue (“anything else?” flow) — implementation may create a new conversation row or reset row on explicit new-issue intent.
 
@@ -339,43 +389,62 @@ After brain success:
 
 While `gathering`, agent replies do **not** go through maintenance receipt templates — conversational prompts only.
 
+**Follow-up after complete (photo, “still leaking”, etc.):** see **§15** — clarify before append; no media-only auto-attach; after 48h use `find_related_ticket`, not conversation memory alone.
+
 ---
 
 ## 10) Adapter implementation checklist
 
-Create files under **`src/adapters/tenantAgent/`** only:
+**Implemented** under **`src/adapters/tenantAgent/`**:
 
 | File | Role |
 |------|------|
-| `runTenantAgentTurn.js` | Entry: load conversation, route gather vs handoff |
+| `runTenantAgentTurn.js` | Entry: load conversation, gather vs handoff vs post-complete |
 | `conversationStore.js` | CRUD `tenant_conversations` |
+| `conversationExpiry.js` | 48h lazy TTL + `TENANT_AGENT_CONVERSATION_EXPIRED` |
+| `conversationStatus.js` | `complete` / `handoff_done` detection |
 | `completeness.js` | Rule-based ready-for-brain |
-| `buildHandoffRouterParameter.js` | §5 shape |
-| `shapeBrainReply.js` | Facts → tenant message |
-| `systemPrompt.js` | Voice + “never decide” constraints |
-| `deterministicPrompts.js` | Fallback questions when LLM off |
+| `buildHandoffRouterParameter.js` | §5 `create_ticket` shape |
+| `buildAppendHandoffRouterParameter.js` | `append_to_ticket` handoff |
+| `resolveAppendHandoffContent.js` | Pending substance → brain note (strip confirm phrases) |
+| `postCompleteTurn.js` | Post-receipt clarify + append/new routing |
+| `classifyPostCompleteFollowUp.js` | Pre-clarify intent (ack / new / ask same-new) |
+| `sameOrNewClarify.js` | Conversational prompts + `resolveSameOrNewReply` |
+| `sameOrNewLlmClassify.js` | LLM same/new + `append_note` when LLM enabled |
+| `deferToCoreSchedule.js` | Skip agent when brain expects SCHEDULE |
+| `shapeBrainReply.js` | Facts → tenant message after finalize/append |
+| `extractBrainReceiptFacts.js` | Receipt facts from `coreRun` only |
+| `tenantAgentChannelRender.js` | Channel-specific render hooks |
+| `tenantAgentLlmTurn.js` | LLM gather turn |
+| `mergePartialFromLlm.js` / `mergePartialFromInbound.js` | Slot merge |
+| `systemPrompt.js` | Gather voice + JSON contract |
+| `deterministicPrompts.js` | Fallback when LLM off |
+| `postHandoffReply.js` / `gatherGreetingReply.js` | Thanks ack; greeting-only turns |
+| `propertyAllowlist.js` | Pilot property gate |
+| `resolveHandoffCategory.js` | Category on structured handoff |
+| `eligibility.js` | Agent path eligibility |
+| `extractAttachmentUrls.js` | Media URLs for append package |
 
-Wire in **`src/inbound/runInboundPipeline.js`** (or `routeInboundDecision.js`):
+**Brain (append only):** `src/brain/core/handleTenantAppendToTicket.js`, `src/dal/tenantTicketAppend.js`, `src/contracts/portalOperation.js`.
 
-- After precursors, before `handleInboundCore`
-- Feature flag + eligibility check
-- Pass `traceId`, `transportChannel`, `routerParameter`, `staffContext`
-
-Add migration **`062_tenant_conversations.sql`**.
-
-Extend **`isTenantPortalStructuredCreate`** for `tenant_agent` channel.
-
-Do **not** add Twilio/Telegram imports outside `dispatchOutbound`.
+Wired in **`src/inbound/runInboundPipeline.js`** after lane stub, before `handleInboundCore`.
 
 ---
 
 ## 11) Parity gates before merge
 
-### New tests (agent on)
+### Agent tests (when `TENANT_AGENT_ENABLED=1` in-file)
 
-- `tests/tenantAgent/completeness.test.js`
-- `tests/tenantAgent/buildHandoffRouterParameter.test.js`
-- `tests/scenarios/tenantAgentHandoff.test.js` — mock LLM / scripted turns → one ticket
+| File | Covers |
+|------|--------|
+| `tests/tenantAgent/*.test.js` | Unit: completeness, handoff/append params, same/new, append content, defer schedule, shape reply, … |
+| `tests/scenarios/tenantAgentHandoff.test.js` | Gather → handoff → ticket + optional schedule |
+| `tests/scenarios/tenantAgentPostCompletePhase4.test.js` | Post-complete clarify, append, photo-only, natural confirm |
+| `tests/scenarios/tenantAgentConversationTtl.test.js` | 48h expiry → fresh gather |
+| `tests/scenarios/tenantAgentLlmGather.test.js` | LLM gather (mock) |
+| `tests/scenarios/tenantAgentSprint3.test.js` | Shape reply + allowlist |
+| `tests/scenarios/tenantAgentGoldenPipeline.test.js` | Golden messages (deterministic agent) |
+| `tests/postCreateContract.test.js` | `postCreate.scheduleMode` |
 
 ### Existing tests that **must still pass** when `TENANT_AGENT_ENABLED=0`
 
@@ -394,6 +463,7 @@ Default `npm test` runs with agent **off**. These are the regression shield for 
 | `tests/scenarios/multiIssueSplit.test.js` | Multi-ticket finalize |
 | `tests/buildMaintenanceReceipt.test.js` | Receipt builder unit tests |
 | `tests/portalStructuredCreateDraft.test.js` | Handoff target shape |
+| `tests/postCreateContract.test.js` | `postCreate.scheduleMode` contract |
 | `tests/scenarios/portalCreateTicketStructured.test.js` | Structured create E2E |
 | `tests/scenarios/portalCreateTicketCommonArea.test.js` | Portal common area |
 | `tests/handleInboundCoreScheduleHints.test.js` | Structured create detection |
@@ -407,7 +477,7 @@ Staff paths (must remain unaffected):
 | `tests/scenarios/portalPortalChatStaffCapture.test.js` |
 | `tests/scenarios/portalPortalChatAudioStaffCapture.test.js` |
 
-**CI rule:** `TENANT_AGENT_ENABLED` is unset or `0` in all existing scenario files (same pattern as `INTAKE_LLM_ENABLED=0`). Agent scenarios set `TENANT_AGENT_ENABLED=1` in-file only.
+**CI rule:** `TENANT_AGENT_ENABLED` is unset or `0` in all existing scenario files (same pattern as `INTAKE_LLM_ENABLED=0`). Agent scenarios set `TENANT_AGENT_ENABLED=1` in-file only. `npm test` includes `tests/tenantAgent/*.test.js` and `tests/postCreateContract.test.js`.
 
 Full `npm test` pass required. Update **`docs/PARITY_LEDGER.md`** with agent row (PARTIAL until pilot proven).
 
@@ -429,23 +499,247 @@ Rule: stale docs are a bug.
 
 ## 13) Definition of done (Tenant Agent pilot)
 
-- [ ] `tenant_conversations` migration applied
-- [ ] `TENANT_AGENT_ENABLED=0` → byte-identical behavior to pre-agent tenant path (regression tests green)
-- [ ] `TENANT_AGENT_ENABLED=1` → multi-turn gather → one structured handoff → one ticket
-- [ ] Agent never sends ticket id not returned by brain
-- [ ] LLM failure → deterministic fallback (no crash, no silent drop)
-- [ ] Max-turn escalation message sent; no infinite loop
-- [ ] All sends via `dispatchOutbound`
-- [ ] Ledger + handoff docs reflect truth
+Code-complete for **pilot slice** (one property, SMS/TG/WA). Operator must still apply migration **063**.
+
+- [x] `063_tenant_conversations.sql` **in repo** (operator applies in Supabase — see `OUTSIDE_CURSOR.md`)
+- [x] `TENANT_AGENT_ENABLED=0` → legacy tenant path (default `npm test`; agent scenarios opt in)
+- [x] `TENANT_AGENT_ENABLED=1` → multi-turn gather → structured handoff → one ticket (scenario tests)
+- [x] Post-complete within 48h: clarify → natural confirm → `append_to_ticket` with **pending substance**, not confirm text
+- [x] Agent never sends ticket id not returned by brain (`shapeBrainReply` / receipt facts)
+- [x] LLM failure → deterministic fallback (`TENANT_AGENT_LLM_FAILED`, scripted prompts; optional legacy handoff via `TENANT_AGENT_FALLBACK_TO_LEGACY`)
+- [x] Max-turn escalation message + `TENANT_AGENT_ESCALATED` event
+- [x] All user-facing sends via `dispatchOutbound` (pipeline outgate seam)
+- [x] **`find_related_ticket` after 48h** (Phase 6 — brain lookup before fresh gather)
+- [ ] Append visible in portal Activity / audit (`changed_by_*`, timeline) — **not wired**
+- [ ] Production pilot sign-off on one property (`TENANT_AGENT_PROPERTY_ALLOWLIST`)
 
 ---
 
 ## 14) Sprint map (implementation order)
 
-| Sprint | Deliverable |
-|--------|-------------|
-| **1** | Table + flag + deterministic gather script + handoff + Phase 1 receipt reply |
-| **2** | LLM conversation + completeness + voice prompt |
-| **3** | Brain-aware shape reply + channel render hooks + pilot allowlist |
+| Sprint / Phase | Deliverable | Status |
+|----------------|-------------|--------|
+| **1** | Table + flag + deterministic gather + handoff + receipt reply | **Done** |
+| **2** | LLM gather + completeness + voice prompt | **Done** |
+| **3** | Shape reply + channel render + pilot allowlist | **Done** |
+| **§15 Phase 4** | Post-complete clarify (`same_or_new_pending`, natural language) | **Done** |
+| **§15 Phase 5** | `append_to_ticket` brain contract + media | **Done (minimal)** |
+| **§15 Phase 6** | `find_related_ticket` after 48h TTL | **Done** |
+| **§15 Phase 7** | Staff update / ETA (`request_staff_update`) | **Deferred** |
 
 See `./OUTGATE_VOICE_SPEC.md` for expression phases (footer, localize) — agent consumes those seams, does not fork them.
+
+---
+
+## 15) Post-handoff follow-up — clarification authority
+
+**Status:** **Phases 4–6 shipped in repo.** After TTL expiry, substantive messages run **`find_related_ticket`** before blind gather. **Phase 7** (`request_staff_update`) deferred.
+
+### Doctrine (non-negotiable)
+
+> **Tenant-agent active context is a clarification aid, not routing authority.** Within the 48-hour context window, ambiguous follow-ups must be clarified before append or new intake. **Media-only follow-ups are never auto-attached.** After 48 hours, conversation context expires and the next tenant message is treated as fresh intake **for chat memory** — but operational ticket history does not expire; the agent must query the brain for open/recent tickets before assuming a new issue.
+
+> **48-hour memory clears the chat thread, not the ticket relationship.** The agent must not write tickets, attach media, close tickets, or escalate lifecycle. It may ask clarifying questions and send **structured operation packages** to the brain only after tenant confirmation or high-confidence rules. If confidence is low, **always ask the tenant to clarify.**
+
+This is **agent clarification authority**, not agent routing authority.
+
+### Two kinds of memory
+
+| Kind | What it is | TTL | Used for |
+|------|------------|-----|----------|
+| **Conversation memory** | `tenant_conversations` row: `messages`, `partial_package`, adapter `status` | **48h** idle (`TENANT_AGENT_CONVERSATION_TTL_HOURS`) → row deleted + `TENANT_AGENT_CONVERSATION_EXPIRED` in `event_log` | Gather UX, same/new clarify latch, schedule_pending |
+| **Operational memory** | Tickets, work items, assignment, schedule, timeline in brain/DAL | Does **not** expire with chat | Status answers, `find_related_ticket`, append validation |
+
+After 48h the agent must **not** say “I remember we were talking about the sink.” It **may** ask the brain: “Does this tenant have an open sink ticket?”
+
+### Normal flow (unchanged — Sprint 1–3)
+
+```text
+1. gathering        — agent collects property / unit / issue / schedule (+ media in package)
+2. handoff_sent     — structured create_ticket → brain
+3. brain            — ticket created; optional schedule ask (postCreate ASK_OPTIONAL)
+4. schedule_pending — tenant may reply with window (core SCHEDULE; agent defers)
+5. complete         — receipt + schedule done or skipped; active_ticket_key stored
+```
+
+Within 48h after `complete`, follow-ups use **§15** rules — not a blind new gather.
+
+### Conversation states (target)
+
+| `status` | Meaning |
+|----------|---------|
+| `gathering` | Building intake package |
+| `handoff_pending` | Package sent; awaiting brain result |
+| `handoff_done` / **`complete`** | Ticket exists; optional schedule may still be pending in **brain** `intake_sessions` |
+| **`schedule_pending`** | Adapter mirror: brain waiting on SCHEDULE (agent defers to core) |
+| **`same_or_new_pending`** | Asked “existing request or new issue?”; awaiting natural-language confirmation |
+| **`expired`** | (logical) no row — next message is fresh adapter state |
+
+`active_ticket_key` remains the adapter latch for “last ticket from this thread” **within 48h**. After expiry, do not trust it for attach — use **`find_related_ticket`** (brain).
+
+### Structured operations (agent → brain)
+
+Agent sends **operation intent** in `_portalPayloadJson` (or dedicated contract module). Core must **not** branch on `tenant_agent` channel; it branches on `operation`.
+
+| Operation | When | Brain owns |
+|-----------|------|------------|
+| `create_ticket` | New intake package complete | Finalize, category, emergency, lifecycle |
+| `supply_schedule` | Schedule text while brain `expected === SCHEDULE` | Policy, `preferred_window` |
+| `append_to_ticket` | Tenant confirmed same request (or brain returned strong match + confirm) | Ownership, open status, `attachmentsAdd`, note append |
+| `find_related_ticket` | After 48h or ambiguous follow-up without latch | Match scoring, ticket list, `allowedOperations` |
+| `ack_only` | Thanks / OK | Nothing |
+| *(future)* `request_staff_update` | Assigned, no schedule, tenant asks for update | Staff ping, ETA workflow — **not Phase 4–6** |
+
+**Phase 4–6 scope:** `create_ticket` ✅ · `supply_schedule` ✅ (defer) · `append_to_ticket` ✅ · `find_related_ticket` ✅ · clarification UX ✅ (adapter).
+
+### Post-complete decision table (within 48h)
+
+| Situation | Agent action | Brain called? |
+|-----------|--------------|---------------|
+| “Thanks” / “Awesome thanks” | `ack_only` | No |
+| Schedule-looking text while brain expects SCHEDULE | Defer → core schedule | Yes (schedule) |
+| **Photo only** | **Ask:** same request or new issue? → `same_or_new_pending` | **No** until confirmed |
+| “Here is the photo of the sink” | **Ask** same/new (low confidence) | No until confirmed |
+| “Still leaking from the same sink” | **Ask** or append only if rules allow **high** confidence; default **ask** | After confirm → `append_to_ticket` |
+| “New issue, bedroom door broken” | New `gathering` → `create_ticket` when complete | Yes (create) |
+| “Also my bedroom door is broken” | **Ask** same/new | No until clarified |
+| Tenant replies **same** / confirms existing (natural language) | `append_to_ticket` package (+ media) | Yes |
+| Tenant replies **new** / different issue (natural language) | Reset gather → `create_ticket` when complete | Yes (create) |
+| Context **> 48h** | No `tenant_conversations` row → **`find_related_ticket`** first | Query, then branch |
+
+**Rule:** Media-only is **never** enough to auto-attach. Mold photo after sink ticket must not silently attach to sink.
+
+**Append message rule:** When tenant confirms same request (`yep same`, `same one`, `yes same issue`), brain receives **`append_to_ticket`** with the **pending follow-up substance** (prior message/photo), **not** the confirmation phrase. LLM (when enabled) classifies confirm vs new and may return `append_note`; adapter merges pending + stripped detail before handoff.
+
+### After 48h — lookup before new intake
+
+```text
+Tenant: "My sink is still leaking"
+  → extract issue hints (category, symptom, unit if known)
+  → find_related_ticket (brain/DAL — not raw adapter DB writes)
+  → 0 matches     → fresh gathering → create_ticket
+  → 1 strong match → surface status (assignee, schedule) + ask to add note if needed → append_to_ticket
+  → multiple/weak  → ask tenant which request they mean
+```
+
+**Example (strong match):** Brain returns ticket assigned to Nick, tomorrow afternoon → agent: “I found your open sink request. It’s assigned to Nick and scheduled for tomorrow afternoon. I’ll add that it’s still leaking.” → `append_to_ticket`.
+
+**Example (assigned, no schedule):** “Assigned to Jeff; I don’t see a scheduled time yet. I’ll ask for an update.” → Phase 7+ (`request_staff_update`); Phase 6 only documents extension point.
+
+**Example (no match):** Normal gather: “What’s going on with the sink?”
+
+### `find_related_ticket` package (sketch)
+
+**Agent → brain (query):**
+
+```json
+{
+  "operation": "find_related_ticket",
+  "actor": { "type": "TENANT", "phone_e164": "+15551234001" },
+  "hints": {
+    "issueText": "sink is still leaking",
+    "categoryHint": "Plumbing",
+    "unitHint": "410",
+    "property_code": "PENN"
+  }
+}
+```
+
+**Brain → agent (response facts for expression only):**
+
+```json
+{
+  "matchStatus": "single_strong_match",
+  "ticket": {
+    "ticket_key": "...",
+    "ticket_id": "PENN-042626-1234",
+    "status": "OPEN",
+    "assigned_name": "Nick",
+    "preferred_window": "Tomorrow afternoon"
+  },
+  "allowedOperations": ["append_to_ticket", "supply_schedule"]
+}
+```
+
+Agent **never** invents assignee or schedule; only speaks facts returned.
+
+### `append_to_ticket` package (sketch)
+
+```json
+{
+  "operation": "append_to_ticket",
+  "ticket_key": "<uuid>",
+  "message": "Tenant reports sink still leaking.",
+  "attachmentUrls": ["https://..."],
+  "postAppend": { "scheduleMode": "NONE" }
+}
+```
+
+Brain validates: tenant ownership, ticket open, append permissions. Reuse portal `attachmentsAdd` / mutation path where possible — **no new finalize path**.
+
+### Implementation phases
+
+| Phase | Scope | Deliverables | Tests (minimum) |
+|-------|--------|--------------|-----------------|
+| **4** | **Clarification routing** (within 48h) | States `complete`, `same_or_new_pending`; conversational clarify; LLM-first same/new when enabled; `resolveAppendHandoffContent` | **done** — `postCompleteTurn.js`, `sameOrNewClarify.js`, `sameOrNewLlmClassify.js`, `resolveAppendHandoffContent.js` |
+| **5** | **`append_to_ticket` brain contract** | Payload + `handleTenantAppendToTicket` + `tenantTicketAppend` DAL | **done (minimal)** — no portal timeline on append yet |
+| **6** | **`find_related_ticket` after 48h** | Brain/DAL scoring + adapter branch after TTL | **done** — `findRelatedTenantTickets.js`, `handleTenantFindRelatedTicket.js`, `applyFindRelatedLookupResult.js` |
+| **7** *(future)* | **Staff update / ETA** | `request_staff_update`, assignee ping, staff reply → schedule | Out of scope until 4–6 stable |
+| **8a** | **Maintenance-only lane** | Non-maintenance → staff contact deflect (no ticket) | **done** — `classifyNonMaintenanceRequest.js`, `handleNonMaintenanceDeflect.js`, `resolvePropertyStaffContact.js` |
+| **8b** *(future)* | **Access / amenity SMS** | Gameroom reserve via Access Engine inbound | Not started |
+| **8c** *(future)* | **Lease / docs links** | Tenant portal deep link in deflect reply | Not started |
+
+**Maintenance-only lane (8a — shipped):** Lease copies, amenity booking, building FAQ, abuse/non-ops → polite deflect + property **SUPER** / **PM** phone (fallback `COMM_MAIN_NUMBER_DISPLAY`). Conversation `status: closed`. **No ticket.** Later phases replace deflect with real routing (Access reserve, portal link) per domain.
+
+**Stop rule for each PR:** one phase per PR; PATCH format; no channel spaghetti in `coreMaintenanceFastPath`; no lifecycle changes unless required for append validation.
+
+### Architecture constraints (all phases)
+
+- Agent: clarification UX + package build **after** confirm or high-confidence rule.
+- Agent: **no** direct ticket writes, **no** lifecycle, **no** staff SMS from agent.
+- Brain/DAL: match scoring, ownership, status, append, schedule policy.
+- Reuse `intakeAttachClassify` / `ATTACH_CLARIFY` **ideas** in adapter; do not duplicate policy in LLM prompts alone.
+- `deferToCoreSchedule` remains for `schedule_pending` (brain `expected === SCHEDULE`).
+
+### Extension point (document only — Phase 7)
+
+When brain reports open ticket, assigned, **no** `preferred_window`, and tenant asks for update:
+
+```text
+agent (expression) → brain: request_staff_update (future)
+brain → staff notification → staff reply → schedule commit → tenant message
+```
+
+Do not implement in Phase 4–6.
+
+### Phase 4–5 test checklist (implemented)
+
+1. Photo-only after `complete` → same/new question; **no** append until confirm — ✅ `tenantAgentPostCompletePhase4.test.js`
+2. “Here is the sink photo” → ask before brain — ✅
+3. Confirm same (e.g. `yep same`) → `append_to_ticket` with **pending** body/media, not confirm text — ✅
+4. Confirm new → `gathering`, no append — ✅
+5. “New issue my bedroom door is broken” → new intake without same/new ask — ✅
+6. “Also my bedroom door is broken” → same/new ask — ✅ unit `classifyPostCompleteFollowUp.test.js`
+7. After 48h TTL + problem signal → `find_related_ticket` before gather — ✅ `tenantAgentFindRelatedPhase6.test.js`, `tenantAgentConversationTtl.test.js`
+8. “Thanks” after `complete` → `ack_only` — ✅ `tenantAgentHandoff.test.js`
+9. Schedule reply while brain expects SCHEDULE → core schedule — ✅ `deferToCoreSchedule.test.js` (unit); full pipeline scenario **TODO**
+
+### Related code (current)
+
+| Area | Implementation |
+|------|----------------|
+| `postCompleteTurn.js` | Post-complete router: ack, new intake, same/new, append handoff |
+| `postHandoffReply.js` | Thanks ack; chitchat detection |
+| `active_ticket_key` | Stored after finalize/append; Ref # in clarify prompt; **not** used for auto-attach |
+| `conversationExpiry.js` | 48h delete row + event log |
+| `deferToCoreSchedule.js` | SCHEDULE → skip agent → core |
+| `resolveAppendHandoffContent.js` | Brain append message from pending + stripped reply |
+| Core `ATTACH_CLARIFY` | Pre-ticket intake only (legacy path); post-complete uses adapter §15 |
+
+### Docs to update when each phase ships
+
+- This section (status checkboxes)
+- `PARITY_LEDGER.md` — agent row + `find_related_ticket` / `append_to_ticket`
+- `HANDOFF_LOG.md` — dated entry per phase
+- `ORCHESTRATOR_ROUTING.md` — operations table
+- `BRAIN_PORT_MAP.md` — brain handlers for new operations

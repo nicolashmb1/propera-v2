@@ -3,6 +3,7 @@
  * Run in isolation: `npm run test:integration` (sets PROPERA_TEST_INJECT_SB + in-memory DB).
  * Do not rely on real Supabase or .env credentials.
  */
+require("../helpers/legacyPipelineEnv");
 process.env.PROPERA_TEST_INJECT_SB = "1";
 process.env.CORE_ENABLED = "1";
 /** Deterministic intake (no OpenAI) — integration proves identity + draft rows, not LLM extraction. */

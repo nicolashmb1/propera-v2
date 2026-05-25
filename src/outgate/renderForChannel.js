@@ -38,6 +38,7 @@ function applyTelegramMarkdown(body) {
  * @param {string} o.audience — tenant | staff | unknown
  * @param {boolean} [o.includeFirstContactExtras] — property header + SMS footer trigger
  * @param {string} [o.propertyDisplayName]
+ * @param {boolean} [o.applyTelegramReceiptMarkdown] — bold Ref # lines (default true)
  * @returns {{ body: string, parseMode: string | null, meta: object }}
  */
 function renderForChannel(o) {
@@ -46,6 +47,8 @@ function renderForChannel(o) {
   const audience = String(o.audience || "unknown").toLowerCase();
   const includeFirstContactExtras = !!o.includeFirstContactExtras;
   const propertyDisplayName = String(o.propertyDisplayName || "").trim();
+  const applyTelegramReceiptMarkdown =
+    o.applyTelegramReceiptMarkdown !== false;
 
   const meta = {
     channelRender: true,
@@ -73,9 +76,12 @@ function renderForChannel(o) {
   }
 
   if (transportChannel === "telegram") {
-    text = applyTelegramMarkdown(text);
-    meta.telegramMarkdown = true;
-    return { body: text, parseMode: "Markdown", meta };
+    if (applyTelegramReceiptMarkdown) {
+      text = applyTelegramMarkdown(text);
+      meta.telegramMarkdown = true;
+      return { body: text, parseMode: "Markdown", meta };
+    }
+    return { body: text, parseMode: null, meta };
   }
 
   return { body: text, parseMode: null, meta };

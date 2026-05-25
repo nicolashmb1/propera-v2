@@ -8,6 +8,7 @@
  * "red is OK" on first run — rows without a resolvable unit (COMMON, PROFILE_LOOKUP) may
  * not finalize and are intentionally left as soft checks.
  */
+require("./helpers/legacyPipelineEnv");
 process.env.PROPERA_TEST_INJECT_SB = "1";
 process.env.CORE_ENABLED = "1";
 process.env.INTAKE_COMPILE_TURN = "1";

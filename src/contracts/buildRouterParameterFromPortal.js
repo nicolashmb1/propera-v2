@@ -6,6 +6,8 @@
  * @returns {Record<string, string>}
  */
 
+const { postCreateNone } = require("./postCreateContract");
+
 /** Keep in sync with `dal/portalTicketMutations.js` PORTAL_PAYLOAD_NEST_KEYS. */
 const PORTAL_PAYLOAD_NEST_KEYS = [
   "ticket",
@@ -202,6 +204,17 @@ function buildRouterParameterFromPortal(payload) {
   const costCtxJson =
     costCtx && typeof costCtx === "object" ? JSON.stringify(costCtx) : "";
 
+  const payloadForJson =
+    action === "create_ticket"
+      ? {
+          ...p,
+          postCreate:
+            p.postCreate && typeof p.postCreate === "object"
+              ? p.postCreate
+              : postCreateNone(),
+        }
+      : p;
+
   return {
     _mode: "",
     _internal: "",
@@ -211,7 +224,7 @@ function buildRouterParameterFromPortal(payload) {
     Body: body,
     _mediaJson: mediaJson,
     _portalAction: action,
-    _portalPayloadJson: JSON.stringify(p),
+    _portalPayloadJson: JSON.stringify(payloadForJson),
     _portalChannel: portalChannel || (isTenantPortalStructured ? "tenant_portal" : ""),
     _portalActorType: portalActorType,
     _tenantPhoneE164: String(p.tenantPhoneE164 || p.phone || actor).trim(),

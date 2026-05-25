@@ -10,6 +10,9 @@ const {
 } = require("../brain/gas/parsePreferredWindowShared");
 const { inferStageDayFromText_ } = require("../brain/gas/inferStageDayFromText");
 const { validateSchedPolicy_ } = require("../brain/gas/validateSchedPolicy");
+const {
+  adjustFlexibleScheduleForPolicy,
+} = require("../brain/gas/adjustFlexibleScheduleForPolicy");
 const { getSchedPolicySnapshot } = require("./propertyPolicy");
 const { properaTimezone, scheduleLatestHour } = require("../config/env");
 const { emitTimed } = require("../logging/structuredLog");
@@ -58,6 +61,93 @@ function parseWithStageFallback(raw, stageDay, opts) {
     }
   }
   return d;
+}
+
+/**
+ * Parse + policy check without ticket write (tenant agent pre-handoff / retry).
+ * @param {string} propertyCode
+ * @param {string} preferredWindow
+ * @param {{ traceId?: string, traceStartMs?: number }} [o]
+ * @returns {Promise<{
+ *   ok: boolean,
+ *   policyKey?: string,
+ *   policyVars?: object,
+ *   parsed?: object|null,
+ *   label?: string,
+ * }>}
+ */
+async function checkPreferredWindowForProperty(propertyCode, preferredWindow, o) {
+  const sb = getSupabase();
+  const propCode = String(propertyCode || "").trim().toUpperCase();
+  const raw = String(preferredWindow || "").trim();
+  if (!propCode || raw.length < MIN_SCHEDULE_LEN) {
+    return { ok: false, error: "bad_input" };
+  }
+
+  const tz = properaTimezone();
+  const opts = {
+    now: new Date(),
+    timeZone: tz,
+    scheduleLatestHour: scheduleLatestHour(),
+  };
+
+  let stageDay = "Today";
+  try {
+    const inf = inferStageDayFromText_(raw);
+    if (inf) stageDay = inf;
+  } catch (_) {}
+
+  let d = parseWithStageFallback(raw, stageDay, opts);
+  let sched = buildSchedFromParsed(raw, d);
+
+  const policySnapshot = sb
+    ? await getSchedPolicySnapshot(sb, propCode)
+    : {
+        earliestHour: 9,
+        latestHour: 17,
+        allowWeekends: false,
+        schedSatAllowed: false,
+        schedSunAllowed: false,
+        minLeadHours: 0,
+        maxDaysOut: 14,
+        schedSatLatestHour: 17,
+      };
+
+  const flexAdjust = adjustFlexibleScheduleForPolicy(
+    d,
+    sched,
+    raw,
+    stageDay,
+    opts,
+    propCode,
+    policySnapshot
+  );
+  d = flexAdjust.parsed;
+  sched = flexAdjust.sched;
+
+  const when = new Date();
+  let verdict = { ok: true };
+  try {
+    verdict = validateSchedPolicy_(propCode, sched, when, policySnapshot);
+  } catch (_) {
+    verdict = { ok: true };
+  }
+
+  if (!verdict.ok) {
+    return {
+      ok: false,
+      policyKey: verdict.key,
+      policyVars: verdict.vars,
+      parsed: d || null,
+      label: d && d.label ? d.label : raw,
+    };
+  }
+
+  return {
+    ok: true,
+    parsed: d || null,
+    label: d && d.label ? d.label : raw,
+  };
 }
 
 /**
@@ -112,8 +202,23 @@ async function applyPreferredWindowByTicketKey(o) {
     if (inf) stageDay = inf;
   } catch (_) {}
 
-  const d = parseWithStageFallback(raw, stageDay, opts);
-  const sched = buildSchedFromParsed(raw, d);
+  let d = parseWithStageFallback(raw, stageDay, opts);
+  let sched = buildSchedFromParsed(raw, d);
+
+  const policySnapshot = await getSchedPolicySnapshot(sb, propCode);
+  const when = new Date();
+
+  const flexAdjust = adjustFlexibleScheduleForPolicy(
+    d,
+    sched,
+    raw,
+    stageDay,
+    opts,
+    propCode,
+    policySnapshot
+  );
+  d = flexAdjust.parsed;
+  sched = flexAdjust.sched;
 
   const parsedPayload = {
     ticket_key: key,
@@ -133,9 +238,6 @@ async function applyPreferredWindowByTicketKey(o) {
     data: parsedPayload,
   });
   await flightLog(traceId, "SCHEDULE_PARSED", parsedPayload);
-
-  const policySnapshot = await getSchedPolicySnapshot(sb, propCode);
-  const when = new Date();
 
   const checkPayload = {
     ticket_key: key,
@@ -271,42 +373,86 @@ async function applyPreferredWindowByTicketKey(o) {
 }
 
 /**
+ * Format a 24h hour number to 12h am/pm string (e.g. 8 → "8am", 17 → "5pm").
+ * @param {number} h
+ * @returns {string}
+ */
+function fmtHour_(h) {
+  const n = Number(h);
+  if (!isFinite(n)) return "";
+  if (n === 0) return "12am";
+  if (n === 12) return "12pm";
+  return n < 12 ? `${n}am` : `${n - 12}pm`;
+}
+
+/**
+ * Build a human-readable hours string from policy vars.
+ * @param {object} [vars]
+ * @returns {string|null}
+ */
+function buildPolicyHoursLine_(vars) {
+  if (!vars) return null;
+  const start = fmtHour_(vars.earliestHour);
+  const end = fmtHour_(vars.latestHour);
+  if (!start || !end) return null;
+
+  if (vars.allowWeekends) {
+    return `Monday–Sunday ${start}–${end}`;
+  }
+
+  let line = `Monday–Friday ${start}–${end}`;
+  if (vars.schedSatAllowed) {
+    const satEnd =
+      vars.schedSatLatestHour != null && isFinite(Number(vars.schedSatLatestHour))
+        ? fmtHour_(vars.schedSatLatestHour)
+        : end;
+    line += `, Saturday ${start}–${satEnd}`;
+  }
+  if (vars.schedSunAllowed) {
+    line += `, Sunday ${start}–${end}`;
+  }
+  return line;
+}
+
+/**
  * Tenant-facing copy when `validateSchedPolicy_` rejects (GAS `SCHED_REJECT_*`).
+ * Reads actual policy hours from vars and communicates them plainly.
  * @param {string} [key]
  * @param {object} [vars]
  */
 function schedulePolicyRejectMessage(key, vars) {
-  void vars;
   const k = String(key || "").trim();
+  const hours = buildPolicyHoursLine_(vars);
+  const hoursPhrase = hours
+    ? `Regular maintenance hours are ${hours}.`
+    : "Please check with the office for available hours.";
+
   if (k === "SCHED_REJECT_WEEKEND") {
-    return (
-      "That day isn't available for visits at this property. " +
-      "Please choose a different day that matches this building's schedule."
-    );
+    return `${hoursPhrase} What day and time works for you within those hours?`;
   }
   if (k === "SCHED_REJECT_TOO_SOON") {
     return (
-      "That time is too soon — we need more advance notice. " +
-      "Please pick a later date or time."
+      `That time is too soon — we need a bit more advance notice. ` +
+      `${hoursPhrase} What day works for you?`
     );
   }
   if (k === "SCHED_REJECT_TOO_FAR") {
-    return "That date is too far out. Please choose something within the allowed booking window.";
+    const maxDays =
+      vars && isFinite(Number(vars.maxDaysOut)) ? vars.maxDaysOut : null;
+    const window_ = maxDays
+      ? `within the next ${maxDays} days`
+      : "within our scheduling window";
+    return `That date is too far out — please choose something ${window_}. ${hoursPhrase}`;
   }
   if (k === "SCHED_REJECT_HOURS") {
-    return (
-      "That time is outside allowed hours for this property. " +
-      "Please pick a time within the building's service window."
-    );
+    return `${hoursPhrase} What time works for you within those hours?`;
   }
-  return (
-    "That preferred time isn't available for this property's schedule. " +
-    "Please try another day or time."
-  );
+  return `${hoursPhrase} Please try another day or time.`;
 }
 
 module.exports = {
   applyPreferredWindowByTicketKey,
+  checkPreferredWindowForProperty,
   MIN_SCHEDULE_LEN,
   schedulePolicyRejectMessage,
 };

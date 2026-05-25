@@ -6,6 +6,7 @@
  * TICKET_CANCEL: seeded open ticket + intake session; assert ticket suspended.
  *   NOTE: SUSPEND_TICKET is not yet implemented in V2 — cancel assertions will be RED.
  */
+require("./helpers/legacyPipelineEnv");
 process.env.PROPERA_TEST_INJECT_SB = "1";
 process.env.CORE_ENABLED = "1";
 process.env.INTAKE_COMPILE_TURN = "1";

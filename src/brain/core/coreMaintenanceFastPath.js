@@ -16,7 +16,11 @@ const {
   extractScheduleHintStaffCapture,
   extractScheduleHintPortalStaff,
   extractScheduleHintTenant,
+  portalPayloadChannel,
 } = require("./handleInboundCoreScheduleHints");
+const {
+  shouldSkipScheduleAfterStructuredCreate,
+} = require("../../contracts/postCreateContract");
 const { MIN_SCHEDULE_LEN } = require("../../dal/ticketPreferredWindow");
 const { buildMaintenanceReceipt } = require("../../outgate/buildMaintenanceReceipt");
 const { reconcileFinalizeTicketRows } = require("./finalizeTicketGroups");
@@ -154,7 +158,9 @@ async function runCoreMaintenanceFastPath(x) {
   });
 
   const emFast =
-    usesStructuredPortalCreateDraft(p, mode)
+    usesStructuredPortalCreateDraft(p, mode) &&
+    portalPayloadChannel(p) !== "tenant_agent" &&
+    !(fastDraft.safety && fastDraft.safety.isEmergency)
       ? { emergency: "No", emergencyType: "" }
       : fastDraft.safety && fastDraft.safety.isEmergency
         ? { emergency: "Yes", emergencyType: String(fastDraft.safety.emergencyType || "") }
@@ -166,7 +172,10 @@ async function runCoreMaintenanceFastPath(x) {
   const skipSchedulingFast =
     emFast.emergency === "Yes" ||
     commonAreaFast ||
-    (usesStructuredPortalCreateDraft(p, mode));
+    shouldSkipScheduleAfterStructuredCreate(
+      usesStructuredPortalCreateDraft(p, mode),
+      p
+    );
 
   const trFast = await resolveManagerTenantIfNeeded(
     sb,
@@ -241,18 +250,24 @@ async function runCoreMaintenanceFastPath(x) {
     commonArea: commonAreaFast,
     unitLabel: unitLabelResolved,
     locationLabelSnapshot: tgt.location_label_snapshot || "",
+    propertyCode: fastDraft.propertyCode,
   });
   let receiptFast = receiptBuilt.body;
   const receiptTemplateKey = receiptBuilt.templateKey;
 
   if (skipSchedulingFast) {
-    if (scheduleHintPortalFast) {
+    if (scheduleHintPortalFast && emFast.emergency !== "Yes") {
       receiptFast = await appendPortalStaffScheduleNote(
         receiptFast,
         scheduleHintPortalFast,
         fin.ticketKey,
         traceId,
-        traceStartMs
+        traceStartMs,
+        {
+          afterLifecycle: true,
+          propertyCodeHint: String(fastDraft.propertyCode || "").trim(),
+          sb,
+        }
       );
     }
     await clearIntakeLike();
@@ -298,7 +313,12 @@ async function runCoreMaintenanceFastPath(x) {
       tenantSchedHint,
       fin.ticketKey,
       traceId,
-      traceStartMs
+      traceStartMs,
+      {
+        afterLifecycle: true,
+        propertyCodeHint: String(fastDraft.propertyCode || "").trim(),
+        sb,
+      }
     );
     await enterScheduleWaitAndLogTicketCreatedAskSchedule({
       setScheduleWaitLike,

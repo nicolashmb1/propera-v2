@@ -45,12 +45,13 @@ function stripStaffAliasFromHashPayload(stripped) {
 function isTenantPortalStructuredCreate(parameter) {
   const p = parameter || {};
   if (String(p._portalAction || "").trim().toLowerCase() !== "create_ticket") return false;
-  if (String(p._portalChannel || "").trim().toLowerCase() === "tenant_portal") return true;
+  const directCh = String(p._portalChannel || "").trim().toLowerCase();
+  if (directCh === "tenant_portal" || directCh === "tenant_agent") return true;
   try {
     const j = JSON.parse(String(p._portalPayloadJson || "{}"));
     const ch = String(j.channel || "").trim().toLowerCase();
     const actor = String(j.actor_type || "").trim().toUpperCase();
-    return ch === "tenant_portal" || actor === "TENANT";
+    return ch === "tenant_portal" || ch === "tenant_agent" || actor === "TENANT";
   } catch (_) {
     return false;
   }

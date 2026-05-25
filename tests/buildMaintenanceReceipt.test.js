@@ -29,6 +29,21 @@ test("buildSingleMaintenanceReceipt — routine three lines", () => {
   assert.doesNotMatch(body, /Ticket logged/i);
 });
 
+test("buildSingleMaintenanceReceipt — common area uses property at, not location echo", () => {
+  const body = buildSingleMaintenanceReceipt({
+    ticketId: "WGRA-052426-6464",
+    issuePhrase: "elevator broken",
+    tier: "routine",
+    commonArea: true,
+    locationLabelSnapshot: "elevator",
+    propertyCode: "WESTGRAND",
+  });
+  assert.match(body, /Ref #WGRA-052426-6464 — we're on it\./);
+  assert.match(body, /Elevator broken confirmed at Westgrand\./);
+  assert.doesNotMatch(body, /confirmed for the elevator/i);
+  assert.match(body, /We'll be in touch shortly\./);
+});
+
 test("buildSingleMaintenanceReceipt — emergency", () => {
   const body = buildSingleMaintenanceReceipt({
     ticketId: "PENN-001",

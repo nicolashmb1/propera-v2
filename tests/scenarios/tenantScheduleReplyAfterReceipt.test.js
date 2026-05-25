@@ -1,6 +1,7 @@
 /**
  * Phase 1 — post-receipt schedule: pending SCHEDULE + core_schedule_captured on follow-up.
  */
+require("../helpers/legacyPipelineEnv");
 process.env.PROPERA_TEST_INJECT_SB = "1";
 process.env.CORE_ENABLED = "1";
 process.env.INTAKE_COMPILE_TURN = "1";

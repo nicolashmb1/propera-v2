@@ -36,11 +36,17 @@ function readPortalCreateTicketPresentation(routerParameter) {
     const status =
       statusRaw.toLowerCase() === "open" ? "Open" : statusRaw;
     const serviceNote = String(j.serviceNote != null ? j.serviceNote : "").trim();
+    const emRaw = String(j.emergency != null ? j.emergency : "").trim();
     return {
       category: cat || "General",
       urgency,
       status,
       serviceNote,
+      emergency:
+        emRaw === "Yes" || emRaw.toLowerCase() === "true" || j.emergency === true
+          ? "Yes"
+          : "No",
+      emergencyType: String(j.emergency_type || j.emergencyType || "").trim(),
     };
   } catch (_) {
     return null;
@@ -53,6 +59,18 @@ const {
   normalizeLocationType,
   isCommonAreaLocation,
 } = require("../brain/shared/commonArea");
+
+/**
+ * Tenant transport identity — E.164 when phone; preserve `TG:…` for Telegram.
+ * @param {string} actorKey
+ * @returns {string}
+ */
+function tenantContactKeyFromActor(actorKey) {
+  const raw = String(actorKey || "").trim();
+  if (!raw) return "";
+  if (/^TG:/i.test(raw)) return raw;
+  return normalizePhoneE164(raw) || raw;
+}
 
 function shortWiSuffix() {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase();
@@ -155,7 +173,7 @@ async function finalizeMaintenanceDraft(o) {
   const tenantPhoneRaw =
     o.mode === "MANAGER"
       ? normalizePhoneE164(resolvedTenant)
-      : normalizePhoneE164(String(o.actorKey || "").trim());
+      : tenantContactKeyFromActor(o.actorKey);
   const tenantPhone = commonArea ? "" : tenantPhoneRaw;
   const persistedUnit = commonArea ? "" : String(o.unitLabel || "").trim();
 
@@ -184,14 +202,19 @@ async function finalizeMaintenanceDraft(o) {
   let serviceNotesCol;
 
   if (portalPresentation) {
-    emergency = "No";
-    emergencyType = "";
+    emergency =
+      portalPresentation.emergency === "Yes" ? "Yes" : "No";
+    emergencyType =
+      portalPresentation.emergency === "Yes"
+        ? String(portalPresentation.emergencyType || "SAFETY").trim()
+        : "";
     categoryLabel = portalPresentation.category;
     urgencyCol = portalPresentation.urgency;
     ticketStatus = portalPresentation.status;
     serviceNotesCol = portalPresentation.serviceNote;
     const urgUpper = String(portalPresentation.urgency || "").toUpperCase();
-    priorityCol = urgUpper === "URGENT" ? "URGENT" : "";
+    priorityCol =
+      emergency === "Yes" || urgUpper === "URGENT" ? "URGENT" : "";
   } else if (o.emergencyOverride) {
     emergency = "Yes";
     emergencyType = String(o.emergencyOverride.emergencyType || "").trim();

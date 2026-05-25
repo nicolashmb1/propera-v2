@@ -64,7 +64,9 @@ Inbound ACCESS_* intents route **beside** `handleInboundCore` — same channel a
    - `resolveStaffContextFromRouterParameter` — staff roster match on real phone **or** `telegram_chat_link` bridge from `TG:…` (channel-agnostic identity; no duplicate `TG:` `contacts` row required when link row carries `phone_e164`)
    - `evaluateRouterPrecursor` → `normalizeInboundEventFromRouterParameter`
    - **`buildLaneDecision`** — `src/inbound/routeInboundDecision.js` (staff capture / staff gate **or** `decideLane`)
-   - Staff lifecycle / SMS compliance / opt-out suppress / **non-maintenance lane stub** (vendor/system) / **`handleInboundCore`**
+   - Staff lifecycle / SMS compliance / opt-out suppress / **non-maintenance lane stub** (vendor/system)
+   - **Tenant Agent** (optional, `TENANT_AGENT_ENABLED=1`) — `runTenantAgentTurn` before core when eligible. **Gather** → `create_ticket`. **Post-complete (48h):** clarify → `append_to_ticket`. **Post-48h TTL:** `find_related_ticket` → match / gather / same-new clarify. **Defer:** `deferToCoreSchedule.js` when brain expects SCHEDULE. Spec: **`docs/TENANT_AGENT_ADAPTER.md`**
+   - **`handleInboundCore`**
    - **Outgate:** `renderOutboundIntent` → **`dispatchOutbound`** → `telegramSendMessage` **or** `twilioSendMessage` (transport only; **no** direct sends from core)
 4. **Ops:** `GET /dashboard`, `GET /api/ops/event-log` — `src/dashboard/` (not GAS)
 

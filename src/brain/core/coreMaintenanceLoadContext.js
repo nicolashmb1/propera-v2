@@ -31,6 +31,8 @@ const {
 } = require("./coreMaintenanceShared");
 const { buildFastDraftForMaintenanceCore } = require("./coreMaintenancePortalDraft");
 const { resolveStaffCaptureBodyAndSession } = require("./coreMaintenanceStaffCapture");
+const { tryHandleTenantAppendToTicket } = require("./handleTenantAppendToTicket");
+const { tryHandleTenantFindRelatedTicket } = require("./handleTenantFindRelatedTicket");
 const { parseMediaJson } = require("../shared/mediaPayload");
 const { isAudioMediaItem } = require("../../media/audioTranscriptionProvider");
 
@@ -140,6 +142,34 @@ async function buildMaintenanceCoreDispatchContext(o) {
         ...outgateMeta("MAINTENANCE_ERROR_NO_ACTOR"),
       },
     };
+  }
+
+  if (mode === "TENANT") {
+    const findRelatedHandled = await tryHandleTenantFindRelatedTicket({
+      p,
+      canonicalBrainActorKey,
+      traceId,
+    });
+    if (findRelatedHandled.handled) {
+      return {
+        kind: "return",
+        coreEntered: true,
+        result: findRelatedHandled.result,
+      };
+    }
+
+    const appendHandled = await tryHandleTenantAppendToTicket({
+      p,
+      canonicalBrainActorKey,
+      traceId,
+    });
+    if (appendHandled.handled) {
+      return {
+        kind: "return",
+        coreEntered: true,
+        result: appendHandled.result,
+      };
+    }
   }
 
   if (!bodyText) {

@@ -1,6 +1,7 @@
 /**
  * Portal structured common_area — no unit, no tenant phone; same pipeline → finalize.
  */
+require("../helpers/legacyPipelineEnv");
 process.env.PROPERA_TEST_INJECT_SB = "1";
 process.env.CORE_ENABLED = "1";
 process.env.INTAKE_COMPILE_TURN = "1";

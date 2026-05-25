@@ -7,6 +7,155 @@
 
 ---
 
+## 2026-05-24 — Tenant Agent maintenance-only lane (Phase 8a)
+
+| Area | Change |
+|------|--------|
+| **Adapter** | Non-maintenance requests → deflect + property SUPER/PM phone (fallback `COMM_MAIN_NUMBER_DISPLAY`) |
+| **Events** | `TENANT_AGENT_NON_MAINTENANCE_DEFLECT` |
+| **Tests** | `maintenanceOnlyLane.test.js`, `tenantAgentMaintenanceOnlyLane.test.js` |
+
+---
+
+## 2026-05-24 — Tenant Agent Phase 6 (find_related_ticket after 48h)
+
+| Area | Change |
+|------|--------|
+| **Brain/DAL** | `findRelatedTenantTickets.js` — open tickets by tenant phone + hint scoring |
+| **Brain** | `handleTenantFindRelatedTicket.js` — read-only lookup operation |
+| **Adapter** | After TTL expiry + problem signal → lookup before gather; strong match → same/new clarify with status |
+| **Tests** | `tenantAgentFindRelatedPhase6.test.js`, `findRelatedTenantTickets.test.js` |
+
+---
+
+## 2026-05-24 — Docs sync: Tenant Agent code reality
+
+| Doc | Update |
+|-----|--------|
+| **`TENANT_AGENT_ADAPTER.md`** | Implementation snapshot; file map; §13 pilot checklist; Phases 4–5 done / Phase 6 not started |
+| **`PARITY_LEDGER.md`** | Tenant Agent row expanded |
+| **`BRAIN_PORT_MAP.md`**, **`ORCHESTRATOR_ROUTING.md`** | Post-complete + append operations |
+| **`OUTSIDE_CURSOR.md`** | Migration **063** apply step |
+| **`AGENTS.md`** | Tenant Agent pointer in “Where everything lives” |
+
+---
+
+## 2026-05-24 — Append confirm: brain gets substance, not "yep same"
+
+| Area | Change |
+|------|--------|
+| **`resolveAppendHandoffContent.js`** | Pending follow-up body/media → brain note; confirmation phrases stripped |
+| **LLM** | Same/new classify runs **first** when enabled; receives `pending_follow_up`; returns `append_note` |
+| **Flow** | Tenant "yep same" after "still leaking" → brain `append_to_ticket` message = **still leaking**, not confirm text |
+| **Photo-only** | "yep same" after photo → append attachment only; note = "Tenant sent a photo." (existing outgate default) |
+
+---
+
+| Area | Change |
+|------|--------|
+| **Prompts** | `sameOrNewClarify.js` — conversational ask/re-ask; no "Reply 1 or 2" |
+| **Parse** | Expanded natural-language heuristics (`yes same`, `still leaking`, `different problem`, …); numeric 1/2 still accepted silently |
+| **LLM** | `sameOrNewLlmClassify.js` — optional fallback when `TENANT_AGENT_LLM_ENABLED=1` and rules inconclusive |
+| **Bugfix** | `postCompleteTurn.js` — ambiguous reply re-prompt no longer throws on undefined `replyText` |
+| **Tests** | Phase 4 scenarios use natural replies; ambiguous re-ask test added |
+
+---
+
+| Area | Change |
+|------|--------|
+| **Adapter** | `postCompleteTurn.js`, `classifyPostCompleteFollowUp.js`, `sameOrNewClarify.js` — no media-only auto-attach; `same_or_new_pending`; natural-language confirm |
+| **Brain** | `append_to_ticket` via `tenantTicketAppend.js` + `handleTenantAppendToTicket.js` |
+| **Status** | `complete` after finalize (alias `handoff_done`) |
+| **Tests** | `tenantAgentPostCompletePhase4.test.js`, unit tests under `tests/tenantAgent/` |
+
+---
+
+## 2026-05-24 — Tenant Agent §15 plan (post-handoff clarify + lookup)
+
+| Area | Change |
+|------|--------|
+| **`TENANT_AGENT_ADAPTER.md` §15** | Phased plan: clarification authority, no media-only auto-attach, `same_or_new_pending`, `append_to_ticket`, `find_related_ticket` after 48h, Phase 7 staff-ETA extension point |
+| **Doctrine** | 48h = conversation memory only; operational tickets queried via brain |
+
+**Next implementation slice:** Phase 4 (clarification routing + tests) — no brain append handler required to start clarify UX.
+
+---
+
+## 2026-05-24 — postCreate contract (category + optional schedule)
+
+| Area | Change |
+|------|--------|
+| **`postCreateContract.js`** | `scheduleMode`: `NONE` (portal default) vs `ASK_OPTIONAL` (tenant agent); brain skips schedule ask only when `NONE` |
+| **Handoff** | `category` from `resolveHandoffCategory()`; agent sends `postCreate: { scheduleMode: "ASK_OPTIONAL" }` |
+| **Pipeline** | `deferToCoreSchedule.js` — when intake expects SCHEDULE, skip agent turn |
+| **Tests** | `postCreateContract.test.js`, handoff scenario asserts schedule ask + HVAC category |
+
+---
+
+## 2026-05-24 — Tenant Agent conversation TTL (48h)
+
+| Area | Change |
+|------|--------|
+| **`conversationExpiry.js`** | Lazy expiry on inbound; `TENANT_AGENT_CONVERSATION_EXPIRED` → `event_log` then **delete** row |
+| **Env** | `TENANT_AGENT_CONVERSATION_TTL_HOURS=48` (default 48; `0` = off) |
+| **Accountability** | Tickets/work_items untouched; expiry logs `partial_summary`, `active_ticket_key`, `message_count` |
+
+---
+
+## 2026-05-23 — Tenant Agent Sprint 3 (shape reply + channel + allowlist)
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **`shapeBrainReply.js`** | Rebuild finalize receipt from brain facts (`buildMaintenanceReceipt`); failure copy; multi-ticket passthrough |
+| **`extractBrainReceiptFacts.js`** | Ticket id / tier from `coreRun.finalize` + `outgate` only |
+| **`tenantAgentChannelRender.js`** | Gather/escalated: no Telegram receipt markdown; handoff: full channel extras |
+| **`propertyAllowlist.js`** | `TENANT_AGENT_PROPERTY_ALLOWLIST`; non-pilot → close conv + legacy core same turn |
+| **Pipeline** | `facts.tenantLocale`; `renderForChannel({ applyTelegramReceiptMarkdown })` |
+| **Tests** | `tenantAgentSprint3.test.js`, `shapeBrainReply.test.js`, `propertyAllowlist.test.js` |
+
+### Ops
+
+Pilot one property: `TENANT_AGENT_PROPERTY_ALLOWLIST=PENN` (comma-separated). Empty = all properties.
+
+---
+
+## 2026-05-23 — Tenant Agent Sprint 2 (LLM gather)
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **`systemPrompt.js`** | Gather voice + JSON contract (never decide urgency/tickets) |
+| **`tenantAgentLlmTurn.js`** | OpenAI gather turn + test mock hook |
+| **`mergePartialFromLlm.js`** | Strict slot merge; rules confirm `handoff_ready` |
+| **Env** | `TENANT_AGENT_LLM_MODEL`, `TENANT_AGENT_FALLBACK_TO_LEGACY` |
+| **Tests** | `tenantAgentLlmGather.test.js`, unit tests for merge/prompt |
+
+### Ops
+
+Pilot: `TENANT_AGENT_ENABLED=1` + `TENANT_AGENT_LLM_ENABLED=1` + valid `OPENAI_API_KEY`.
+
+---
+
+## 2026-05-23 — Tenant Agent Sprint 1 (deterministic gather + handoff)
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **Migration 063** | `tenant_conversations` — adapter conversation state |
+| **`src/adapters/tenantAgent/`** | Deterministic gather, completeness, handoff `RouterParameter`, pipeline hook |
+| **Pipeline** | `TENANT_AGENT_ENABLED=1` → agent before core; handoff uses structured `create_ticket` (`channel: tenant_agent`) |
+| **Tests** | `tests/tenantAgent/*`, `tests/scenarios/tenantAgentHandoff.test.js` |
+
+### Ops
+
+Apply **`063_tenant_conversations.sql`** after **062**. Set **`TENANT_AGENT_ENABLED=1`** only for pilot tenants; default **off** preserves legacy slot machine.
+
+---
+
 ## 2026-05-21 — Preventive P2: program line → maintenance ticket bridge
 
 ### Done

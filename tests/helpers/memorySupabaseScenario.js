@@ -44,6 +44,9 @@ function tableKey(tableName) {
     turnovers: "turnovers",
     turnover_items: "turnover_items",
     tenant_outbound_day_mark: "tenant_outbound_day_mark",
+    tenant_conversations: "tenant_conversations",
+    tenant_roster: "tenant_roster",
+    staff_assignments: "staff_assignments",
   };
   return map[tableName] || null;
 }
@@ -71,6 +74,9 @@ function createScenarioMemorySupabase(seed) {
     turnovers: (seed.turnovers || []).map((r) => ({ ...r })),
     turnover_items: (seed.turnover_items || []).map((r) => ({ ...r })),
     tenant_outbound_day_mark: (seed.tenant_outbound_day_mark || []).map((r) => ({ ...r })),
+    tenant_conversations: (seed.tenant_conversations || []).map((r) => ({ ...r })),
+    tenant_roster: (seed.tenant_roster || []).map((r) => ({ ...r })),
+    staff_assignments: (seed.staff_assignments || []).map((r) => ({ ...r })),
   };
 
   function rowsFor(tableName) {
@@ -191,7 +197,8 @@ function createScenarioMemorySupabase(seed) {
         copy.id == null &&
         (tableName === "tickets" ||
           tableName === "turnovers" ||
-          tableName === "turnover_items")
+          tableName === "turnover_items" ||
+          tableName === "tenant_conversations")
       ) {
         copy.id = crypto.randomUUID();
       }

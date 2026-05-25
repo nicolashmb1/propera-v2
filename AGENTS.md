@@ -132,6 +132,7 @@ Conversations **drift**: freeze lifts, scope shifts, priorities change, a port l
 | **PM ticket split** (2-ticket, detail modal) | **`docs/TICKET_SPLIT_V1.md`** — spec locked; migration **`061`** planned; not implemented |
 | **Open deck day chart** (mobile 8a–8p, open vs completed, day pager) | **`docs/OPEN_DECK_DAY_CHART_V1.md`** — feature-flagged; `GET /api/portal/tickets/day-curve`; app `OpenDeckDayChart.tsx` |
 | **Communication Engine** (broadcast SMS, dedicated Twilio number) | **`docs/COMMUNICATION_ENGINE.md`**; SQL: **`055_communication_engine.sql`**; code: `src/communication/` (planned), `src/webhooks/communicationsSms.js` |
+| **Tenant Agent** (AI Staff — conversational SMS/TG/WA front door) | **`docs/TENANT_AGENT_ADAPTER.md`**; code: `src/adapters/tenantAgent/`; brain append: `handleTenantAppendToTicket.js`; SQL: **`063_tenant_conversations.sql`**; flags: **`TENANT_AGENT_*`** in `.env.example` |
 | **Tenant portal** (resident `/tenant/*` in propera-app + `/api/tenant/*` in V2) | **`docs/TENANT_PORTAL_BUILD_PLAN.md`**; SQL: **`056_tenant_portal.sql`** (planned); not started in repo |
 | Env template | `propera-v2/.env.example` |
 | Intake attach classify (deterministic slice) | `src/brain/core/intakeAttachClassify.js` (used by `mergeMaintenanceDraft.js`) |

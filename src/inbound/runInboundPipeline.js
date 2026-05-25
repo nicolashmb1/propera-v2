@@ -43,6 +43,15 @@ const {
   markTenantOutboundToday,
 } = require("../dal/tenantOutboundDayMark");
 const { outgateChannelRenderEnabled } = require("../config/env");
+const {
+  isTenantAgentEligible,
+  runTenantAgentTurn,
+  recordTenantAgentHandoffResult,
+  shapeBrainReplyForTenantAgent,
+} = require("../adapters/tenantAgent");
+const { applyFindRelatedLookupResult } = require("../adapters/tenantAgent/applyFindRelatedLookupResult");
+const { resolveTenantAgentChannelRender } = require("../adapters/tenantAgent/tenantAgentChannelRender");
+const { tenantAgentShouldDeferToCoreSchedule } = require("../adapters/tenantAgent/deferToCoreSchedule");
 const { CHANNEL_TELEGRAM } = require("../signal/inboundSignal");
 const { coreEnabled } = require("../config/env");
 const { complianceSmsOnly } = require("./transportCompliance");
@@ -90,6 +99,24 @@ function resolveOutboundIntentType(o) {
   if (coreRun && coreRun.brain) return `CORE_${String(coreRun.brain)}`;
   if (coreRun) return "CORE_REPLY";
   return "INBOUND_REPLY";
+}
+
+/**
+ * @param {{ tenantAgentRun?: object | null }} o
+ * @returns {string}
+ */
+function resolveOutboundIntentTypeWithAgent(o) {
+  const { tenantAgentRun } = o || {};
+  if (tenantAgentRun && tenantAgentRun.brain) {
+    const b = String(tenantAgentRun.brain);
+    if (b === "tenant_agent_gather") return "TENANT_AGENT_GATHER";
+    if (b === "tenant_agent_escalated") return "TENANT_AGENT_ESCALATED";
+    if (b === "tenant_agent_post_handoff") return "TENANT_AGENT_POST_HANDOFF";
+    if (b === "tenant_agent_post_complete_clarify") return "TENANT_AGENT_POST_COMPLETE_CLARIFY";
+    if (b === "tenant_agent_non_maintenance_deflect") return "TENANT_AGENT_NON_MAINTENANCE_DEFLECT";
+    return "TENANT_AGENT_REPLY";
+  }
+  return resolveOutboundIntentType(o);
 }
 
 /**
@@ -431,6 +458,150 @@ async function runInboundPipeline(o) {
   }
 
   let coreRun = null;
+  let tenantAgentRun = null;
+  /** @type {string | null} */
+  let tenantAgentConversationId = null;
+  /** @type {string} */
+  let tenantAgentTenantLocale = "en";
+
+  let tenantAgentEligible = isTenantAgentEligible({
+    transportChannel,
+    staffContext,
+    precursor,
+    laneDecision,
+    staffRun,
+    complianceRun,
+    suppressedRun,
+    stubRun,
+    coreEnabledFlag: coreEnabled(),
+    dbConfigured: isDbConfigured(),
+  });
+
+  if (tenantAgentEligible) {
+    const deferForSchedule = await tenantAgentShouldDeferToCoreSchedule({
+      routerParameter,
+    });
+    if (deferForSchedule) tenantAgentEligible = false;
+  }
+
+  let bodyForTenantAgent = String(routerParameter.Body || "").trim();
+  const mediaForTenantAgent = parseMediaJson(routerParameter._mediaJson);
+  const mediaSignalsForTenantAgent = parseMediaSignalsJson(routerParameter._mediaSignalsJson);
+  if (mediaForTenantAgent.length) {
+    bodyForTenantAgent = composeInboundTextWithMedia(
+      bodyForTenantAgent,
+      mediaForTenantAgent,
+      1400,
+      mediaSignalsForTenantAgent
+    );
+  }
+
+  if (tenantAgentEligible) {
+    const ta = await runTenantAgentTurn({
+      traceId,
+      transportChannel,
+      routerParameter,
+      bodyText: bodyForTenantAgent,
+    });
+    if (ta.tenantLocale) {
+      tenantAgentTenantLocale = String(ta.tenantLocale).trim() || "en";
+    }
+    if (ta.handled && ta.phase === "gather") {
+      tenantAgentRun = {
+        brain: "tenant_agent_gather",
+        replyText: ta.replyText,
+      };
+    } else if (ta.handled && ta.phase === "post_handoff") {
+      tenantAgentRun = {
+        brain: "tenant_agent_post_handoff",
+        replyText: ta.replyText,
+      };
+    } else if (ta.handled && ta.phase === "post_complete_clarify") {
+      tenantAgentRun = {
+        brain: "tenant_agent_post_complete_clarify",
+        replyText: ta.replyText,
+      };
+    } else if (ta.handled && ta.phase === "escalated") {
+      tenantAgentRun = {
+        brain: "tenant_agent_escalated",
+        replyText: ta.replyText,
+      };
+    } else if (ta.handled && ta.phase === "non_maintenance_deflect") {
+      tenantAgentRun = {
+        brain: "tenant_agent_non_maintenance_deflect",
+        replyText: ta.replyText,
+      };
+    } else if (ta.handled && ta.phase === "handoff" && ta.routerParameter) {
+      Object.assign(routerParameter, ta.routerParameter);
+      tenantAgentConversationId = ta.conversationId || null;
+      await appendEventLog({
+        traceId,
+        log_kind: "router",
+        event: "TENANT_AGENT_HANDOFF",
+        payload: {
+          conversation_id: tenantAgentConversationId,
+          tenant_actor_key: String(routerParameter._canonicalBrainActorKey || "").trim(),
+        },
+      });
+    } else if (ta.handled && ta.phase === "append_handoff" && ta.routerParameter) {
+      Object.assign(routerParameter, ta.routerParameter);
+      tenantAgentConversationId = ta.conversationId || null;
+      await appendEventLog({
+        traceId,
+        log_kind: "router",
+        event: "TENANT_AGENT_APPEND_HANDOFF",
+        payload: {
+          conversation_id: tenantAgentConversationId,
+          tenant_actor_key: String(routerParameter._canonicalBrainActorKey || "").trim(),
+          ticket_key: (() => {
+            try {
+              const j = JSON.parse(String(ta.routerParameter._portalPayloadJson || "{}"));
+              return String(j.ticket_key || "").trim();
+            } catch (_) {
+              return "";
+            }
+          })(),
+        },
+      });
+    } else if (ta.handled && ta.phase === "find_related_handoff" && ta.routerParameter) {
+      Object.assign(routerParameter, ta.routerParameter);
+      tenantAgentConversationId = ta.conversationId || null;
+      await appendEventLog({
+        traceId,
+        log_kind: "router",
+        event: "TENANT_AGENT_FIND_RELATED_HANDOFF",
+        payload: {
+          conversation_id: tenantAgentConversationId,
+          tenant_actor_key: String(routerParameter._canonicalBrainActorKey || "").trim(),
+        },
+      });
+    } else if (ta.handled && ta.replyText) {
+      // Agent fully handled this turn. Phases not listed above that still produce
+      // a reply must block the legacy core brain. Map to the closest canonical key:
+      //   closing / ack → tenant_agent_post_handoff  (preserves existing outbound type)
+      //   greeting / reset → tenant_agent_gather
+      //   anything else → generic tenant_agent_handled
+      const _closingPhases = new Set([
+        "conversation_closing",
+        "post_closed_ack",
+        "post_closed_done",
+        "post_closed_soft",
+      ]);
+      const _gatherPhases = new Set([
+        "conversation_greeting",
+        "conversation_reset",
+        "post_closed_greeting",
+      ]);
+      const _phase = String(ta.phase || "");
+      const _brain = _closingPhases.has(_phase)
+        ? "tenant_agent_post_handoff"
+        : _gatherPhases.has(_phase)
+          ? "tenant_agent_gather"
+          : "tenant_agent_handled";
+      tenantAgentRun = { brain: _brain, replyText: ta.replyText };
+    }
+  }
+
   const canEnterCore = computeCanEnterCore({
     laneDecision,
     coreEnabledFlag: coreEnabled(),
@@ -447,7 +618,7 @@ async function runInboundPipeline(o) {
     },
   });
 
-  if (canEnterCore) {
+  if (canEnterCore && !tenantAgentRun) {
     const isStaffCapture = isStaffCaptureHash(precursor);
     const isStaffMediaIntake = isStaffMaintenanceMediaIntake(precursor);
     const bodyBase = isStaffCapture
@@ -496,21 +667,56 @@ async function runInboundPipeline(o) {
     }
   }
 
+  if (tenantAgentConversationId && coreRun) {
+    if (coreRun.brain === "tenant_find_related_ticket" && coreRun.findRelated) {
+      const applied = await applyFindRelatedLookupResult({
+        conversationId: tenantAgentConversationId,
+        findRelated: coreRun.findRelated,
+        bodyText: bodyForTenantAgent,
+        mediaJson: String(routerParameter._mediaJson || ""),
+      });
+      tenantAgentRun = {
+        brain: applied.brain,
+        replyText: applied.replyText,
+      };
+    } else {
+      await recordTenantAgentHandoffResult({
+        conversationId: tenantAgentConversationId,
+        traceId,
+        coreRun,
+      });
+      if (coreRun.brain === "core_finalized") {
+        const shaped = shapeBrainReplyForTenantAgent(coreRun);
+        if (shaped) {
+          coreRun.replyText = shaped;
+        }
+      }
+    }
+  }
+
   const replyText =
+    (tenantAgentRun && tenantAgentRun.replyText) ||
     (staffRun && staffRun.replyText) ||
     (complianceRun && complianceRun.replyText) ||
     (coreRun && coreRun.replyText) ||
     (stubRun && stubRun.replyText) ||
     "";
 
-  const intentType = resolveOutboundIntentType({
+  const intentType = resolveOutboundIntentTypeWithAgent({
     staffRun,
     complianceRun,
     stubRun,
     coreRun,
+    tenantAgentRun,
   });
   const audience =
-    staffRun && staffRun.replyText ? "staff" : replyText ? "tenant" : "unknown";
+    staffRun && staffRun.replyText
+      ? "staff"
+      : tenantAgentRun && tenantAgentRun.replyText
+        ? "tenant"
+        : replyText
+          ? "tenant"
+          : "unknown";
 
   const messageSpec = complianceRun
     ? messageSpecForComplianceBrain(complianceRun.brain)
@@ -519,6 +725,13 @@ async function runInboundPipeline(o) {
   const facts = {};
   if (coreRun && coreRun.outgate) {
     facts.coreOutgate = coreRun.outgate;
+  }
+  if (tenantAgentRun || tenantAgentConversationId) {
+    facts.tenantLocale = tenantAgentTenantLocale;
+    facts.tenantAgent = {
+      conversationId: tenantAgentConversationId || undefined,
+      phase: tenantAgentRun && tenantAgentRun.brain ? tenantAgentRun.brain : undefined,
+    };
   }
 
   const intent = buildOutboundIntent({
@@ -554,12 +767,19 @@ async function runInboundPipeline(o) {
     const propertyDisplayName =
       audience === "tenant" ? await resolveOutgatePropertyDisplayName(coreRun) : "";
 
+    const agentChannel = resolveTenantAgentChannelRender({
+      tenantAgentBrain: tenantAgentRun && tenantAgentRun.brain,
+      afterHandoff: !!(tenantAgentConversationId && coreRun),
+      tenantLocale: tenantAgentTenantLocale,
+    });
+
     const ch = renderForChannel({
       transportChannel,
       body: rendered.body,
       audience,
       includeFirstContactExtras: firstToday,
       propertyDisplayName,
+      applyTelegramReceiptMarkdown: agentChannel.applyTelegramReceiptMarkdown,
     });
     channelBody = ch.body;
     channelMeta = ch.meta;
@@ -603,15 +823,17 @@ async function runInboundPipeline(o) {
     }
   }
 
-  const brain = resolveDefaultBrain({
-    staffRun,
-    complianceRun,
-    suppressedRun,
-    stubRun,
-    coreRun,
-    precursor,
-    staffContext,
-  });
+  const brain = tenantAgentRun && tenantAgentRun.brain
+    ? tenantAgentRun.brain
+    : resolveDefaultBrain({
+        staffRun,
+        complianceRun,
+        suppressedRun,
+        stubRun,
+        coreRun,
+        precursor,
+        staffContext,
+      });
 
   /** Portal PM DB mutations set `staffRun.ok === false` — surface as top-level `ok` for HTTP clients. */
   const pipelineHttpOk = !(staffRun && staffRun.ok === false);
@@ -641,6 +863,7 @@ async function runInboundPipeline(o) {
     complianceRun,
     suppressedRun,
     stubRun,
+    tenantAgentRun,
     precursor,
     staffContext,
     outbound,

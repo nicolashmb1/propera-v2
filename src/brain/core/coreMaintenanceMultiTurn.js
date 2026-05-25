@@ -24,7 +24,11 @@ const {
   extractScheduleHintPortalStaffMulti,
   extractScheduleHintStaffCaptureFromTurn,
   extractScheduleHintTenant,
+  portalPayloadChannel,
 } = require("./handleInboundCoreScheduleHints");
+const {
+  shouldSkipScheduleAfterStructuredCreate,
+} = require("../../contracts/postCreateContract");
 const { MIN_SCHEDULE_LEN } = require("../../dal/ticketPreferredWindow");
 const { buildMaintenanceReceipt } = require("../../outgate/buildMaintenanceReceipt");
 const {
@@ -89,6 +93,27 @@ async function runCoreMaintenanceMultiTurn(x) {
   const expectedSlot = String(
     session && session.expected != null ? session.expected : "ISSUE"
   ).toUpperCase();
+
+  // OOS check: must run before gathering starts. Only fires when no existing
+  // draft issue — i.e. fresh intake or post-ticket new conversation.
+  if (
+    !isStaffCapture &&
+    (expectedSlot === "ISSUE" || expectedSlot === "") &&
+    !String((session && session.draft_issue) || "").trim()
+  ) {
+    const { detectOutOfScopeIntent } = require("../router/detectOutOfScope");
+    const oos = detectOutOfScopeIntent(effectiveBody);
+    if (oos) {
+      await clearIntakeLike();
+      return {
+        ok: true,
+        brain: "oos_deflect",
+        replyText: oos.deflectMessage,
+        ...staffMeta(),
+        ...outgateMeta("MAINTENANCE_OOS_DEFLECT"),
+      };
+    }
+  }
 
   const merged = mergeMaintenanceDraftTurn({
     bodyText: effectiveBody,
@@ -173,7 +198,9 @@ async function runCoreMaintenanceMultiTurn(x) {
     );
     const restartCommon = isCommonAreaLocation(restartLocType);
     const emRestart =
-      usesStructuredPortalCreateDraft(p, mode)
+      usesStructuredPortalCreateDraft(p, mode) &&
+      portalPayloadChannel(p) !== "tenant_agent" &&
+      !(fastDraft.safety && fastDraft.safety.isEmergency)
         ? { emergency: "No", emergencyType: "" }
         : fastDraft.safety && fastDraft.safety.isEmergency
           ? { emergency: "Yes", emergencyType: String(fastDraft.safety.emergencyType || "") }
@@ -228,7 +255,9 @@ async function runCoreMaintenanceMultiTurn(x) {
   );
   const commonAreaDraft = isCommonAreaLocation(draftLocationType);
   const em =
-    usesStructuredPortalCreateDraft(p, mode)
+    usesStructuredPortalCreateDraft(p, mode) &&
+    portalPayloadChannel(p) !== "tenant_agent" &&
+    !(fastDraft.safety && fastDraft.safety.isEmergency)
       ? { emergency: "No", emergencyType: "" }
       : fastDraft.safety && fastDraft.safety.isEmergency
         ? { emergency: "Yes", emergencyType: String(fastDraft.safety.emergencyType || "") }
@@ -470,6 +499,7 @@ async function runCoreMaintenanceMultiTurn(x) {
       commonArea: commonAreaDraftFinal,
       unitLabel: unitResolvedMt,
       locationLabelSnapshot: tgtMt.location_label_snapshot || "",
+      propertyCode: String(merged.draft_property || fastDraft.propertyCode || "").trim(),
     });
     let receiptMt = receiptBuilt.body;
     const receiptTemplateKey = receiptBuilt.templateKey;
@@ -479,7 +509,11 @@ async function runCoreMaintenanceMultiTurn(x) {
         ? extractScheduleHintPortalStaffMulti(merged, effectiveBody, p)
         : "";
     const skipSchedulingAfterFinalize =
-      skipScheduling || (usesStructuredPortalCreateDraft(p, mode));
+      skipScheduling ||
+      shouldSkipScheduleAfterStructuredCreate(
+        usesStructuredPortalCreateDraft(p, mode),
+        p
+      );
 
     if (skipSchedulingAfterFinalize) {
       if (scheduleHintPortalMt) {
@@ -488,7 +522,14 @@ async function runCoreMaintenanceMultiTurn(x) {
           scheduleHintPortalMt,
           fin.ticketKey,
           traceId,
-          traceStartMs
+          traceStartMs,
+          {
+            afterLifecycle: true,
+            propertyCodeHint: String(
+              merged.draft_property || fastDraft.propertyCode || ""
+            ).trim(),
+            sb,
+          }
         );
       }
       await clearIntakeLike();
@@ -537,7 +578,14 @@ async function runCoreMaintenanceMultiTurn(x) {
         tenantSchedHint,
         fin.ticketKey,
         traceId,
-        traceStartMs
+        traceStartMs,
+        {
+          afterLifecycle: true,
+          propertyCodeHint: String(
+            merged.draft_property || fastDraft.propertyCode || ""
+          ).trim(),
+          sb,
+        }
       );
       await enterScheduleWaitAndLogTicketCreatedAskSchedule({
         setScheduleWaitLike,

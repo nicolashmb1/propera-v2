@@ -1,6 +1,7 @@
 /**
  * Phase 1 — staff `#` capture: issue → property → unit → finalized ticket (no tenant schedule ask).
  */
+require("../helpers/legacyPipelineEnv");
 process.env.PROPERA_TEST_INJECT_SB = "1";
 process.env.CORE_ENABLED = "1";
 process.env.INTAKE_COMPILE_TURN = "1";

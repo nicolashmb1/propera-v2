@@ -296,10 +296,10 @@ async function properaBuildIntakePackage(opts) {
   if (!(sig.safety && sig.safety.isEmergency) && tRaw) {
     const _lb = tRaw.toLowerCase();
     const _gasSmell =
-      /(huele\s+a?\s*gas|smells?\s+gas|gas\s+smell|gas\s+leak)/.test(_lb);
-    const _gasCtxExclude =
-      /\b(gas\s+bill|gas\s+station|utility\s+bill|stove|range|oven|burner)\b/.test(_lb);
-    if (_gasSmell && !_gasCtxExclude) {
+      /(huele\s+a?\s*gas|smells?\s+gas|gas\s+smell|gas\s+leak|like\s+gas|smell.*\bgas\b)/.test(
+        _lb
+      );
+    if (_gasSmell) {
       sig.safety = sig.safety || {};
       sig.safety.isEmergency = true;
       sig.safety.emergencyType = "GAS";

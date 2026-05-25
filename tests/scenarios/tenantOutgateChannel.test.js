@@ -1,6 +1,7 @@
 /**
  * Outgate Phase 4 — first-contact property header + SMS footer via pipeline channel render.
  */
+require("../helpers/legacyPipelineEnv");
 process.env.PROPERA_TEST_INJECT_SB = "1";
 process.env.CORE_ENABLED = "1";
 process.env.INTAKE_COMPILE_TURN = "1";

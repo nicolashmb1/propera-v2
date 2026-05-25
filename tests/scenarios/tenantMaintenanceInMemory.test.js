@@ -9,6 +9,7 @@
  * Fast-path `core_finalized` in one shot requires shapes such as `sink leaking 303 penn` today.
  * Scenarios below follow **actual** multi-turn behavior for the PENN 4B opener + numeric unit reply.
  */
+require("../helpers/legacyPipelineEnv");
 process.env.PROPERA_TEST_INJECT_SB = "1";
 process.env.CORE_ENABLED = "1";
 process.env.INTAKE_COMPILE_TURN = "1";

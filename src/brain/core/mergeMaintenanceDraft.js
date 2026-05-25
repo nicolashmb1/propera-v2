@@ -184,7 +184,9 @@ function mergeMaintenanceDraftTurn(o) {
   } else if (exp === "UNIT") {
     maybeCaptureIssueFromTurn();
     let u = extractUnitFromBody(bodyText);
-    if (!u && /^\s*([0-9]+[a-z]?)\s*$/i.test(bodyText)) {
+    // Accept bare digit reply (e.g. "502", "4B") unconditionally when expected is UNIT.
+    // Guards: max 5 digits (avoids zip codes), optional trailing alpha suffix.
+    if (!u && /^\s*\d{1,5}[a-zA-Z]?\s*$/i.test(bodyText)) {
       u = bodyText.trim();
     }
     if (u) unit = u;

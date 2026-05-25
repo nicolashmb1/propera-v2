@@ -363,4 +363,5 @@ module.exports = {
   intakeAttachClassifyDeterministic,
   canonicalInboundLooksScheduleOnly,
   intakeMaintenanceSymptomHeuristic,
+  intakeExplicitNewTicketMarkers,
 };

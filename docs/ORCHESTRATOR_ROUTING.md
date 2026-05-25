@@ -20,6 +20,7 @@ This document is the **reviewer-facing** map of **order**, **guards**, and **lan
 | 8 | SMS compliance STOP/START/HELP | **Only** if `transportCompliance` says SMS + no staff run + keyword + `From` |
 | 9 | SMS opt-out suppress check | Only if SMS + evaluated + not compliance + DB + opted out |
 | 10 | **Lane stub** (vendor/system) | Phase **20-C** — if evaluated lane is not maintenance-eligible |
+| 10b | **Tenant Agent** (optional) | `runTenantAgentTurn` before core. Operations: **`create_ticket`**, **`append_to_ticket`**, **`find_related_ticket`** (after 48h TTL + problem signal), **`ack_only`**. Skipped when `tenantAgentShouldDeferToCoreSchedule`. See **`docs/TENANT_AGENT_ADAPTER.md`** |
 | 11 | `handleInboundCore` | Only if `computeCanEnterCore` is true |
 | 12 | Outgate: `buildOutboundIntent` → `renderOutboundIntent` → `dispatchOutbound` | Single send seam |
 
@@ -96,6 +97,26 @@ Vendor/system classification uses env lists in `src/config/lanePolicy.js` (`VEND
 |------|--------|
 | `tests/routeInboundDecision.test.js` | Lane guards, `computeCanEnterCore`, stub helpers |
 | `tests/evaluateRouterPrecursor.test.js` (or similar) | Precursor ordering vs compliance |
+| `tests/scenarios/tenantAgentHandoff.test.js` | Agent gather → handoff → optional schedule (`postCreate ASK_OPTIONAL`) |
+| `tests/scenarios/tenantAgentPostCompletePhase4.test.js` | Post-complete clarify, append, photo-only confirm |
+| `tests/scenarios/tenantAgentConversationTtl.test.js` | 48h conversation expiry |
+| `tests/scenarios/tenantAgentFindRelatedPhase6.test.js` | Post-48h TTL → find_related → match or gather |
+| `tests/postCreateContract.test.js` | `scheduleMode` contract for structured create |
+
+---
+
+## 6. Structured `create_ticket` — post-create schedule intent
+
+Portal and tenant-agent handoffs use **`_portalPayloadJson.postCreate.scheduleMode`** (not channel checks in core):
+
+| `scheduleMode` | Typical sender | After finalize |
+|----------------|----------------|----------------|
+| `NONE` | PM portal, tenant_portal (default when omitted) | Receipt only |
+| `ASK_OPTIONAL` | Tenant agent handoff | Receipt + optional tenant schedule ask when schedulable |
+
+**Tenant-agent `append_to_ticket`:** separate from structured create — `_portalAction: append_to_ticket`, handler **`tryHandleTenantAppendToTicket`** (early in `coreMaintenanceLoadContext.js`). Append message comes from adapter **`resolveAppendHandoffContent`** (pending follow-up), not the tenant's confirm phrase.
+
+Module: `src/contracts/postCreateContract.js`. Brain fast/multi-turn paths call `shouldSkipScheduleAfterStructuredCreate()`.
 
 ---
 

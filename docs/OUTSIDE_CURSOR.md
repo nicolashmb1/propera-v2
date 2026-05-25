@@ -40,6 +40,7 @@ Do these in your **web browser** at [supabase.com](https://supabase.com):
    - **Propera Chat voice notes:** after **`026`**, run **`054_pm_attachments_audio_mime.sql`** — adds audio (and PDF) MIME types to **`pm-attachments`**; without it, `/api/portal/chat-audio-upload` fails with “mime type not allowed”.
    - **Communication Engine:** run **`055_communication_engine.sql`** after **`012`** + **`030`**. Provision a **second** Twilio number; point its webhook to `https://<host>/webhooks/communications/sms` and status URL to `.../webhooks/communications/status` (not `/webhooks/sms`). See **`docs/COMMUNICATION_ENGINE.md`**.
    - **Vendor directory + preventive line vendor:** run **`046_vendors_and_program_line_vendor.sql`**, then insert active vendors in SQL Editor, e.g. `insert into public.vendors (vendor_id, display_name, active) values ('VND_PLUMB_CO', 'Acme Plumbing', true) on conflict (vendor_id) do nothing;`
+   - **Tenant Agent (AI Staff adapter):** run **`063_tenant_conversations.sql`** after **`001_core`** (needs Postgres). Required before **`TENANT_AGENT_ENABLED=1`** in prod. Conversation state only — not a substitute for `intake_sessions`. See **`docs/TENANT_AGENT_ADAPTER.md`**. Env: **`TENANT_AGENT_*`** in `.env.example`.
 
 6. Restart `propera-v2` (`npm start`) and open `http://localhost:8080/health`.  
    You want `"db": { "configured": true, "ok": true }`.

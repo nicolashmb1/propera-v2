@@ -49,6 +49,9 @@ function validateSchedPolicy_(propCode, sched, now, pol) {
     allowWeekends: pol.allowWeekends,
     schedSatAllowed: pol.schedSatAllowed,
     schedSunAllowed: pol.schedSunAllowed,
+    schedSatLatestHour: isFinite(Number(pol.schedSatLatestHour))
+      ? Number(pol.schedSatLatestHour)
+      : null,
     minLeadHours: leadHrs,
     maxDaysOut: maxDays,
   };

@@ -49,10 +49,14 @@ function hardEmergency_(message) {
     /\bcarbon monoxide alarm\b/.test(t);
 
   const hasGasSmellOrLeak =
-    /\bsmell(s|ing)?\s+gas\b/.test(t) ||
+    /\bsmell(s|ed|ing)?\s+gas\b/.test(t) ||
     /\bgas smell\b/.test(t) ||
     /\bgas leak\b/.test(t) ||
-    /\bleaking gas\b/.test(t);
+    /\bleaking gas\b/.test(t) ||
+    /\bsmell(s|ed|ing)?\b.*\blike\s+gas\b/.test(t) ||
+    /\blike\s+gas\b/.test(t) ||
+    /\b(stove|oven|burner|range)\b.*\bsmell(s|ed|ing)?\b.*\bgas\b/.test(t) ||
+    /\bsmell(s|ed|ing)?\b.*\b(stove|oven|burner|range)\b.*\bgas\b/.test(t);
 
   const hasSmokeOrFire =
     /\bsmoke\b/.test(t) ||
@@ -143,7 +147,7 @@ function detectEmergencyKind_(text) {
 
   if (/\b(oven\s*(is\s*)?on fire|on fire|fire|flames)\b/.test(s)) return "FIRE";
   if (/\b(smoke|smoky)\b/.test(s)) return "SMOKE";
-  if (/\b(gas leak|smell gas|gas smell)\b/.test(s)) return "GAS";
+  if (/\b(gas leak|smell gas|gas smell|like gas|smell.*\bgas\b)\b/.test(s)) return "GAS";
   if (/\b(carbon monoxide|co alarm|co detector)\b/.test(s)) return "CO";
   if (/\b(sparks|arcing|electrical fire|outlet sparks|burning outlet)\b/.test(s))
     return "ELECTRICAL";

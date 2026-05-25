@@ -35,7 +35,8 @@ function portalPayloadChannel(routerParameter) {
  */
 function isTenantPortalStructuredCreate(routerParameter) {
   if (!isPortalCreateTicketRouter(routerParameter)) return false;
-  if (portalPayloadChannel(routerParameter) === "tenant_portal") return true;
+  const ch = portalPayloadChannel(routerParameter);
+  if (ch === "tenant_portal" || ch === "tenant_agent") return true;
   try {
     const j = JSON.parse(
       String(routerParameter && routerParameter._portalPayloadJson ? routerParameter._portalPayloadJson : "{}")

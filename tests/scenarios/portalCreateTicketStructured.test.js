@@ -1,6 +1,7 @@
 /**
  * Phase 1 — portal JSON create_ticket → same pipeline as messaging; structured finalize.
  */
+require("../helpers/legacyPipelineEnv");
 process.env.PROPERA_TEST_INJECT_SB = "1";
 process.env.CORE_ENABLED = "1";
 process.env.INTAKE_COMPILE_TURN = "1";
@@ -65,6 +66,15 @@ describe("scenarios — portal create_ticket structured (in-memory)", { concurre
         .toLowerCase()
         .includes("portal"),
       "issue text from structured message"
+    );
+
+    const payload = JSON.parse(routerParameter._portalPayloadJson);
+    assert.equal(payload.postCreate.scheduleMode, "NONE");
+    const reply = String(r.coreRun.replyText || "");
+    assert.doesNotMatch(
+      reply,
+      /When would be a good time for us to come by/i,
+      "PM structured create — postCreate NONE skips tenant schedule interview"
     );
   });
 

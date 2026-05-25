@@ -453,8 +453,40 @@ function getScheduleLatestHourShared(configured) {
   return 17;
 }
 
+/**
+ * Day anchor for ANYTIME/ASAP when parse leaves start/end null (policy check before commit).
+ * @param {ParsedPreferredWindow|null} d
+ * @param {string} raw
+ * @param {string|null|undefined} stageDay
+ * @param {Date} now
+ * @returns {Date|null}
+ */
+function implicitDayFromParsed(d, raw, stageDay, now) {
+  if (!d) return null;
+  if (d.start instanceof Date && isFinite(d.start.getTime())) {
+    return startOfDayShared(d.start);
+  }
+  if (d.end instanceof Date && isFinite(d.end.getTime())) {
+    return startOfDayShared(d.end);
+  }
+  const s = String(raw || "")
+    .toLowerCase()
+    .replace(/[–—−]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+  const fromText = parseDayTargetShared(s, stageDay, now);
+  if (fromText) return fromText;
+  const kind = String(d.kind || "").toUpperCase();
+  if (kind === "ASAP") return startOfDayShared(now);
+  return resolveDayBaseShared(stageDay, now);
+}
+
 module.exports = {
   parsePreferredWindowShared,
+  implicitDayFromParsed,
+  formatDayShared,
+  startOfDayShared,
+  addDaysShared,
   _test: {
     startOfDayShared,
     addDaysShared,

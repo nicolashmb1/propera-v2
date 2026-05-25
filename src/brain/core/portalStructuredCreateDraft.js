@@ -9,6 +9,8 @@
  */
 
 const { normalizeTargetKindFromPortal, isUuid } = require("../location/resolveLocationTarget");
+const { evaluateEmergencySignal_ } = require("../../dal/ticketDefaults");
+const { portalPayloadChannel } = require("./handleInboundCoreScheduleHints");
 
 function normalizePropToken(s) {
   return String(s || "")
@@ -48,6 +50,32 @@ function resolvePortalPropertyCode(inputRaw, knownPropertyCodesUpper, properties
     }
   }
   return "";
+}
+
+/**
+ * @param {object} j
+ * @param {string} issueText
+ * @param {Record<string, unknown>} routerParameter
+ * @returns {object | null}
+ */
+function resolvePortalDraftSafety(j, issueText, routerParameter) {
+  const emRaw = String(j.emergency != null ? j.emergency : "").trim();
+  if (emRaw === "Yes" || emRaw.toLowerCase() === "true" || j.emergency === true) {
+    return {
+      isEmergency: true,
+      emergencyType: String(j.emergency_type || j.emergencyType || "SAFETY").trim(),
+      skipScheduling: true,
+    };
+  }
+  const ch = portalPayloadChannel(routerParameter);
+  if (ch !== "tenant_agent") return null;
+  const sig = evaluateEmergencySignal_(issueText);
+  if (!sig.isEmergency) return null;
+  return {
+    isEmergency: true,
+    emergencyType: String(sig.emergencyType || "SAFETY").trim(),
+    skipScheduling: true,
+  };
 }
 
 /**
@@ -108,17 +136,19 @@ function buildStructuredPortalCreateDraft(
   }
 
   const locationType = locationKind === "unit" ? "UNIT" : "COMMON_AREA";
+  const safety = resolvePortalDraftSafety(j, issueText, p);
 
   return {
     propertyCode,
     unitLabel: locationKind === "unit" ? unitLabel : "",
     issueText,
     structuredIssues: null,
-    scheduleRaw,
+    scheduleRaw: safety && safety.skipScheduling ? "" : scheduleRaw,
     openerNext: "",
     locationType,
     portalLocationKind: locationKind,
     reportSourceUnit,
+    safety,
   };
 }
 

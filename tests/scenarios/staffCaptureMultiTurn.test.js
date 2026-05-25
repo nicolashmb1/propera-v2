@@ -1,6 +1,7 @@
 /**
  * Phase 1 — staff `#` capture: property reply then unit reply share one draft row.
  */
+require("../helpers/legacyPipelineEnv");
 process.env.PROPERA_TEST_INJECT_SB = "1";
 process.env.CORE_ENABLED = "1";
 process.env.INTAKE_COMPILE_TURN = "1";

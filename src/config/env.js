@@ -373,6 +373,47 @@ function outgateChannelRenderEnabled() {
   return envFlagTrue("OUTGATE_CHANNEL_RENDER", true);
 }
 
+/** Tenant Agent adapter — default off (legacy slot machine). */
+function tenantAgentEnabled() {
+  return envFlagTrue("TENANT_AGENT_ENABLED", false);
+}
+
+function tenantAgentLlmEnabled() {
+  return envFlagTrue("TENANT_AGENT_LLM_ENABLED", false);
+}
+
+/** @returns {string[]} uppercased property codes; empty = all properties when agent on */
+function tenantAgentPropertyAllowlist() {
+  const raw = String(env("TENANT_AGENT_PROPERTY_ALLOWLIST", "")).trim();
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((s) => String(s || "").trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function tenantAgentMaxTurns() {
+  const n = parseInt(env("TENANT_AGENT_MAX_TURNS", "12"), 10);
+  return Number.isFinite(n) && n > 0 ? n : 12;
+}
+
+function tenantAgentLlmModel() {
+  const m = String(env("TENANT_AGENT_LLM_MODEL", "")).trim();
+  return m || openaiModelExtract();
+}
+
+function tenantAgentFallbackToLegacy() {
+  return envFlagTrue("TENANT_AGENT_FALLBACK_TO_LEGACY", false);
+}
+
+/** Adapter conversation row TTL (hours). Default 48; 0 = disable lazy expiry. */
+function tenantAgentConversationTtlHours() {
+  const raw = env("TENANT_AGENT_CONVERSATION_TTL_HOURS", "48");
+  const n = parseInt(String(raw).trim(), 10);
+  if (!Number.isFinite(n) || n < 0) return 48;
+  return n;
+}
+
 module.exports = {
   env,
   nodeEnv: env("NODE_ENV", "development"),
@@ -397,6 +438,13 @@ module.exports = {
   openaiModelExtract,
   intakeMediaOcrEnabled,
   outgateChannelRenderEnabled,
+  tenantAgentEnabled,
+  tenantAgentLlmEnabled,
+  tenantAgentPropertyAllowlist,
+  tenantAgentMaxTurns,
+  tenantAgentLlmModel,
+  tenantAgentFallbackToLegacy,
+  tenantAgentConversationTtlHours,
   intakeMediaSignalEnabled,
   intakeMediaVisionEnabled,
   openaiModelVision,

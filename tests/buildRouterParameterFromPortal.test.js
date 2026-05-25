@@ -41,6 +41,7 @@ test("create_ticket tenant_portal uses structured noop Body and channel metadata
   const json = JSON.parse(p._portalPayloadJson);
   assert.equal(json.channel, "tenant_portal");
   assert.equal(json.message, "Sink leaking");
+  assert.equal(json.postCreate.scheduleMode, "NONE");
 });
 
 test("create_ticket common_area Body omits apt fragment", () => {

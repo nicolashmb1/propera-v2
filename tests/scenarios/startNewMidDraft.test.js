@@ -1,6 +1,7 @@
 /**
  * Phase 1 — explicit new-ticket marker mid draft → intake_start_new.
  */
+require("../helpers/legacyPipelineEnv");
 process.env.PROPERA_TEST_INJECT_SB = "1";
 process.env.CORE_ENABLED = "1";
 process.env.INTAKE_COMPILE_TURN = "1";
