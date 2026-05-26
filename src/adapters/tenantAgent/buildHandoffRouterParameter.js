@@ -69,9 +69,13 @@ function buildHandoffRouterParameterFromAgent(o) {
         : postCreateAskOptionalSchedule(),
   };
 
-  if (safety && safety.isEmergency) {
+  if (safety && safety.isEmergency && String(safety.receiptTier || "").toLowerCase() === "emergency") {
     payload.emergency = "Yes";
     payload.emergency_type = String(safety.emergencyType || "SAFETY").trim();
+    payload.urgency = "URGENT";
+    payload.category = payload.category || "Safety";
+    payload.preferredWindow = "";
+  } else if (safety && safety.skipScheduling) {
     payload.urgency = "URGENT";
     payload.category = payload.category || "Safety";
     payload.preferredWindow = "";

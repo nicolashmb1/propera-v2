@@ -73,3 +73,16 @@ test("buildHandoffRouterParameterFromAgent — common_area omits unit visit sche
   assert.equal(payload.preferredWindow, "");
   assert.equal(payload.postCreate.scheduleMode, "NONE");
 });
+
+test("applyGatherLocationFields — apartment front door stays unit issue", () => {
+  const next = {
+    property: "MURRAY",
+    issue: "front door of my unit does not lock properly",
+  };
+  applyGatherLocationFields(next, {
+    body: "front door of my unit does not lock properly from the outside",
+    prev: {},
+    parsed: { locationType: "UNIT" },
+  });
+  assert.equal(next.location_kind, "unit");
+});

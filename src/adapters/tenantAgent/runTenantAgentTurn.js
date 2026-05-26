@@ -4,6 +4,10 @@
 const { appendEventLog } = require("../../dal/appendEventLog");
 const { listPropertiesForMenu } = require("../../dal/intakeSession");
 const { getSupabase } = require("../../db/supabase");
+const {
+  lookupTenantRosterForAgent,
+  applyRosterGatherContext,
+} = require("./lookupTenantRosterForAgent");
 const { loadPropertyCodesUpper } = require("../../brain/core/coreMaintenanceShared");
 const { buildStructuredPortalCreateDraft } = require("../../brain/core/portalStructuredCreateDraft");
 const {
@@ -531,6 +535,17 @@ async function runTenantAgentTurn(o) {
     bodyText,
     String(routerParameter._mediaJson || "")
   );
+
+  if (!partial._roster_lookup_done) {
+    const sbRoster = getSupabase();
+    const rosterLookup = await lookupTenantRosterForAgent({
+      sb: sbRoster,
+      routerParameter,
+      tenantActorKey,
+      knownPropertyCodesUpper: known,
+    });
+    partial = applyRosterGatherContext(partial, rosterLookup);
+  }
 
   let messages = appendMessage(conv, "user", bodyText);
   /** @type {string | null} */

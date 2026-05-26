@@ -49,6 +49,11 @@ function safetyLeadLine(safety) {
       "Someone will follow up immediately."
     );
   }
+  if (em === "SECURITY") {
+    return (
+      "We're treating this as urgent — if your door is not locking securely, we'll prioritize follow-up right away."
+    );
+  }
   if (em === "INJURY") {
     return "If someone is seriously hurt, call 911 first. We're treating this as urgent.";
   }

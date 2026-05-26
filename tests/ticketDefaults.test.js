@@ -49,6 +49,19 @@ describe("ticketDefaults", () => {
 
     assert.equal(inferEmergency("active flooding in bathroom").emergency, "Yes");
     assert.equal(inferEmergency("sparks from outlet").emergency, "Yes");
+    assert.equal(
+      inferEmergency("radiator is making loud banging sounds, gets very hot, and has a smell")
+        .emergency,
+      "No"
+    );
+    assert.equal(
+      inferEmergency("burning smell coming from radiator every night").emergency,
+      "No"
+    );
+    assert.equal(
+      inferEmergency("radiator smells like gas").emergency,
+      "Yes"
+    );
   });
 
   test("hardEmergency_ structural parity", () => {

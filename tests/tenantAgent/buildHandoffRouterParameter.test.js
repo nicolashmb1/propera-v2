@@ -67,3 +67,29 @@ test("buildHandoffRouterParameterFromAgent — passes gathered media on handoff"
   assert.equal(arr.length, 1);
   assert.equal(arr[0].file_id, "AgACAgIAAxkBAAI");
 });
+
+test("buildHandoffRouterParameterFromAgent — security urgent skips schedule without emergency flag", () => {
+  const rp = buildHandoffRouterParameterFromAgent({
+    partialPackage: {
+      property: "PENN",
+      unit: "303",
+      issue: "Apartment door deadbolt will not lock securely",
+      _safety: {
+        isEmergency: true,
+        emergencyType: "SECURITY",
+        skipScheduling: true,
+        receiptTier: "urgent",
+      },
+    },
+    tenantActorKey: "+15551234001",
+    transportChannel: "sms",
+    conversationId: "conv-uuid-3",
+    traceId: "trace-3",
+  });
+
+  const payload = JSON.parse(rp._portalPayloadJson);
+  assert.equal(payload.urgency, "URGENT");
+  assert.equal(payload.preferredWindow, "");
+  assert.equal(payload.emergency, undefined);
+  assert.equal(payload.postCreate.scheduleMode, "NONE");
+});

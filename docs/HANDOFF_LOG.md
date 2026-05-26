@@ -7,6 +7,17 @@
 
 ---
 
+## 2026-05-25 — Finance Phase 1 read-side polish
+
+| Area | Change |
+|------|--------|
+| **propera-app snapshot read model** | `financialSnapshot.ts` now includes per-unit deposit, selected-month posted payments, last payment, and 6-month payment history from `unit_leases` + `tenant_ledger_entries` |
+| **`/financial/properties/[property]`** | Units tab now shows live lease/ledger values instead of placeholders for payments, last payment, deposit, and payment history; vacancy loss now uses canonical unit status history (migration 064) for selected-month days/loss. Maintenance tab now includes a 12-month spend trend, current-month category breakdown, receipt preview/open affordances, and shared ticket detail drill-down |
+| **`/properties/.../units/[unitId]`** | Payment history panel now renders from posted ledger payments instead of placeholder bars |
+| **Docs** | `PROPERA_FINANCE_ROADMAP.md`, `AGENTS.md`, and `PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md` updated to reflect 052 repo status and current `/financial` behavior |
+
+---
+
 ## 2026-05-24 — Tenant Agent maintenance-only lane (Phase 8a)
 
 | Area | Change |

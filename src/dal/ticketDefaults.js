@@ -29,19 +29,6 @@ function hardEmergency_(message) {
       t
     ) && /\b(detector|alarm)\b/.test(t);
 
-  const activeDanger =
-    /\b(smell(s|ing)?\s*smoke|smoke\s+(coming|in the|everywhere|full of)|apartment\s+(full of\s+)?smoke|active\s+smoke|flames?|on fire|burning|gas\s+smell|smell(s|ing)?\s+gas|carbon\s+monoxide\s+leak|smoke\s+coming\s+from)\b/.test(
-      t
-    ) ||
-    /\b(going\s+off|alarm\s+going\s+off)\b.*\b(smoke|dizzy|sick|symptoms|feel\s+(dizzy|sick|ill)|faint)\b/.test(
-      t
-    ) ||
-    /\b(smoke|dizzy|sick|symptoms)\b.*\b(going\s+off|alarm\s+going\s+off)\b/.test(t);
-
-  if (detectorMaintenanceContext && !activeDanger) {
-    return { emergency: false, reason: "detector_maintenance_guard" };
-  }
-
   const hasCO =
     /\bcarbon monoxide\b/.test(t) ||
     /\bco alarm\b/.test(t) ||
@@ -58,6 +45,14 @@ function hardEmergency_(message) {
     /\b(stove|oven|burner|range)\b.*\bsmell(s|ed|ing)?\b.*\bgas\b/.test(t) ||
     /\bsmell(s|ed|ing)?\b.*\b(stove|oven|burner|range)\b.*\bgas\b/.test(t);
 
+  const heatingMaintenanceContext =
+    /\b(radiator|heater|heating system|boiler|furnace|steam pipe|steam heat|baseboard)\b/.test(
+      t
+    ) &&
+    /\b(smell|odor|odour|burning smell|very hot|too hot|hot to touch|banging|clanking|knocking)\b/.test(
+      t
+    );
+
   const hasSmokeOrFire =
     /\bsmoke\b/.test(t) ||
     /\bsmoke alarm\b/.test(t) ||
@@ -67,6 +62,23 @@ function hardEmergency_(message) {
     /\boven\s*(is\s*)?on fire\b/.test(t) ||
     /\bflames?\b/.test(t) ||
     /\bsmolder(ing)?\b/.test(t);
+
+  const activeDanger =
+    /\b(smell(s|ing)?\s*smoke|smoke\s+(coming|in the|everywhere|full of)|apartment\s+(full of\s+)?smoke|active\s+smoke|flames?|on fire|burning|gas\s+smell|smell(s|ing)?\s+gas|carbon\s+monoxide\s+leak|smoke\s+coming\s+from)\b/.test(
+      t
+    ) ||
+    /\b(going\s+off|alarm\s+going\s+off)\b.*\b(smoke|dizzy|sick|symptoms|feel\s+(dizzy|sick|ill)|faint)\b/.test(
+      t
+    ) ||
+    /\b(smoke|dizzy|sick|symptoms)\b.*\b(going\s+off|alarm\s+going\s+off)\b/.test(t);
+
+  if (detectorMaintenanceContext && !activeDanger) {
+    return { emergency: false, reason: "detector_maintenance_guard" };
+  }
+
+  if (heatingMaintenanceContext && !hasCO && !hasGasSmellOrLeak && !hasSmokeOrFire) {
+    return { emergency: false, reason: "heating_maintenance_guard" };
+  }
 
   if (hasCO || hasGasSmellOrLeak || hasSmokeOrFire) {
     return {
@@ -169,7 +181,7 @@ function evaluateEmergencySignal_(text) {
   const t = String(text || "").trim();
   const hard = hardEmergency_(t);
 
-  if (hard && hard.reason === "detector_maintenance_guard") {
+  if (hard && /_guard$/.test(String(hard.reason || ""))) {
     return { isEmergency: false, emergencyType: "" };
   }
 

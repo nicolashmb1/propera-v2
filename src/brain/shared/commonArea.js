@@ -4,7 +4,14 @@
 
 /** Amenity / shared-space hints (#gym staff shorthand, fitness, pools deck, etc.) */
 const COMMON_AREA_RE =
-  /\b(common area|hallway|corridor|lobby|stairwell|stair case|staircase|laundry room|mail room|parking|garage|entrance|front door|back door|building entrance|gym|fitness center|fitness room|clubhouse|recreation room|community room|business center|pool deck|swimming pool)\b/i;
+  /\b(common area|hallway|corridor|lobby|stairwell|stair case|staircase|laundry room|mail room|parking|garage|entrance|building entrance|gym|fitness center|fitness room|clubhouse|recreation room|community room|business center|pool deck|swimming pool)\b/i;
+
+/**
+ * Door language is ambiguous. Do not treat generic "front door" / "back door" as common-area
+ * without explicit building/lobby/entrance context, or we will misclassify apartment doors.
+ */
+const BUILDING_DOOR_RE =
+  /\b(?:front|back|entry|entrance|main|lobby|building)\s+door\b.*\b(?:building|lobby|entry|entrance|main)\b|\b(?:building|lobby|main)\s+(?:front|back|entry|entrance)?\s*door\b/i;
 
 /**
  * Shared building systems (not tied to a unit). Kept separate from COMMON_AREA_RE so we only
@@ -25,7 +32,9 @@ function normalizeLocationType(raw) {
 function inferLocationTypeFromText(text) {
   const s = String(text || "").trim();
   if (!s) return "UNIT";
-  return COMMON_AREA_RE.test(s) ? "COMMON_AREA" : "UNIT";
+  return COMMON_AREA_RE.test(s) || BUILDING_DOOR_RE.test(s)
+    ? "COMMON_AREA"
+    : "UNIT";
 }
 
 function isCommonAreaLocation(raw) {

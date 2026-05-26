@@ -17,7 +17,7 @@ If the user says **“keep working on V2”** or **“continue Propera V2”**, 
 9. **`docs/OUTSIDE_CURSOR.md`** — SQL/env steps operators run outside the editor.  
 10. **`docs/TICKET_TIMELINE.md`** — portal **Activity** / `ticket_timeline_events`: V1 trigger contract, **`timeline_json`** shape, duplicate rule vs **Timeline V2** semantic writers, migrations **`034`–`037`**, app mapping (`propera-app` `timelineMapping.ts`).
 
-Optional: **`docs/GAS_ENGINE_PORT_PROGRAM.md`** (phased port for engines 10/12/14/20), **`docs/TESTING_STRATEGY.md`**, **`docs/STRUCTURED_LOGS.md`**, **`docs/HANDOFF_LOG.md`** (what changed recently — read **latest dated section** before deep-diving). **Access / amenity reservations (smart locks):** **`docs/ACCESS_ENGINE_BUILD_PLAN.md`** — read before any access-engine work (not started).
+Optional: **`docs/GAS_ENGINE_PORT_PROGRAM.md`** (phased port for engines 10/12/14/20), **`docs/TESTING_STRATEGY.md`**, **`docs/STRUCTURED_LOGS.md`**, **`docs/HANDOFF_LOG.md`** (what changed recently — read **latest dated section** before deep-diving). **Access / amenity reservations (smart locks):** **`docs/ACCESS_ENGINE_BUILD_PLAN.md`** — read before any access-engine work (**partial live**: V2 engine + app/tenant portal shipped; inbound/agent handoff and lifecycle worker still pending).
 
 ---
 
@@ -34,7 +34,7 @@ If the user says anything about **finances, ledger, rent, delinquency, owner sta
 | Phase | Status | Last migration |
 |-------|--------|---------------|
 | **Baseline** | ✅ Complete | 051 (051 = program_lines staff — ops, not finance) |
-| **Phase 1** — credible daily use (snapshot APIs, lease/rent on cards, ledger void/date/notes) | 🟡 In progress | **052** ledger columns next to apply |
+| **Phase 1** — credible daily use (snapshot APIs, lease/rent on cards, ledger void/date/notes) | 🟡 In progress | **052** applied in repo; current focus = Phase 1 read-side/UI completeness |
 | **Phase 1.5** — incumbent accounting **read-only snapshot** (Leasehold rent roll / ledger export → `/financial`) | 🔲 **Blocked** — no code until export samples + column spec | see roadmap §1.5; **do not** apply **058** until spec exists |
 | **Phase 2** — rent roll + delinquency (native `rent_postings` or promoted import) | 🔲 Not started | needs 053 |
 | **Phase 3** — vendor finance / AP | 🔲 Not started | needs 054–055 |
@@ -42,7 +42,7 @@ If the user says anything about **finances, ledger, rent, delinquency, owner sta
 | **Phase 5** — owner statements | 🔲 Not started | needs 057 |
 | **Phase 6** — full books | 🔲 Deferred (explicit decision gate) | — |
 
-**Next finance migration to write:** `052_tenant_ledger_effective_date_notes.sql` — adds `effective_date date` and `notes text` to `tenant_ledger_entries`. **Do not reuse 051** (already `program_lines` staff assignment). See Phase 1 in the roadmap.
+**Current finance migration note:** `052_tenant_ledger_effective_date_notes.sql` is already in repo for Phase 1 ledger hardening. **Do not reuse 051** (already `program_lines` staff assignment). Before the next Phase 2 schema change, confirm numbering against the roadmap because `053_financial_intake_cost_capture.sql` also exists in-repo.
 
 ### Finance guardrails (always apply)
 - Finance is **layered on the property operation system** — channel-agnostic, package in/out. See roadmap **§Finance inside Propera architecture**. No finance logic in adapters; no lifecycle/resolver bypass.

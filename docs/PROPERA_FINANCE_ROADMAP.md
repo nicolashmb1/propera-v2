@@ -111,7 +111,7 @@ Every phase below extends this graph — it does not fork a new money silo.
 
 ---
 
-## Baseline — What ships today (migrations 042 → 051)
+## Baseline — What ships today (migrations 042 → 052)
 
 | Area | What exists |
 |------|-------------|
@@ -119,9 +119,9 @@ Every phase below extends this graph — it does not fork a new money silo.
 | **Tenant charge on cost row** | `tenant_charge_amount_cents` + `tenant_charge_status` on every cost row; approved rows auto-post to `tenant_ledger_entries` when `PROPERA_FINANCE_LEDGER_ENABLED=1` |
 | **Maintenance rollups** | `portal_property_maintenance_spend_month_v1` (UTC month); `portal_properties_v1` with UTC-month + YTD spend/charge/count (migration 048) |
 | **Vendor catalog** | `vendors` table + assignment to tickets + preventive program lines (migration 046) |
-| **Owner `/financial` area** | Portfolio page with property cards (maintenance net owner cost live; rent/delinquency **explicit placeholders**); `/financial/properties/[p]` with units table + maintenance tab |
+| **Owner `/financial` area** | Portfolio page with property cards (expected rent + tenant balances + maintenance net owner cost live; rent/delinquency **explicit placeholders**); `/financial/properties/[p]` units table now shows lease rent, selected-month posted payments, standing balance, lease expiry, last payment, deposit, and 6-month payment history from Propera lease + ledger data |
 | **Unit lease snapshot** | `unit_leases` table (migration 049) — rent, deposit, lease dates, recurring charge billing modes; editable in propera-app |
-| **Unit tenant ledger** | `tenant_ledger_entries` read + ticket-charge cross-check + **manual POST** (charge, fee, payment, credit, waiver, adjustment) from propera-app unit hub |
+| **Unit tenant ledger** | `tenant_ledger_entries` read + ticket-charge cross-check + **manual POST** (charge, fee, payment, credit, waiver, adjustment) from propera-app unit hub; manual lines support `effective_date` + `notes` (migration 052) |
 
 **Flag map:**
 - `PROPERA_FINANCE_ENABLED=1` — master
@@ -138,29 +138,29 @@ Every phase below extends this graph — it does not fork a new money silo.
 
 | Build | Detail | Migrations / code |
 |-------|--------|-------------------|
-| Rolling **12-month** trend per property | Sum `portal_property_maintenance_spend_month_v1` 12 rows in-app (no new table) | propera-app computation |
-| **Cost category** breakdown in UI | Group `entry_type` (parts / labor / vendor_invoice / cleaning / permit / material / other) into a small bar chart on `/financial/properties/[p]` maintenance tab | propera-app only |
-| **Ticket drill-down** from financial property view | Link from maintenance tab row → ticket detail panel (same `TicketDetailPanel`) | propera-app only |
-| Receipts surfaced in financial views | Show `attachment_urls` count badge on cost rows in spend table | propera-app only |
+| Rolling **12-month** trend per property | Sum monthly maintenance spend in-app for the last 12 UTC months ending at the selected month | propera-app computation (**shipped**) |
+| **Cost category** breakdown in UI | Group `entry_type` (parts / labor / vendor_invoice / cleaning / permit / material / other) on `/financial/properties/[p]` maintenance tab | propera-app only (**shipped**) |
+| **Ticket drill-down** from financial property view | Open maintenance-tab ticket rows in the shared `TicketDetailPanel` without leaving `/financial/properties/[p]` | propera-app only (**shipped**) |
+| Receipts surfaced in financial views | Show `attachment_urls` preview/open affordances on cost rows in the spend table | propera-app only (**shipped**) |
 
 ### 1b — Unit lease template → actual rent roll
 
 | Build | Detail | Migrations / code |
 |-------|--------|-------------------|
-| **Expected monthly income** per property | Sum `rent_cents` from `unit_leases` for all active units; show on `/financial` property card beside net owner cost | Supabase view or propera-app computation |
-| Lease **expiry alerts** | Flag units where `lease_end` is within 60 days on `/financial/properties/[p]` units table | propera-app |
-| **Vacant unit** revenue loss estimate | `days_vacant × (average rent_cents for property)` shown in unit row expand — uses existing `unit_leases` data | propera-app |
+| **Expected monthly income** per property | Sum `rent_cents` from `unit_leases` for all active units; show on `/financial` property card beside net owner cost | propera-app computation (**shipped**) |
+| Lease **expiry alerts** | Flag units where `lease_end` is within 60 days on `/financial/properties/[p]` units table | propera-app (**shipped**) |
+| **Vacant unit** revenue loss estimate | Month-scoped vacant days + estimated loss shown in unit row expand; uses canonical `unit_status_history` timing with unit rent when known, else property average rent | **Shipped** via migration **064** + propera-app snapshot math. Initial backfill for units already vacant at rollout is approximate (`updated_at` / `created_at` seed); transitions are exact going forward |
 
 ### 1c — Manual ledger UX hardening
 
 | Build | Detail | Migrations / code |
 |-------|--------|-------------------|
 | **Void** a manual ledger line | `PATCH tenant_ledger_entries SET status = 'voided'` route + button in unit ledger UI | New propera-app route |
-| **Date field** on manual entry | `effective_date date` column on `tenant_ledger_entries` (migration **052**) so PMs can back-date rent payments | Migration 052 + route update |
-| **Per-entry notes** | `notes text` column on `tenant_ledger_entries` (same migration 052) | Migration 052 + UI field |
+| **Date field** on manual entry | `effective_date date` column on `tenant_ledger_entries` (migration **052**) so PMs can back-date rent payments | Migration 052 + route update (**shipped in repo**) |
+| **Per-entry notes** | `notes text` column on `tenant_ledger_entries` (same migration 052) | Migration 052 + UI field (**shipped in repo**) |
 | Ledger **summary footer** on unit page | Charges total / payments total / net balance row at bottom of ledger table | propera-app only |
-| **Financial snapshot API** | `GET /api/financial/properties/[code]?month=` — lease sums + ledger balance + maintenance rollup in one payload | propera-app only |
-| **Portfolio snapshot API** | `GET /api/financial/portfolio?month=` — drives property cards (replace ad-hoc per-page math) | propera-app only |
+| **Financial snapshot API** | `GET /api/financial/properties/[code]?month=` — lease sums + ledger balance + maintenance rollup in one payload; unit rows now also expose deposit, selected-month posted payments, last payment, and 6-month payment history | propera-app only (**shipped**) |
+| **Portfolio snapshot API** | `GET /api/financial/portfolio?month=` — drives property cards (replace ad-hoc per-page math) | propera-app only (**shipped**) |
 
 **Phase 1 deliverable:** Maintenance spend and ticket chargebacks are trustworthy in-app. Per unit: lease **template** in `unit_leases` is editable; ledger shows Propera-posted lines + ticket charges; **if snapshot ingest exists**, balance/rent/collected come from snapshot with **as-of** label — not re-keyed from Leasehold.
 
@@ -305,7 +305,7 @@ These items come **after** structured snapshots + enrichment exist. They do **no
 | 049 | **`unit_leases`** | 030 (units catalog) | applied |
 | 050 | Ledger unit+property index | 042 | applied |
 | **051** | `assigned_staff_id` + `assigned_staff_display` on `program_lines` (preventive ops — not finance tables) | 046 | applied |
-| **052** | `effective_date` + `notes` on `tenant_ledger_entries` | 042 | **next finance migration** |
+| **052** | `effective_date` + `notes` on `tenant_ledger_entries` | 042 | applied |
 | **058** | **`tenant_account_snapshots`** + payment history (incumbent read-only ingest) | 049, 030 | **deferred** — design after Leasehold export spec |
 | **053** | **`rent_postings`** | 049 | planned (Phase 2 — greenfield or promoted from snapshot) |
 | **054** | Invoice fields on `ticket_cost_entries` | 042 | planned (Phase 3) |
@@ -314,6 +314,8 @@ These items come **after** structured snapshots + enrichment exist. They do **no
 | **057** | **`owner_statements`** | 053 + 042 | planned (Phase 5) |
 
 **051 is not a finance migration** — do not repurpose it for ledger columns. Finance ledger hardening starts at **052**.
+
+**Current caution:** before writing the next Phase 2 finance migration, confirm the numbering sequence. `053_financial_intake_cost_capture.sql` already exists in-repo, so the old "`053 = rent_postings`" placeholder needs re-sequencing before implementation.
 
 ---
 

@@ -13,6 +13,9 @@ const AC_HEAT_MSG =
   "its literally 100 degrees outside and our ac has been out since yesterday morning " +
   "we have been sweating all day and night i have a baby at home and we cannot sleep " +
   "its unbearable in here please someone needs to come today this is not ok";
+const SECURITY_MSG =
+  "my apartment door wont lock i tried everything the key turns but the deadbolt wont extend " +
+  "all the way so the door isnt actually locked i live alone and im not comfortable leaving for work tomorrow morning";
 
 test("inferContextualGatherSafety — baby + extreme heat + AC out + distress", () => {
   const s = inferContextualGatherSafety([AC_HEAT_MSG], AC_HEAT_MSG);
@@ -25,6 +28,14 @@ test("inferContextualGatherSafety — baby + extreme heat + AC out + distress", 
 test("inferContextualGatherSafety — AC noise alone is not emergency", () => {
   const msg = "my ac is making a loud humming noise in unit 305";
   assert.equal(inferContextualGatherSafety([msg], msg), null);
+});
+
+test("inferContextualGatherSafety — door lock insecurity is urgent not emergency-tier", () => {
+  const s = inferContextualGatherSafety([SECURITY_MSG], SECURITY_MSG);
+  assert.ok(s);
+  assert.equal(s.emergencyType, "SECURITY");
+  assert.equal(s.skipScheduling, true);
+  assert.equal(s.receiptTier, "urgent");
 });
 
 test("mergeGatherSafety — contextual backstop when LLM misses NO_AC", () => {
@@ -46,6 +57,16 @@ test("buildSafetyGatherReply — NO_AC first turn property ask", () => {
   );
   assert.match(reply, /extreme heat without AC/i);
   assert.match(reply, /infant/i);
+  assert.match(reply, /building/i);
+});
+
+test("buildSafetyGatherReply — SECURITY first turn property ask", () => {
+  const reply = buildSafetyGatherReply(
+    "property",
+    { _safety: { isEmergency: true, emergencyType: "SECURITY", skipScheduling: true } },
+    [{ code: "PENN", display_name_short: "Penn" }]
+  );
+  assert.match(reply, /door is not locking securely/i);
   assert.match(reply, /building/i);
 });
 

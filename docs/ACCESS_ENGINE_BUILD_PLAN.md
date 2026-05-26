@@ -4,7 +4,7 @@
 
 **Audience:** product, engineering, next agent implementing access + staff cockpit.
 
-**Status:** **Phase A–F in progress** — migration **057**, V2 engine + portal API, propera-app `/access` command center (day calendar, stats, approve/cancel). Router/inbound + config UI + tenant portal slice **not started**.
+**Status:** **Partially shipped** — migrations **057** and **058**, V2 Access engine + portal API + tenant access API, propera-app **`/access`** command center + config UI, tenant **`/tenant/amenities`** surfaces, and QR/public reserve shell are live. **Not started:** inbound ACCESS_* router/channel path, access lifecycle worker (`CONFIRMED → ACTIVE → COMPLETED/NO_SHOW`), real lock adapters, and Tenant Agent access handoff.
 
 **Naming:** **Access Engine** (product). Code module prefix: `access` (e.g. `src/access/`). Staff nav label: **Access** (`/access`). Avoid overloading “amenity” in table names unless we standardize later — tables use `access_*`.
 
@@ -15,6 +15,7 @@
 - [ADAPTER_ONBOARDING.md](./ADAPTER_ONBOARDING.md) — channel adapters stay transport-only
 - [TENANT_PORTAL_BUILD_PLAN.md](./TENANT_PORTAL_BUILD_PLAN.md) — structured tenant reserve/cancel/status via `/tenant/*`
 - [COMMUNICATION_ENGINE.md](./COMMUNICATION_ENGINE.md) — precedent for a **bounded engine** separate from `handleInboundCore`
+- [TENANT_AGENT_ADAPTER.md](./TENANT_AGENT_ADAPTER.md) — current maintenance-only lane; future access/amenity handoff
 - [PROPERA_FINANCE_ROADMAP.md](./PROPERA_FINANCE_ROADMAP.md) — deposit capture/refund hooks (wire when finance phase allows)
 - [propera-app/docs/PROPERA_ARCHITECTURE_BOUNDARIES.md](../../propera-app/docs/PROPERA_ARCHITECTURE_BOUNDARIES.md) — cockpit vs brain
 - [PARITY_LEDGER.md](./PARITY_LEDGER.md) — add rows when behavior ships (no GAS parity required for net-new domain)
@@ -33,6 +34,26 @@
 | **propera-app is cockpit** | Staff **configures policy**, **views calendar**, **overrides** reservations — writes go through **V2 portal routes**, not parallel brain in Next.js. |
 
 **Explicit boundary:** Access Engine is **not** maintenance lifecycle. It must **not** run inside `handleInboundCore` or mutate `tickets` / `work_items` for reservations. Optional **timeline/event_log** links are display-only audit — not ticket state.
+
+## Current reality (2026-05)
+
+**Shipped now**
+
+- Supabase **`access_*`** schema is live (locations, policies, schedules, blackouts, reservations, passes, locks, audit).
+- V2 Access DAL / engine is live (`src/access/*`, `src/dal/accessEngine.js`) with deterministic availability and booking checks.
+- Staff portal routes are live (`registerAccessRoutes.js`) for location CRUD, policy/schedule updates, reservation actions, PIN regenerate, and staff override booking.
+- Tenant access routes are live under **`/api/tenant/access/*`** with reservation create/cancel and QR/public reserve identify flow.
+- propera-app staff **`/access`** and **`/access/locations/[id]/config`** are live.
+- propera-app tenant **`/tenant/amenities`** and reservation detail flow are live.
+
+**Still not started / incomplete**
+
+- Inbound ACCESS_* router branch for SMS / WhatsApp / Telegram.
+- Access-specific outgate templates and reminders.
+- Lifecycle worker for reservation status progression and pass expiry/revoke.
+- Real lock providers beyond **`noop`**.
+- Deposit / finance hooks.
+- Tenant Agent access handoff (today Access/amenity requests are still deflected by the maintenance-only lane).
 
 ---
 
@@ -73,6 +94,16 @@ Staff cockpit (propera-app)
 ```
 
 **Comparison to Communication Engine:** Shallow broadcast engine avoids the maintenance brain. Access Engine is **deeper** (state machine + schedule truth) but still a **dedicated domain** — not a second maintenance interpreter.
+
+### Tenant Agent role (future, explicit)
+
+Tenant Agent should participate in Access as the **communication layer between tenant and the Access brain**, not as the reservation authority.
+
+- **Agent may own:** conversational gather, clarification, ambiguity resolution, and deep-link / handoff UX.
+- **Agent must not own:** availability truth, conflict decisions, policy enforcement, deposit state, credential issuance, or reservation lifecycle state.
+- **Access Engine owns:** deterministic reservation policy, state machine, pass issuance/revoke, reminders, and audit trail.
+- **Integration seam:** Agent gathers `location`, `window`, and `intent` (`reserve`, `cancel`, `status`, `list_slots`) then hands off a **canonical access signal package** to the Access domain. It must route **beside** `handleInboundCore`, not through maintenance intake.
+- **Safe rollout order:** keep today's deflect behavior as fallback; add deep links to existing tenant amenities surfaces first; add true ACCESS_* handoff only after Access lifecycle + outgate are production-solid.
 
 ---
 
@@ -363,7 +394,7 @@ Staff must always see:
 
 | Surface | Path | Notes |
 |---------|------|--------|
-| **SMS / WA / Telegram** | Existing webhooks → access router branch | Conversational confirm flow |
+| **SMS / WA / Telegram** | *Future* existing webhooks / Tenant Agent handoff → access router branch | Current safe behavior is deflect; later phases replace deflect with Access handoff or deep link |
 | **Tenant portal** | `/tenant/amenities` | Full portal nav; OTP login |
 | **QR door (pilot)** | `/tenant/reserve/{propertyCode}/{slug}` | No OTP; unit + phone identify |
 | **Owner app** | Future | Same signal package |
@@ -415,9 +446,9 @@ Tenant portal amenities list still requires normal OTP login. QR path is intenti
 | **B — Engine core** | `getActivePolicy`, `canReserve`, conflict detection, state machine, DAL | v2 |
 | **C — NoopAdapter** | Issue/revoke PIN; scheduler jobs | v2 |
 | **D — Portal API** | CRUD locations, policies, reservations, blackouts; staff override; calendar feed | v2 |
-| **E — Router + outgate** | ACCESS_* intents; templates | v2 |
+| **E — Router + outgate** | ACCESS_* intents; templates; Tenant Agent/deep-link handoff seam | v2 |
 | **F — Staff UI** | `/access` command center + config tabs + proxies | app |
-| **G — Tenant portal slice** | `/tenant/access` + `/api/tenant/access/*` | app + v2 |
+| **G — Tenant portal slice** | `/tenant/amenities` + `/api/tenant/access/*` + QR/public reserve | app + v2 |
 | **H — Real lock adapter** | Seam/August/… after vendor pick | v2 |
 
 **Tests (V2):** `tests/accessCanReserve.test.js`, `tests/accessStateMachine.test.js`, golden NL compile fixtures when router ships.

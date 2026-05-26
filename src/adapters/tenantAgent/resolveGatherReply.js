@@ -6,6 +6,7 @@ const { buildGatherGreetingReply, isGatheringGreetingOnly } = require("./gatherG
 const { isTenantConfusedMessage, buildConfusionResetReply } = require("./postHandoffReply");
 const { getGatherSafety, llmReplyAsksForSchedule } = require("./detectGatherSafety");
 const { buildSafetyGatherReply } = require("./gatherSafetyReply");
+const { buildRosterMissingFieldPrompt } = require("./lookupTenantRosterForAgent");
 
 const FALSE_HANDOFF_RE =
   /\b(pass(ed)?\s+(this\s+)?along|noted\s+for\s+maintenance|logged|get\s+this\s+(issue\s+)?(noted|submitted|sent)|they('ll|\s+will)\s+be\s+in\s+touch|maintenance\s+will|i('ve|\s+have)\s+(noted|logged|submitted|everything\s+i\s+need))\b/i;
@@ -39,8 +40,9 @@ function resolveGatherReply(o) {
 
   const missing = String(complete.missing || "").toLowerCase();
   const safetyReply = buildSafetyGatherReply(missing, partial, propertiesList);
+  const rosterPrompt = buildRosterMissingFieldPrompt(missing, partial, propertiesList);
   const missingPrompt =
-    safetyReply || promptForMissingField(missing, partial, propertiesList);
+    safetyReply || rosterPrompt || promptForMissingField(missing, partial, propertiesList);
 
   if (missing === "property" && !String(partial.property || "").trim() && bodyText) {
     if (isGatheringGreetingOnly(bodyText, partial)) {

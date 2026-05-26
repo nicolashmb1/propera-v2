@@ -3,12 +3,16 @@
  */
 const { hasProblemSignal } = require("../../brain/core/splitIssueGroups");
 const { tenantAgentPropertyAllowlist } = require("../../config/env");
+const { buildRosterAwareGreeting } = require("./lookupTenantRosterForAgent");
 
 const GREETING_ONLY_RE =
   /^(?:hi|hello|hey|yo|howdy|good\s+(?:morning|afternoon|evening))(?:\s+there)?[!.\s]*$/i;
 
 const CASUAL_OPEN_RE =
   /^(?:what'?s\s*up|whatsup|wassup|sup|how\s+are\s+you|how\s+r\s+u|how\s+are\s+u)(?:\s+there)?[!.\s]*$/i;
+
+const TELEGRAM_START_RE =
+  /^\/start(?:@\w+)?(?:\s+.*)?$/i;
 
 /**
  * Tenant-facing property label from DB row — short name first (what tenants say).
@@ -79,6 +83,7 @@ function inferBrandDisplayName(propertiesList, partial) {
 function isGatheringGreetingOnly(bodyText, partial) {
   const s = String(bodyText || "").trim();
   if (!s || s.length > 80) return false;
+  if (TELEGRAM_START_RE.test(s)) return true;
   if (hasProblemSignal(s)) return false;
   if (String((partial && partial.issue) || "").trim().length >= 2) return false;
   if (String((partial && partial.unit) || "").trim()) return false;
@@ -91,6 +96,9 @@ function isGatheringGreetingOnly(bodyText, partial) {
  * @returns {string}
  */
 function buildGatherGreetingReply(o) {
+  const rosterGreeting = buildRosterAwareGreeting(o.partial || {}, o.propertiesList || []);
+  if (rosterGreeting) return rosterGreeting;
+
   const brand = inferBrandDisplayName(o.propertiesList, o.partial);
   if (brand) {
     return (

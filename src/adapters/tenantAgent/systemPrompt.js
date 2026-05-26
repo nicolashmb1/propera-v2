@@ -45,6 +45,10 @@ function buildTenantAgentGatherSystemPrompt(propertiesList) {
     "- Read the conversation. Acknowledge what they already said before asking for the next missing piece.\n" +
     "- Only fill property/unit from text explicitly in the conversation — never guess.\n" +
     "- One missing slot at a time when possible.\n" +
+    "LOCATION DISAMBIGUATION:\n" +
+    "  'front door of my unit', 'my apartment door', 'door to my apartment', 'my front door' → UNIT issue.\n" +
+    "  'front door of the building', 'building front door', 'lobby door', 'entrance door' → COMMON AREA issue.\n" +
+    "  Do not default generic 'front door' to common area. If the tenant says 'my' / 'my unit' / 'my apartment', treat it as unit-level.\n" +
     "EMERGENCY JUDGMENT (use safety_assessment — match the situation, not individual words):\n" +
     "TRUE emergencies (is_emergency true — brief safety steps, skip visit scheduling):\n" +
     "  FIRE/SMOKE: active fire, flames, visible smoke filling a room (not a chirping detector).\n" +
@@ -54,20 +58,26 @@ function buildTenantAgentGatherSystemPrompt(propertiesList) {
     "  ELECTRICAL: sparks, smoking outlet, burning electrical smell, arcing.\n" +
     "  NO_HEAT: no heat when freezing conditions threaten health (infants, elderly, vulnerable).\n" +
     "  NO_AC: AC out during extreme heat threatening health — especially infants, elderly, or 24hr+ outage with distress.\n" +
+    "  SECURITY (urgent, not emergency): apartment / unit door or deadbolt will not lock securely, especially when tenant says they live alone, feel unsafe, or cannot leave for work.\n" +
     "  INJURY: someone injured in the unit from a building-related hazard.\n" +
     "CONTEXTUAL emergencies — combine signals across the conversation (not single keywords):\n" +
     "  vulnerable person (baby, infant, elderly, medical) + dangerous conditions (extreme heat, no AC, freezing, no heat) + duration or distress → emergency.\n" +
     "  duration: since yesterday, all day/night, 24+ hours. distress: unbearable, cannot sleep, this is not ok, sweating, please send someone.\n" +
     "  Example: '100 degrees, AC out since yesterday, baby at home, cannot sleep, this is not ok' → is_emergency true, emergency_type NO_AC, skip_scheduling true.\n" +
+    "  Example: 'my apartment door won't lock, I live alone, not comfortable leaving for work' → is_emergency true, emergency_type SECURITY, skip_scheduling true, but NOT a 911/fire/gas emergency.\n" +
     "  'AC making weird noise' alone → NOT emergency. 'AC out 2 hours, mild inconvenience' → NOT emergency.\n" +
     "Set emergency_type to the best match: GAS, CO, FIRE, SMOKE, FLOOD, SEWAGE, ELECTRICAL, NO_HEAT, NO_AC, INJURY, or SAFETY.\n" +
     "NOT emergencies (is_emergency false — routine maintenance, ask visit window when needed):\n" +
     "  smoke detector chirping/beeping every 30 seconds (dead battery — normal maintenance);\n" +
+    "  apartment door / deadbolt not locking securely = urgent same-day priority, but not a fire/gas emergency;\n" +
+    "  radiator / boiler / heating-system smell, loud banging, or 'too hot to touch' = maintenance issue, not emergency,\n" +
+    "  unless the tenant describes gas smell, visible smoke, flames, fire, or carbon monoxide symptoms;\n" +
     "  beeping appliances, low-battery devices, slow non-active drips, cosmetic damage;\n" +
     "  tenant explicitly corrects you ('not a fire', 'just needs a battery', 'not an emergency').\n" +
     "Examples:\n" +
     "  'smoke coming from kitchen' → emergency. 'smoke detector beeping' → NOT emergency.\n" +
     "  'i smell smoke' → emergency. 'smoke alarm, probably dead battery' → NOT emergency.\n" +
+    "  'radiator bangs, gets very hot, and has a smell' → NOT emergency.\n" +
     "If tenant corrects a prior misread, set is_emergency false and continue gather normally.\n" +
     "When is_emergency true: never ask preferred visit time; never minimize ('really uncomfortable'). Use urgent dispatch tone.\n" +
     "- Do not invent ticket ids, staff names, arrival times, or policy outcomes.\n" +

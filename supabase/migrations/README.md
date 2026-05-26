@@ -32,6 +32,7 @@ Run SQL files in **numeric order** in the Supabase SQL Editor (same project as `
 | **060_program_line_ticket_bridge.sql** | Line ↔ ticket link columns; `tickets` / `work_items` program FKs | **`createTicketFromProgramLine.js`**, **`POST …/program-lines/:id/create-ticket`**, **`/preventive` Report issue** |
 | **062_tenant_outbound_day_mark.sql** | First tenant outbound per ops day | **`tenantOutboundDayMark.js`**, Outgate Phase 4 SMS footer + property header |
 | **063_tenant_conversations.sql** | `tenant_conversations` — Tenant Agent adapter state | **`src/adapters/tenantAgent/conversationStore.js`** when **`TENANT_AGENT_ENABLED=1`** |
+| **064_unit_status_history_v1.sql** | `unit_status_history`; extends **`portal_units_v1`** with `vacancy_started_at` | **`propera-app`** `/financial/properties/[property]` vacancy timing / loss estimates; canonical unit status intervals for future vacancy analytics |
 | **048_portal_properties_maintenance_ytd.sql** | **`portal_properties_v1`**: **`maintenance_*_ytd`** columns (UTC year sum from monthly rollup) | **`portalTicketsRead.js`**, **`propera-app`** properties KPI + cards + financial property header; export CSV |
 | **052_tenant_ledger_effective_date_notes.sql** | **`tenant_ledger_entries.effective_date`**, **`notes`** | **`propera-app`** unit ledger manual POST + void |
 | **054_pm_attachments_audio_mime.sql** | **`pm-attachments`** bucket audio + PDF MIME types | **`/api/portal/chat-audio-upload`** voice notes |

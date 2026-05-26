@@ -26,9 +26,9 @@
 
 **Keep docs current:** When you change behavior, update **this file**, **[PROPERA_V2_GAS_EXIT_PLAN.md](./PROPERA_V2_GAS_EXIT_PLAN.md)** (todos + narrative), and **[OUTSIDE_CURSOR.md](./OUTSIDE_CURSOR.md)** if operators must run new SQL or env steps. See *Documentation discipline* at the bottom.
 
-### Access Engine (planned — separate from maintenance brain)
+### Access Engine (live partial — separate from maintenance brain)
 
-**Not started.** Spec: **[ACCESS_ENGINE_BUILD_PLAN.md](./ACCESS_ENGINE_BUILD_PLAN.md)**.
+**Partially shipped.** Spec + status: **[ACCESS_ENGINE_BUILD_PLAN.md](./ACCESS_ENGINE_BUILD_PLAN.md)**. V2 engine/DAL, portal staff routes, tenant access routes, and propera-app `/access` / tenant amenities surfaces are live. Inbound ACCESS_* channel routing, lifecycle worker, and real lock adapters remain pending.
 
 | Piece | Location (planned) |
 |-------|---------------------|

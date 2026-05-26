@@ -61,6 +61,30 @@ function hasTenantDistress(combined) {
 }
 
 /**
+ * @param {string} combined
+ * @returns {boolean}
+ */
+function hasSecurityLockHazard(combined) {
+  const hasDoorOrLock =
+    /\b(door|front door|apartment door|unit door|deadbolt|lock)\b/.test(combined);
+  const notSecure =
+    /\b(won'?t lock|doesn'?t lock|not locking|unlocked|deadbolt won'?t|deadbolt wont|deadbolt won'?t extend|wont extend|not secure|isn'?t secure|cant lock|can'?t lock|won'?t extend all the way|not actually locked)\b/.test(
+      combined
+    );
+  return hasDoorOrLock && notSecure;
+}
+
+/**
+ * @param {string} combined
+ * @returns {boolean}
+ */
+function hasSecurityVulnerability(combined) {
+  return /\b(live alone|not comfortable leaving|leaving for work|leave for work|alone at home|don'?t feel safe|do not feel safe|unsafe to leave)\b/.test(
+    combined
+  );
+}
+
+/**
  * @param {string} text
  * @returns {boolean}
  */
@@ -89,6 +113,8 @@ function inferContextualGatherSafety(texts, latestText) {
   const extremeCold = hasExtremeColdHazard(combined);
   const duration = hasDangerDuration(combined);
   const distress = hasTenantDistress(combined);
+  const securityLockHazard = hasSecurityLockHazard(combined);
+  const securityVulnerability = hasSecurityVulnerability(combined);
 
   if (vulnerable && extremeHeat && (duration || distress)) {
     return {
@@ -130,6 +156,16 @@ function inferContextualGatherSafety(texts, latestText) {
     };
   }
 
+  if (securityLockHazard && (securityVulnerability || distress)) {
+    return {
+      isEmergency: true,
+      emergencyType: "SECURITY",
+      skipScheduling: true,
+      requiresImmediateInstructions: false,
+      receiptTier: "urgent",
+    };
+  }
+
   return null;
 }
 
@@ -138,4 +174,5 @@ module.exports = {
   isExplicitNonEmergencyCorrection,
   hasVulnerablePerson,
   hasExtremeHeatHazard,
+  hasSecurityLockHazard,
 };

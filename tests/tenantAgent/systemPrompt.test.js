@@ -16,4 +16,8 @@ test("buildTenantAgentGatherSystemPrompt — includes property codes", () => {
   assert.match(prompt, /request_intent/i);
   assert.match(prompt, /conversation_signal/i);
   assert.match(prompt, /CONVERSATION AWARENESS/i);
+  assert.match(prompt, /front door of my unit/i);
+  assert.match(prompt, /building front door/i);
+  assert.match(prompt, /radiator \/ boiler \/ heating-system smell/i);
+  assert.match(prompt, /radiator bangs, gets very hot, and has a smell/i);
 });

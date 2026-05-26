@@ -25,6 +25,20 @@ test("inferLocationTypeFromText keeps unit default without common-area markers",
   assert.equal(inferLocationTypeFromText("sink leaking in unit 101"), "UNIT");
 });
 
+test("inferLocationTypeFromText keeps apartment front door as UNIT", () => {
+  assert.equal(
+    inferLocationTypeFromText("front door of my unit does not lock properly"),
+    "UNIT"
+  );
+});
+
+test("inferLocationTypeFromText detects building front door as COMMON_AREA", () => {
+  assert.equal(
+    inferLocationTypeFromText("front door of the building does not close"),
+    "COMMON_AREA"
+  );
+});
+
 test("mixed-scope text resolves to COMMON_AREA when hallway is explicit", () => {
   assert.equal(
     inferLocationTypeFromText("unit 101 reports hallway sink leak"),
