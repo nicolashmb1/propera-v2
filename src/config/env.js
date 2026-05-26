@@ -315,6 +315,30 @@ function financeCostCapturePropertyAllowlist() {
   return set.size ? set : null;
 }
 
+/** Communication Engine portal routes + broadcast SMS engine (`/api/communications/*`, `/webhooks/communications/*`). */
+function communicationEngineEnabled() {
+  return env("PROPERA_COMMUNICATION_ENGINE_ENABLED", "") === "1";
+}
+
+/** Dedicated Twilio number for broadcast SMS (separate from maintenance main number). */
+function twilioBroadcastFrom() {
+  return String(env("TWILIO_BROADCAST_FROM", "")).trim();
+}
+
+/** Single-org V1 brand id used by communication campaigns unless a route provides one. */
+function communicationOrgId() {
+  return String(env("COMM_ORG_ID", "grand")).trim().toLowerCase() || "grand";
+}
+
+function commReplyWindowHours() {
+  const n = parseInt(env("COMM_REPLY_WINDOW_HOURS", "72"), 10);
+  return Number.isFinite(n) && n > 0 ? n : 72;
+}
+
+function openaiCommDraftModel() {
+  return String(env("OPENAI_COMM_DRAFT_MODEL", "gpt-4o-mini")).trim() || "gpt-4o-mini";
+}
+
 /** Resident portal JWT (`/api/tenant/*`). */
 function tenantJwtSecret() {
   return String(env("TENANT_JWT_SECRET", "")).trim();
@@ -464,6 +488,11 @@ module.exports = {
   financeLedgerEnabled,
   financeCostCaptureChatEnabled,
   financeCostCapturePropertyAllowlist,
+  communicationEngineEnabled,
+  twilioBroadcastFrom,
+  communicationOrgId,
+  commReplyWindowHours,
+  openaiCommDraftModel,
   intakeAudioEnabled,
   intakeAudioTranscriptionEnabled,
   openaiAudioTranscriptionEnabled,

@@ -7,6 +7,37 @@
 
 ---
 
+## 2026-05-25 — Communication portal UI slice landed in propera-app
+
+| Area | Change |
+|------|--------|
+| **propera-app cockpit** | Added **`/communications`** behind **`NEXT_PUBLIC_PROPERA_COMMUNICATIONS_ENABLED=1`**. First slice is live: campaign list, inline draft creation, detail panel, AI/deterministic draft generation from brief, manual draft save/edit, final SMS footer preview + segment estimate, audience preview, send, and exact unit / resident targeting controls. |
+| **Thin app proxies** | Added **`src/app/api/communications/*`** routes that forward to V2 **`/api/communications/*`**. No audience resolution / compose / manual draft save / footer preview / send business logic was duplicated in Next. |
+| **Portal shell / gating** | Sidebar nav wired in **`AppLayout.tsx`** and route/api gating added in **`proxy.ts`** so the module stays opt-in like Preventive / Access. |
+| **Docs / env** | Updated `propera-app/README.md`, `propera-app/.env.example`, and `COMMUNICATION_ENGINE.md` so the portal slice is now part of repo truth. |
+| **Next follow-ups** | Dedicated `/communications/[id]` deep link, recipient / reply tabs, footer preview / segment estimate, and richer campaign editing (for example title/body metadata beyond the current draft-save seam). |
+
+---
+
+## 2026-05-25 — Communication backend landed; preserve tenant-agent behavior, move to app UI
+
+| Area | Change |
+|------|--------|
+| **Communication Engine backend** | `src/communication/` + `src/webhooks/communicationsSms.js` now cover campaign draft/preview/compose/send plus broadcast reply/delivery tracking. Current next work item is **`propera-app` Communication UI** over the live V2 endpoints. |
+| **Approved tenant-agent rule** | **Unit** maintenance requests may **finalize without schedule**; schedule ask is **post-create optional**. **Common area** and **emergency / skipScheduling** must **not** ask for schedule. This behavior was restored intentionally; do not “fix” it away for tests. |
+| **Test cleanup done** | Fixed the hermetic audio test and the shared one-line tenant-agent handoff regression. Full suite dropped from **26 fails** to **4 fails**. |
+| **Known remaining red tests (do not auto-fix without approval)** | **`tests/scenarios/tenantAgentConversationTtl.test.js`** — test expects expired conversation fresh partial `{}` but runtime now preserves metadata (`_last_inbound_*`, `_roster_lookup_done`). **`tests/scenarios/tenantAgentPostCompletePhase4.test.js`** — expects brain label **`tenant_agent_gather`** but runtime returns **`intake_start_new`** for explicit new-issue branch. **`tests/tenantAgent/detectGatherSafety.test.js`** — expects `payload.emergency = "Yes"` for handoff safety payload, runtime leaves it undefined unless `receiptTier === "emergency"`. **`tests/tenantMessagesCancelLayer.test.js`** — known red / unimplemented: tenant cancel does not yet suspend linked ticket (`OPEN` vs expected `SUSPENDED`). |
+| **Agent instruction** | Unless the user explicitly asks to work on those tenant-agent tests/behaviors, **do not** change tenant-agent behavior just to make the suite fully green. Preserve the current accepted agent behavior and move forward with the requested product slice. |
+
+### Commands
+
+```bash
+cd propera-v2
+npm test
+```
+
+---
+
 ## 2026-05-25 — Finance Phase 1 read-side polish
 
 | Area | Change |
@@ -1050,6 +1081,36 @@ npm test
 cd propera-v2
 npm test
 npm start
+```
+
+---
+
+## 2026-05-25 — Communication Engine portal-first backend slice
+
+### Done
+| Area | Change |
+|------|--------|
+| **Schema / audit** | Communication Engine base migration already existed (`055`). Added follow-up migration **`065_communication_agent_initiated.sql`** for agent-vs-portal draft audit. |
+| **Backend routes** | Added **`src/communication/`** module + route registrar. Live routes: **`POST /api/communications/campaigns`**, **`GET /api/communications/campaigns`**, **`GET /api/communications/campaigns/:id`**, **`POST /api/communications/draft`**, **`POST /api/communications/campaigns/:id/resolve`**, **`POST /api/communications/campaigns/:id/send`**. Wired from **`src/index.js`** behind **`PROPERA_COMMUNICATION_ENGINE_ENABLED=1`** + portal token gate. |
+| **Audience + brand** | `brandContextService.js` reads `organizations` + property display/short/sender-label columns. `audienceResolver.js` resolves from **`tenant_roster`** + **`units`**, produces preview counts + skip reasons (`NO_PHONE`, `OPT_OUT`). |
+| **Compose + send** | `messageComposer.js` adds AI draft with deterministic fallback; `commOutgate.js` appends footer only at send time and sends from **`TWILIO_BROADCAST_FROM`** via transport-level `from` override in **`src/outbound/twilioSendMessage.js`**. `campaignService.js` now handles draft update, prepare snapshot, and send orchestration. |
+| **Reply / delivery webhooks** | Added **`src/webhooks/communicationsSms.js`** with **`POST /webhooks/communications/sms`** and **`POST /webhooks/communications/status`**. `replyClassifier.js` is deterministic, `replyHandler.js` records replies + opt-out + auto-response redirect, `deliveryTracker.js` rolls up recipient/campaign delivery status. Explicit seam **`src/brain/createMaintenanceTicketFromCommReply.js`** exists but is still stubbed (`not_implemented`). |
+| **Tests** | Added **`tests/communicationAudienceResolver.test.js`**, **`tests/communicationMessageComposer.test.js`**, and **`tests/communicationReplyClassifier.test.js`**. All pass. |
+| **Docs / env** | Updated **`COMMUNICATION_ENGINE.md`**, **`AGENTS.md`**, **`BRAIN_PORT_MAP.md`**, **`OUTSIDE_CURSOR.md`**, **`supabase/migrations/README.md`**, and **`.env.example`** for the live slice. |
+
+### Next / open
+| Item | Notes |
+|------|--------|
+| **Portal UI** | No `propera-app` communications proxy/routes/screens yet. Backend is ready for the first wizard slice. |
+| **Maintenance handoff** | Broadcast reply classification can identify maintenance/emergency signals, but **`createMaintenanceTicketFromCommReply`** is still a stub seam until the ticket-seed contract is defined. |
+| **Delivery detail / replies detail / cancel** | Planned routes are still partial: recipients/replies list and cancel path not implemented yet. |
+| **Full-suite status** | `npm test` still has the same unrelated tenant-agent failures as before this slice (**26 failures total**). New communication tests pass; module smoke checks pass. |
+
+### Commands
+
+```bash
+cd propera-v2
+npm test
 ```
 
 ---

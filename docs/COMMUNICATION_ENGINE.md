@@ -1,6 +1,6 @@
 # Communication Engine — build plan (V1)
 
-**Purpose:** Design north and phased build plan for **tenant broadcast SMS** on a **dedicated Twilio number**, separate from the maintenance brain. Shallow engine: capture, classify, log, redirect — **not** a second conversation brain.
+**Purpose:** Design north and phased build plan for **tenant broadcast SMS** on a **dedicated Twilio number**, separate from the maintenance brain. Shallow engine: capture, classify, log, redirect — **not** a second conversation brain. Build the backend once so the **portal wizard** and a future **agent adapter** can drive the same campaign lifecycle.
 
 **Audience:** product, engineering, next agent implementing comms.
 
@@ -15,12 +15,17 @@
 
 **North compass alignment:** The **main brain** still owns maintenance lifecycle. The Communication Engine **never** runs `handleInboundCore` or `runInboundPipeline` for broadcast-number traffic. It may call a **single thin handoff** (`createMaintenanceTicketFromCommReply` — to be defined in `src/brain/` or `src/dal/`) when `reply_class` is `MAINTENANCE_SIGNAL` or `EMERGENCY_SIGNAL`.
 
+**Interface stance:** Build **portal-first**, but keep the backend **agent-ready** from day one. The portal wizard is the first operator surface and later a fallback/manual surface. A future agent is just another adapter/client that calls the same `/api/communications/*` routes and honors the same approval step before send.
+
 ---
 
 ## Architecture (two numbers, two front doors)
 
 ```text
-Main Twilio number     → POST /webhooks/sms | /webhooks/twilio
+Owner in portal         → /api/communications/* → src/communication/*
+Future owner agent      → /api/communications/* → src/communication/*
+
+Main Twilio number      → POST /webhooks/sms | /webhooks/twilio
                          → runInboundPipeline → maintenance / staff / leasing brain
 
 Broadcast Twilio number → POST /webhooks/communications/sms
@@ -61,18 +66,18 @@ Broadcast Twilio number → POST /webhooks/communications/sms
 | Layer | Deliverable |
 |-------|-------------|
 | Database | Migration **`055_communication_engine.sql`** (enums + 3 tables + brand/roster columns) |
-| Backend | `src/communication/*` module |
+| Backend | `src/communication/*` module (canonical business logic for portal now, agent later) |
 | Webhooks | `src/webhooks/communicationsSms.js` mounted at `/webhooks/communications` |
 | API | Portal-token routes under `/api/communications/*` (register in `registerPortalRoutes.js` or dedicated registrar) |
-| Portal | `propera-app` **Communications** nav + list / composer / detail |
+| Portal | `propera-app` **Communications** nav + list / composer / detail (primary V1 surface) |
 
-**Explicitly out of V1:** WhatsApp broadcast (schema allows `channel`; send path SMS-only first), scheduled cron worker (optional `scheduled_at` stored; send is manual or immediate POST), multi-org SaaS.
+**Explicitly out of V1:** WhatsApp broadcast (schema allows `channel`; send path SMS-only first), scheduled cron worker (optional `scheduled_at` stored; send is manual or immediate POST), multi-org SaaS, direct agent adapter UI. The agent comes **after** the portal flow is proven, without changing the backend contract.
 
 ---
 
 ## 1. Database schema
 
-**File:** `supabase/migrations/055_communication_engine.sql`
+**Files:** `supabase/migrations/055_communication_engine.sql` + `supabase/migrations/065_communication_agent_initiated.sql`
 
 Run in Supabase SQL Editor after **`012`** (roster) and **`030`** (units). See migration file for full SQL.
 
@@ -88,7 +93,7 @@ Run in Supabase SQL Editor after **`012`** (roster) and **`030`** (units). See m
 
 | Table | Role |
 |-------|------|
-| **`communication_campaigns`** | Draft → send lifecycle, `audience_filter` jsonb, `audience_snapshot` at prepare, message body, totals |
+| **`communication_campaigns`** | Draft → send lifecycle, `audience_filter` jsonb, `audience_snapshot` at prepare, message body, totals, **`agent_initiated boolean default false`** for audit |
 | **`communication_recipients`** | One row per targeted tenant; **snapshots** locked at `prepareCampaign()` |
 | **`communication_replies`** | Inbound on broadcast number; classification + optional ticket handoff |
 
@@ -162,6 +167,8 @@ registerCommunicationsWebhooks(app);
 **Portal API:** Add routes to `src/portal/registerPortalRoutes.js` (same portal token gate as other `/api/portal/*`) **or** `src/communication/registerCommunicationRoutes.js` called from index — prefer **one registrar** called from `registerPortalRoutes` to keep auth consistent.
 
 **propera-app:** Proxy routes under `src/app/api/communications/**` → V2 `/api/communications/**` (mirror finance/PM proxy pattern).
+
+**Architecture rule:** `propera-app` and any future agent adapter stay thin. Audience resolution, compose logic, footer logic, status transitions, and send rules live in `src/communication/*`, not in Next.js UI code or agent prompts.
 
 ---
 
@@ -250,7 +257,7 @@ Reuse **`src/outbound/twilioSendMessage.js`** with explicit **`from`** override 
 
 ### `replyClassifier.js`
 
-Tier 1 regex (OPT_OUT, ACK, EMERGENCY, MAINTENANCE) → Tier 2 LLM only if UNKNOWN and len > 15 → else UNKNOWN.
+Tier 1 deterministic regex / keyword classifier for `OPT_OUT`, `ACKNOWLEDGMENT`, `QUESTION`, `COMPLAINT`, `MAINTENANCE_SIGNAL`, `EMERGENCY_SIGNAL`, `UNKNOWN`. V1 ships deterministic only; optional LLM escalation can come later if needed.
 
 ### `replyHandler.js`
 
@@ -298,7 +305,11 @@ Configure **broadcast** Twilio number:
 
 ## 5. Portal API routes (V2)
 
-All gated with **`verifyPortalRequest`** (same as other portal APIs). Suggested paths:
+All gated with **`verifyPortalRequest`** (same as other portal APIs). These are the **canonical** Communication Engine routes. The portal wizard uses them first; a future agent should use the **same** routes rather than getting a parallel backend.
+
+**Implemented in current V2 slice:** `POST /api/communications/campaigns`, `GET /api/communications/campaigns`, `GET /api/communications/campaigns/:id`, `POST /api/communications/draft`, `POST /api/communications/campaigns/:id/resolve`, `POST /api/communications/campaigns/:id/send`.
+
+Suggested full path set:
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -313,6 +324,14 @@ All gated with **`verifyPortalRequest`** (same as other portal APIs). Suggested 
 | POST | `/api/communications/campaigns/:id/cancel` | Cancel draft/queued |
 
 **Feature flag (recommended):** `PROPERA_COMMUNICATION_ENGINE_ENABLED=1` + `NEXT_PUBLIC_PROPERA_COMMUNICATIONS_ENABLED=1` in propera-app.
+
+### Agent-ready contract (post-portal)
+
+- **No new backend for the agent.** The future agent creates drafts, previews audience, composes copy, and sends by calling the same `/api/communications/*` routes.
+- **`DRAFT` is the proposal state.** For agent-driven flow, draft creation + preview is the "here's what I will send" step.
+- **`POST /api/communications/campaigns/:id/send` remains the approval seam.** Agent must not auto-fire without explicit owner confirmation.
+- **Set `communication_campaigns.agent_initiated = true`** when a draft originates from the agent adapter; portal/manual flows leave it `false`.
+- **Do not move audience logic into the agent.** The agent may supply `audience_filter` JSON and a brief, but `audienceResolver`, `messageComposer`, and `commOutgate` remain authoritative.
 
 ---
 
@@ -338,9 +357,11 @@ Existing **`TWILIO_ACCOUNT_SID`**, **`TWILIO_AUTH_TOKEN`**, **`TWILIO_SMS_FROM`*
 
 | Route | Screen |
 |-------|--------|
-| `/communications` | Campaign list (Drafts / Scheduled / Sent) |
-| `/communications/new` | 4-step composer (type → audience → compose → preview) |
-| `/communications/[id]` | Detail: delivery stats, recipients, replies |
+| `/communications` | Live first slice: campaign list + inline draft creation + detail panel (compose → preview → send) |
+| `/communications/new` | Planned follow-up: dedicated wizard route if the inline composer outgrows the list page |
+| `/communications/[id]` | Planned follow-up: dedicated detail route / deep-link for recipients, replies, and delivery drill-down |
+
+**Portal-first stance:** Build the wizard first because it validates the resolver, composer, footer, send path, and edge cases under human control. After that is stable, the wizard remains the **fallback/manual** surface while a future agent can become the faster owner interface over the same APIs.
 
 **Step highlights:**
 
@@ -382,9 +403,16 @@ Existing **`TWILIO_ACCOUNT_SID`**, **`TWILIO_AUTH_TOKEN`**, **`TWILIO_SMS_FROM`*
 
 ### Phase E — Portal UI
 
-1. List + new wizard steps 1–2
-2. Compose + AI draft + preview
-3. Detail + recipients + replies tabs
+1. List + inline draft create in `/communications`
+2. Compose + AI draft + preview + send from the detail panel
+3. Follow-up: dedicated detail route / recipients / replies tabs
+
+### Phase F — Agent adapter (after portal validation)
+
+1. Reuse `/api/communications/*` from a conversational owner interface
+2. Require explicit owner approval before `:id/send`
+3. Mark `agent_initiated=true` on agent-created drafts
+4. Keep portal wizard as fallback / debugging surface
 
 ---
 
@@ -399,6 +427,8 @@ Existing **`TWILIO_ACCOUNT_SID`**, **`TWILIO_AUTH_TOKEN`**, **`TWILIO_SMS_FROM`*
 | **Status updates match on `twilio_message_sid`** | Not campaign_id alone |
 | **`getBrandContext()` before compose/send** | No hardcoded client/property names |
 | **No "Propera" in tenant copy** | Product is invisible to residents |
+| **Portal and agent are thin clients** | No audience/compose/send business logic in UI or prompts |
+| **Agent sends require explicit owner confirmation** | `DRAFT` is the proposal pause point; `send` is the approval seam |
 | **Patch Law** | New code lives in `src/communication/` + webhook registrar; brain handoff is one function call |
 
 ---
@@ -432,11 +462,12 @@ When a phase ships, update:
 
 | Phase | Status |
 |-------|--------|
-| A — Foundation | Not started |
-| B — Audience | Not started |
-| C — Compose + send | Not started |
-| D — Replies + delivery | Not started |
-| E — Portal UI | Not started |
+| A — Foundation | In progress — schema exists; route registrar + feature flag + campaign draft CRUD landed |
+| B — Audience | In progress — `brandContextService`, `audienceResolver`, preview route landed; recipient snapshotting now happens during `prepareCampaign` |
+| C — Compose + send | In progress — `messageComposer`, footer enforcement in `commOutgate`, and `POST /api/communications/draft` + `POST /api/communications/campaigns/:id/send` landed |
+| D — Replies + delivery | In progress — `/webhooks/communications/sms` + `/webhooks/communications/status` are live; deterministic reply classification and delivery rollups landed; maintenance handoff seam exists but is still stubbed |
+| E — Portal UI | In progress — `propera-app` `/communications` is live behind `NEXT_PUBLIC_PROPERA_COMMUNICATIONS_ENABLED=1` with thin `/api/communications/*` proxies, campaign create/list/detail, AI draft generation, manual draft save/edit, final SMS footer preview + segment estimate, audience preview, send, and exact portfolio/property/floor/unit/tenant targeting controls; dedicated wizard/deep-link routes and recipient/reply tabs still pending |
+| F — Agent adapter | Not started |
 
 ---
 
@@ -445,3 +476,10 @@ When a phase ships, update:
 | Date | Note |
 |------|------|
 | 2026-05-20 | Initial build plan: architecture, schema 055, module specs, API, UI, brand layer, repo mapping (`tenant_roster`/`units`), guardrails. |
+| 2026-05-25 | Clarified portal-first build order, future agent adapter using the same `/api/communications/*` contract, `agent_initiated` audit flag, and thin-client/channel-agnostic interface stance. |
+| 2026-05-25 | Landed first live backend slice in `src/communication/`: campaign draft CRUD, audience preview, AI/deterministic draft generation, prepare/send flow, env/docs wiring; replies/delivery webhooks still pending. |
+| 2026-05-25 | Landed communication webhooks: deterministic reply classification, opt-out update, auto-response redirect, delivery callback rollups, and explicit `createMaintenanceTicketFromCommReply` seam (stubbed for now). |
+| 2026-05-25 | Landed first portal UI slice in `propera-app`: `/communications` nav + page, thin app proxies to `/api/communications/*`, create/list/detail flow, draft generation, audience preview, and send. |
+| 2026-05-26 | Extended the portal UI with exact unit and exact tenant targeting controls while keeping audience resolution in V2. |
+| 2026-05-26 | Extended the draft flow so the portal can manually edit/save `message_body` before preview/send using the same `/api/communications/draft` contract. |
+| 2026-05-26 | Added final SMS preview + segment estimate using a new thin preview seam over canonical `appendFooter()` / segment math in `messageComposer.js`. |

@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { completenessCheck } = require("../../src/adapters/tenantAgent/completeness");
 
-test("completenessCheck — requires property, unit, issue, schedule", () => {
+test("completenessCheck — requires property, unit, issue; schedule is post-create optional", () => {
   const known = new Set(["PENN"]);
   assert.deepEqual(completenessCheck({}, known), { ready: false, missing: "property" });
   assert.deepEqual(completenessCheck({ property: "PENN" }, known), {
@@ -17,18 +17,6 @@ test("completenessCheck — requires property, unit, issue, schedule", () => {
   );
   assert.deepEqual(
     completenessCheck({ property: "PENN", unit: "410", issue: "heat out" }, known),
-    { ready: false, missing: "schedule" }
-  );
-  assert.deepEqual(
-    completenessCheck(
-      {
-        property: "PENN",
-        unit: "410",
-        issue: "heat out",
-        preferredWindow: "tomorrow morning",
-      },
-      known
-    ),
     { ready: true, missing: null }
   );
 });

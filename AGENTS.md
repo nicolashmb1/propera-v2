@@ -2,6 +2,8 @@
 
 If the user says **“keep working on V2”** or **“continue Propera V2”**, **do not improvise**. Follow this file and the linked docs in order. **No re-explanation of repo purpose** — the links below are the explanation.
 
+If the task also includes **`propera-app`** / portal UI, read sibling **`../propera-app/AGENTS.md`** too. `propera-app` and `propera-v2` are the same Propera ecosystem: **app = cockpit**, **V2 = operational brain**.
+
 ---
 
 ## Mandatory read order (do not skip)
@@ -61,6 +63,7 @@ If the user says anything about **finances, ledger, rent, delinquency, owner sta
 - **Do not add new product paths or new brain surfaces** unless the user explicitly un-freezes that. Prior work item: **what is already wired must behave like GAS** (regression / parity), not scope expansion.  
 - **Exception (explicit):** **PM/Task V1** — template-driven `program_runs` / `program_lines` + `/api/portal/program-*` routes (**`docs/PM_PROGRAM_ENGINE_V1.md`**). **Not** tenant reactive intake; keep **`handleInboundCore`** out of program creation. **`properties.program_expansion_profile`** is the per-property **building structure** for expansion today; **planned reuse** for tenant/staff/ops assistance (same labels across tickets and programs) is documented under **Strategic reuse** in that file — still **read-side / resolver** until explicitly owned elsewhere (**`docs/BRAIN_PORT_MAP.md`** portal PM table).  
 - **Any behavior change** → update **`docs/PARITY_LEDGER.md`** and pointer comments in code (`PARITY GAP:` where reduced vs GAS).
+- **Known red tests / preserve current tenant-agent behavior (2026-05-25):** Do **not** change tenant-agent behavior just to make the remaining red tests pass without explicit user approval. Current accepted behavior: **unit tickets may finalize without schedule**, then ask schedule **post-create**; **common area** and **emergency / skipScheduling** should **not** ask for schedule. Remaining reds are tracked in **`docs/HANDOFF_LOG.md`** latest section: **`tests/scenarios/tenantAgentConversationTtl.test.js`** (test drift on fresh partial metadata), **`tests/scenarios/tenantAgentPostCompletePhase4.test.js`** (result-label drift: `tenant_agent_gather` vs `intake_start_new`), **`tests/tenantAgent/detectGatherSafety.test.js`** (handoff emergency payload contract mismatch), **`tests/tenantMessagesCancelLayer.test.js`** (known unimplemented cancel/suspend path). Unless the user asks for that tenant-agent work, leave those behaviors alone and move on to the requested slice (current next slice: propera-app Communication UI).
 
 ---
 
@@ -119,6 +122,7 @@ Conversations **drift**: freeze lifts, scope shifts, priorities change, a port l
 | New channel onboarding checklist | `docs/ADAPTER_ONBOARDING.md` |
 | Porting rules + GAS source table | `docs/PORTING_FROM_GAS.md` |
 | Runnable code | `propera-v2/src/` |
+| Portal app handoff / cockpit boundary | `../propera-app/AGENTS.md`; `../propera-app/docs/PROPERA_ARCHITECTURE_BOUNDARIES.md` |
 | Portal PM / preventive (program runs, expansion) | `docs/PM_PROGRAM_ENGINE_V1.md`; code: `src/dal/programRuns.js`, `src/pm/expandProgramLines.js`, `src/portal/registerPortalRoutes.js` |
 | PM assignment override (phases 1–5, what's done, what's next) | `docs/PM_ASSIGNMENT_OVERRIDE.md`; code: `src/dal/portalTicketAssignment.js`, `src/portal/registerPortalRoutes.js` |
 | **Finance roadmap** (phased plan, current phase, next migration) | **`docs/PROPERA_FINANCE_ROADMAP.md`** — **read before any finance work** |
@@ -131,7 +135,7 @@ Conversations **drift**: freeze lifts, scope shifts, priorities change, a port l
 | Portal ticket Activity / timeline V1+V2 contract | **`docs/TICKET_TIMELINE.md`**; SQL: `034`–`037` ticket timeline migrations; app: `propera-app/src/lib/timelineMapping.ts` |
 | **PM ticket split** (2-ticket, detail modal) | **`docs/TICKET_SPLIT_V1.md`** — spec locked; migration **`061`** planned; not implemented |
 | **Open deck day chart** (mobile 8a–8p, open vs completed, day pager) | **`docs/OPEN_DECK_DAY_CHART_V1.md`** — feature-flagged; `GET /api/portal/tickets/day-curve`; app `OpenDeckDayChart.tsx` |
-| **Communication Engine** (broadcast SMS, dedicated Twilio number) | **`docs/COMMUNICATION_ENGINE.md`**; SQL: **`055_communication_engine.sql`**; code: `src/communication/` (planned), `src/webhooks/communicationsSms.js` |
+| **Communication Engine** (broadcast SMS, dedicated Twilio number) | **`docs/COMMUNICATION_ENGINE.md`**; SQL: **`055_communication_engine.sql`**, **`065_communication_agent_initiated.sql`**; code: `src/communication/` (campaign draft + compose + audience preview + send + reply/delivery tracking live), `src/webhooks/communicationsSms.js` |
 | **Tenant Agent** (AI Staff — conversational SMS/TG/WA front door) | **`docs/TENANT_AGENT_ADAPTER.md`**; code: `src/adapters/tenantAgent/`; brain append: `handleTenantAppendToTicket.js`; SQL: **`063_tenant_conversations.sql`**; flags: **`TENANT_AGENT_*`** in `.env.example` |
 | **Tenant portal** (resident `/tenant/*` in propera-app + `/api/tenant/*` in V2) | **`docs/TENANT_PORTAL_BUILD_PLAN.md`**; SQL: **`056_tenant_portal.sql`** (planned); not started in repo |
 | Env template | `propera-v2/.env.example` |

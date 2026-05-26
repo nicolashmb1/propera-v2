@@ -32,6 +32,8 @@ const { verifyPortalRequest } = require("./portal/portalAuth");
 const { runInboundPipeline } = require("./inbound/runInboundPipeline");
 const { registerDashboardRoutes } = require("./dashboard/registerDashboard");
 const { registerPortalReadRoutes } = require("./portal/registerPortalRoutes");
+const { registerCommunicationRoutes } = require("./communication/registerCommunicationRoutes");
+const { registerCommunicationsWebhooks } = require("./webhooks/communicationsSms");
 const { registerMeterRunRoutes } = require("./meterRuns/registerMeterRunRoutes");
 const { registerTenantRoutes } = require("./tenant/registerTenantRoutes");
 const { registerAccessRoutes } = require("./portal/registerAccessRoutes");
@@ -50,6 +52,8 @@ app.use(requestContext);
 
 registerDashboardRoutes(app);
 registerPortalReadRoutes(app);
+registerCommunicationRoutes(app);
+registerCommunicationsWebhooks(app);
 registerMeterRunRoutes(app);
 registerTenantRoutes(app);
 registerAccessRoutes(app);
@@ -122,7 +126,7 @@ app.post("/internal/cron/meter-runs-process-pending", async (req, res) => {
 
 app.get("/", (_req, res) => {
   res.type("text/plain").send(
-    "Propera V2 — GET /health | POST /webhooks/telegram | POST /webhooks/twilio | POST /webhooks/sms | POST /webhooks/portal | POST /internal/cron/lifecycle-timers | POST /internal/cron/meter-runs-process-pending | GET /api/portal/gas-compat?path=tickets|properties|tenants | GET /api/portal/tenants (+ POST PATCH DELETE roster) | GET /api/portal/turnovers (+ items / mark-ready / create-ticket) | GET /api/portal/program-templates program-runs POST program-runs PATCH program-lines/:id/complete|reopen | GET/POST /api/portal/meter-runs utility-meters | GET /dashboard + GET /api/ops/event-log + GET /api/ops/lifecycle-timers | dev: GET /api/dev/resolve-actor?phone=+1..."
+    "Propera V2 — GET /health | POST /webhooks/telegram | POST /webhooks/twilio | POST /webhooks/sms | POST /webhooks/portal | POST /webhooks/communications/sms | POST /webhooks/communications/status | POST /internal/cron/lifecycle-timers | POST /internal/cron/meter-runs-process-pending | GET /api/portal/gas-compat?path=tickets|properties|tenants | GET /api/portal/tenants (+ POST PATCH DELETE roster) | GET /api/portal/turnovers (+ items / mark-ready / create-ticket) | GET /api/portal/program-templates program-runs POST program-runs PATCH program-lines/:id/complete|reopen | GET/POST /api/portal/meter-runs utility-meters | GET/POST /api/communications/campaigns (+ detail + resolve + send) | POST /api/communications/draft | GET /dashboard + GET /api/ops/event-log + GET /api/ops/lifecycle-timers | dev: GET /api/dev/resolve-actor?phone=+1..."
   );
 });
 

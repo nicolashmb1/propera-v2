@@ -37,6 +37,7 @@ Run SQL files in **numeric order** in the Supabase SQL Editor (same project as `
 | **052_tenant_ledger_effective_date_notes.sql** | **`tenant_ledger_entries.effective_date`**, **`notes`** | **`propera-app`** unit ledger manual POST + void |
 | **054_pm_attachments_audio_mime.sql** | **`pm-attachments`** bucket audio + PDF MIME types | **`/api/portal/chat-audio-upload`** voice notes |
 | **055_communication_engine.sql** | **`communication_*`** tables; **`organizations`**; property brand columns; **`tenant_roster.comm_broadcast_opt_out`** | **`docs/COMMUNICATION_ENGINE.md`** — broadcast SMS engine (separate Twilio number) |
+| **065_communication_agent_initiated.sql** | **`communication_campaigns.agent_initiated`** | Communication Engine follow-up audit flag for portal vs future agent-created drafts |
 
 ### Minimum paths
 

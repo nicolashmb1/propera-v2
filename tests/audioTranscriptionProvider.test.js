@@ -9,6 +9,11 @@ const {
   transcribeInboundAudioMediaItem,
 } = require("../src/media/audioTranscriptionProvider");
 
+function restoreEnv(name, value) {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
 describe("audioTranscriptionProvider", () => {
   test("isAudioMediaItem detects kind aliases and audio mime", () => {
     assert.equal(isAudioMediaItem({ kind: "voice" }), true);
@@ -30,10 +35,19 @@ describe("audioTranscriptionProvider", () => {
   });
 
   test("transcribeInboundAudioMediaItem skips when intake audio disabled (env default)", async () => {
+    const prevAudio = process.env.INTAKE_AUDIO_ENABLED;
+    const prevTranscription = process.env.INTAKE_AUDIO_TRANSCRIPTION_ENABLED;
+    const prevOpenAiTranscription = process.env.OPENAI_AUDIO_TRANSCRIPTION_ENABLED;
+    process.env.INTAKE_AUDIO_ENABLED = "0";
+    process.env.INTAKE_AUDIO_TRANSCRIPTION_ENABLED = "0";
+    process.env.OPENAI_AUDIO_TRANSCRIPTION_ENABLED = "0";
     const r = await transcribeInboundAudioMediaItem(
       { kind: "audio", storagePath: "portal-chat-audio/a.webm", mimeType: "audio/webm" },
       { transportChannel: "portal", sb: {} }
     );
+    restoreEnv("INTAKE_AUDIO_ENABLED", prevAudio);
+    restoreEnv("INTAKE_AUDIO_TRANSCRIPTION_ENABLED", prevTranscription);
+    restoreEnv("OPENAI_AUDIO_TRANSCRIPTION_ENABLED", prevOpenAiTranscription);
     assert.equal(r.ok, false);
     assert.ok(r.errorCode);
   });

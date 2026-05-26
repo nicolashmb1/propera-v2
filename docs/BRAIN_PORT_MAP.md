@@ -51,6 +51,19 @@ Inbound ACCESS_* intents route **beside** `handleInboundCore` — same channel a
 
 **Canonical spec + UI contract:** **[PM_PROGRAM_ENGINE_V1.md](./PM_PROGRAM_ENGINE_V1.md)**. **Per-property building data:** `properties.program_expansion_profile` (migration **019**). **Roadmap** (tenant/staff/ops reuse of that structure): same doc, **Strategic reuse — building structure beyond preventive**.
 
+### Communication Engine (separate from inbound brain)
+
+**Separate dedicated broadcast number + portal API.** This is **not** part of `runInboundPipeline` / `handleInboundCore`.
+
+| Piece | Location |
+|-------|----------|
+| Campaign / audience / compose / send services | `src/communication/` |
+| Portal/API routes | `src/communication/registerCommunicationRoutes.js` — `POST /api/communications/campaigns`, `GET /api/communications/campaigns`, `GET /api/communications/campaigns/:id`, `POST /api/communications/draft`, `POST /api/communications/campaigns/:id/resolve`, `POST /api/communications/campaigns/:id/send` |
+| Broadcast webhooks | `src/webhooks/communicationsSms.js` — `POST /webhooks/communications/sms`, `POST /webhooks/communications/status` |
+| SQL | `supabase/migrations/055_communication_engine.sql`, `065_communication_agent_initiated.sql` |
+
+**Canonical spec + guardrails:** **[COMMUNICATION_ENGINE.md](./COMMUNICATION_ENGINE.md)**. Portal-first surface now; future agent adapter must call the same `/api/communications/*` routes rather than a parallel backend. Reply/status webhooks are live; maintenance handoff remains an explicit stub seam, not a hidden second brain.
+
 ---
 
 ## PHASE 1 — Current vs target flow

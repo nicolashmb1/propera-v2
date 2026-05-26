@@ -13,7 +13,7 @@ const { emit } = require("../logging/structuredLog");
 const API_BASE = "https://api.twilio.com/2010-04-01";
 
 /**
- * @param {{ to: string, body: string, traceId?: string | null, channel: 'sms' | 'whatsapp' }} opts
+ * @param {{ to: string, body: string, traceId?: string | null, channel: 'sms' | 'whatsapp', from?: string | null }} opts
  */
 async function sendTwilioMessage(opts) {
   if (!twilioOutboundEnabled()) {
@@ -27,7 +27,8 @@ async function sendTwilioMessage(opts) {
 
   const ch = opts.channel === "whatsapp" ? "whatsapp" : "sms";
   const from =
-    ch === "whatsapp" ? twilioWhatsappFrom() : twilioSmsFrom();
+    String(opts.from || "").trim() ||
+    (ch === "whatsapp" ? twilioWhatsappFrom() : twilioSmsFrom());
   if (!from) {
     return { ok: false, error: "no_twilio_from_number" };
   }
