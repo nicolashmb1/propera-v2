@@ -6,6 +6,7 @@ const assert = require("node:assert/strict");
 const {
   isNonMaintenanceRequest,
   isMaintenanceRepairRequest,
+  isAccessRequest,
 } = require("../../src/adapters/tenantAgent/classifyNonMaintenanceRequest");
 const {
   buildStaffContactDeflectReply,
@@ -35,6 +36,14 @@ describe("classifyNonMaintenanceRequest", () => {
 
   test("gameroom reserve — non-maintenance", () => {
     assert.equal(isNonMaintenanceRequest("Can I reserve the gameroom?"), true);
+  });
+
+  test("pool availability — non-maintenance, routes to access not repair", () => {
+    const msg =
+      "trying to use the pool. is it available or still no open for reservations?";
+    assert.equal(isNonMaintenanceRequest(msg), true);
+    assert.equal(isMaintenanceRepairRequest(msg), false);
+    assert.equal(isAccessRequest(msg), true);
   });
 
   test("gym hours — non-maintenance", () => {

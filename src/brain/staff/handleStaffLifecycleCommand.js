@@ -19,6 +19,8 @@ const { handleLifecycleSignal } = require("../lifecycle/handleLifecycleSignal");
 const { parsePreferredWindowShared } = require("../gas/parsePreferredWindowShared");
 const { properaTimezone, scheduleLatestHour } = require("../../config/env");
 const { resolveTargetWorkItemForStaff } = require("./resolveTargetWorkItemForStaff");
+const { readPortalPageContext } = require("../../agent/contextEnvelope");
+const { resolveWorkItemFromPageContext } = require("../../agent/resolvePageContextTarget");
 const { normalizeStaffOutcome } = require("./normalizeStaffOutcome");
 const {
   extractUnitFromBody,
@@ -155,15 +157,23 @@ async function handleStaffLifecycleCommand(o) {
     ctxPendingWi = await getWorkItemByWorkItemId(pendingCtxId);
   }
 
-  const resolved = resolveTargetWorkItemForStaff({
-    openWis,
+  const pageContext = readPortalPageContext(o.routerParameter);
+  let resolved = await resolveWorkItemFromPageContext({
     bodyTrim: body,
-    ctx,
-    knownPropertyCodesUpper: known,
-    propertiesList,
-    staffId,
-    ctxPendingWi,
+    pageContext,
+    openWis,
   });
+  if (!resolved.wiId) {
+    resolved = resolveTargetWorkItemForStaff({
+      openWis,
+      bodyTrim: body,
+      ctx,
+      knownPropertyCodesUpper: known,
+      propertiesList,
+      staffId,
+      ctxPendingWi,
+    });
+  }
 
   if (!resolved.wiId) {
     await appendEventLog({

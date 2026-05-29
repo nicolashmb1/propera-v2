@@ -47,6 +47,7 @@ const {
   isTenantAgentEligible,
   runTenantAgentTurn,
   recordTenantAgentHandoffResult,
+  recordTenantAgentAccessResult,
   shapeBrainReplyForTenantAgent,
 } = require("../adapters/tenantAgent");
 const { applyFindRelatedLookupResult } = require("../adapters/tenantAgent/applyFindRelatedLookupResult");
@@ -55,6 +56,7 @@ const { tenantAgentShouldDeferToCoreSchedule } = require("../adapters/tenantAgen
 const { CHANNEL_TELEGRAM } = require("../signal/inboundSignal");
 const { coreEnabled } = require("../config/env");
 const { complianceSmsOnly } = require("./transportCompliance");
+const { handleAccessInbound } = require("../access/handleAccessInbound");
 const {
   getEffectiveCompliance,
   buildLaneDecision,
@@ -64,23 +66,34 @@ const {
   shouldRunSmsComplianceBranch,
   shouldEvaluateSmsSuppress,
   computeCanEnterCore,
+  computeCanEnterAccess,
   isStaffCaptureHash,
   isStaffMaintenanceMediaIntake,
   resolveDefaultBrain,
 } = require("./routeInboundDecision");
+const { preloadActorIdentity } = require("./preloadActorIdentity");
 const { previewText } = require("../logging/inboundLogContext");
 const { emit } = require("../logging/structuredLog");
 const {
   parseStaffCapDraftIdFromStripped,
   tagStaffCaptureReply,
 } = require("../dal/staffCaptureDraft");
+const { logOperationalScopeForPortalChat } = require("../agent/operationalScope/logOperationalScopeForInbound");
+const { isPortalJarvisAskMode } = require("../agent/jarvisAsk/jarvisAskMode");
+const { handleJarvisAskTurn } = require("../agent/jarvisAsk/handleJarvisAskTurn");
+const { isPortalJarvisPlanMode } = require("../agent/jarvisPlan/jarvisPlanMode");
+const { handleJarvisPlanTurn } = require("../agent/jarvisPlan/handleJarvisPlanTurn");
+const { enrichStaffRunWithProposal } = require("../agent/proposals/enrichStaffRunWithProposal");
+const { recordThreadForStaffRun } = require("../agent/thread/recordThreadForStaffRun");
+const { isPortalChatInbound } = require("../agent/operationalScope/logOperationalScopeForInbound");
+const { jarvisAskEnabled, jarvisPlanEnabled } = require("../config/env");
 
 /**
  * @param {{ staffRun?: object | null, complianceRun?: object | null, stubRun?: object | null, coreRun?: object | null }} o
  * @returns {string}
  */
 function resolveOutboundIntentType(o) {
-  const { staffRun, complianceRun, stubRun, coreRun } = o || {};
+  const { staffRun, complianceRun, stubRun, accessRun, coreRun } = o || {};
   if (complianceRun && complianceRun.brain) {
     const b = String(complianceRun.brain);
     if (b === "compliance_stop") return "COMPLIANCE_STOP";
@@ -96,6 +109,8 @@ function resolveOutboundIntentType(o) {
     if (b === "lane_stub_system") return "STUB_SYSTEM_LANE";
     return "STUB_LANE";
   }
+  if (accessRun && accessRun.brain) return `ACCESS_${String(accessRun.brain).toUpperCase()}`;
+  if (accessRun) return "ACCESS_REPLY";
   if (coreRun && coreRun.brain) return `CORE_${String(coreRun.brain)}`;
   if (coreRun) return "CORE_REPLY";
   return "INBOUND_REPLY";
@@ -236,13 +251,27 @@ async function runInboundPipeline(o) {
   const effectiveCompliance = getEffectiveCompliance(smsCompliance, precursor);
 
   const inbound = normalizeInboundEventFromRouterParameter(routerParameter);
-  const laneDecision = buildLaneDecision(precursor, inbound, staffContext);
+  const actorIdentity = await preloadActorIdentity(routerParameter, transportActorKey);
+  if (actorIdentity.isVendor && actorIdentity.vendor) {
+    inbound.meta = { ...(inbound.meta || {}), actorIdentity };
+  } else if (actorIdentity.isVendor) {
+    inbound.meta = { ...(inbound.meta || {}), actorIdentity: { isVendor: true, vendor: null } };
+  }
+  const laneDecision = buildLaneDecision(precursor, inbound, staffContext, actorIdentity);
 
   await appendEventLog({
     traceId,
     log_kind: "router",
     event: "LANE_DECIDED",
     payload: { lane: laneDecision.lane, reason: laneDecision.reason, mode: laneDecision.mode },
+  });
+
+  await logOperationalScopeForPortalChat({
+    traceId,
+    routerParameter,
+    transportChannel,
+    staffContext,
+    transportActorKey,
   });
 
   emit({
@@ -255,9 +284,50 @@ async function runInboundPipeline(o) {
   });
 
   let staffRun = null;
+  if (
+    isPortalChatInbound(transportChannel, routerParameter) &&
+    isPortalJarvisAskMode(routerParameter)
+  ) {
+    if (jarvisAskEnabled()) {
+      staffRun = await handleJarvisAskTurn({
+        traceId,
+        routerParameter,
+        staffContext,
+      });
+    } else {
+      staffRun = {
+        ok: true,
+        brain: "jarvis_ask",
+        replyText:
+          "Jarvis Ask is not enabled on this V2 server. Set JARVIS_ASK_ENABLED=1 and restart propera-v2 (your webhook target must load that env).",
+      };
+    }
+  }
+
+  if (
+    !staffRun &&
+    isPortalChatInbound(transportChannel, routerParameter) &&
+    isPortalJarvisPlanMode(routerParameter)
+  ) {
+    if (jarvisPlanEnabled()) {
+      staffRun = await handleJarvisPlanTurn({
+        traceId,
+        routerParameter,
+        staffContext,
+      });
+    } else {
+      staffRun = {
+        ok: true,
+        brain: "jarvis_plan",
+        replyText:
+          "Jarvis Plan is not enabled on this server. Set JARVIS_PLAN_ENABLED=1 on propera-v2.",
+      };
+    }
+  }
+
   /** @type {string | null} */
   let portalActorGateError = null;
-  if (transportChannel === "portal" && isDbConfigured()) {
+  if (!staffRun && transportChannel === "portal" && isDbConfigured()) {
     const sbAct = getSupabase();
     const portalAct = String(routerParameter._portalAction || "").trim().toLowerCase();
     let needsPortalActor = portalAct === "create_ticket";
@@ -284,7 +354,7 @@ async function runInboundPipeline(o) {
   }
 
   // Portal PM ticket saves + same parser for staff on Telegram / SMS / WhatsApp.
-  if (isDbConfigured()) {
+  if (!staffRun && isDbConfigured()) {
     const staffPmChannel =
       transportChannel === "portal" ||
       ((transportChannel === "telegram" ||
@@ -316,6 +386,22 @@ async function runInboundPipeline(o) {
                 : String(routerParameter.From || "").trim(),
             messageId: String(routerParameter.MessageSid || routerParameter.SmsSid || "").trim(),
           });
+          if (staffRun) {
+            staffRun = enrichStaffRunWithProposal(staffRun);
+            const thread = await recordThreadForStaffRun({
+              traceId,
+              actorKey:
+                staffContext && staffContext.staffActorKey
+                  ? String(staffContext.staffActorKey || "").trim()
+                  : String(routerParameter.From || "").trim(),
+              transportChannel,
+              routerParameter,
+              staffRun,
+            });
+            if (thread && staffRun.resolution) {
+              staffRun.resolution = { ...staffRun.resolution, thread };
+            }
+          }
         }
         if (!staffRun) {
           staffRun = await tryPortalPmTicketMutation({
@@ -458,6 +544,7 @@ async function runInboundPipeline(o) {
   }
 
   let coreRun = null;
+  let accessRun = null;
   let tenantAgentRun = null;
   /** @type {string | null} */
   let tenantAgentConversationId = null;
@@ -543,6 +630,19 @@ async function runInboundPipeline(o) {
           tenant_actor_key: String(routerParameter._canonicalBrainActorKey || "").trim(),
         },
       });
+    } else if (ta.handled && ta.phase === "access_handoff" && ta.routerParameter) {
+      Object.assign(routerParameter, ta.routerParameter);
+      tenantAgentConversationId = ta.conversationId || null;
+      await appendEventLog({
+        traceId,
+        log_kind: "router",
+        event: "TENANT_AGENT_ACCESS_HANDOFF",
+        payload: {
+          conversation_id: tenantAgentConversationId,
+          tenant_actor_key: String(routerParameter._canonicalBrainActorKey || "").trim(),
+          intent_type: String(routerParameter._accessIntentType || "").trim(),
+        },
+      });
     } else if (ta.handled && ta.phase === "append_handoff" && ta.routerParameter) {
       Object.assign(routerParameter, ta.routerParameter);
       tenantAgentConversationId = ta.conversationId || null;
@@ -618,7 +718,50 @@ async function runInboundPipeline(o) {
     },
   });
 
-  if (canEnterCore && !tenantAgentRun) {
+  const canEnterAccess = computeCanEnterAccess({
+    laneDecision,
+    dbConfigured: isDbConfigured(),
+    staffRun,
+    complianceRun,
+    suppressedRun,
+    effectiveCompliance,
+    precursor,
+    transportChannel,
+    staffContext: {
+      isStaff: staffContext && staffContext.isStaff === true,
+    },
+  });
+
+  const accessHandoffPackage = String(routerParameter._accessPayloadJson || "").trim();
+  if (canEnterAccess && accessHandoffPackage) {
+    const accessResult = await handleAccessInbound({
+      traceId,
+      transportChannel,
+      routerParameter,
+    });
+    if (accessResult && accessResult.handled) {
+      accessRun = {
+        brain: accessResult.brain || "access_reply",
+        replyText: accessResult.replyText || "",
+        reason: accessResult.reason || "",
+        accessFacts: accessResult.accessFacts || null,
+        reservationId: accessResult.reservationId || "",
+        locationId: accessResult.locationId || "",
+        startAt: accessResult.startAt || "",
+        endAt: accessResult.endAt || "",
+      };
+    }
+  }
+
+  if (tenantAgentConversationId && accessRun && accessRun.replyText) {
+    await recordTenantAgentAccessResult({
+      conversationId: tenantAgentConversationId,
+      traceId,
+      accessRun,
+    });
+  }
+
+  if (canEnterCore && !tenantAgentRun && !accessRun) {
     const isStaffCapture = isStaffCaptureHash(precursor);
     const isStaffMediaIntake = isStaffMaintenanceMediaIntake(precursor);
     const bodyBase = isStaffCapture
@@ -696,6 +839,7 @@ async function runInboundPipeline(o) {
 
   const replyText =
     (tenantAgentRun && tenantAgentRun.replyText) ||
+    (accessRun && accessRun.replyText) ||
     (staffRun && staffRun.replyText) ||
     (complianceRun && complianceRun.replyText) ||
     (coreRun && coreRun.replyText) ||
@@ -706,6 +850,7 @@ async function runInboundPipeline(o) {
     staffRun,
     complianceRun,
     stubRun,
+    accessRun,
     coreRun,
     tenantAgentRun,
   });
@@ -714,6 +859,8 @@ async function runInboundPipeline(o) {
       ? "staff"
       : tenantAgentRun && tenantAgentRun.replyText
         ? "tenant"
+        : accessRun && accessRun.replyText
+          ? "tenant"
         : replyText
           ? "tenant"
           : "unknown";
@@ -779,6 +926,7 @@ async function runInboundPipeline(o) {
       audience,
       includeFirstContactExtras: firstToday,
       propertyDisplayName,
+      contextLabel: accessRun ? "access" : "maintenance",
       applyTelegramReceiptMarkdown: agentChannel.applyTelegramReceiptMarkdown,
     });
     channelBody = ch.body;
@@ -830,6 +978,7 @@ async function runInboundPipeline(o) {
         complianceRun,
         suppressedRun,
         stubRun,
+        accessRun,
         coreRun,
         precursor,
         staffContext,
@@ -863,6 +1012,7 @@ async function runInboundPipeline(o) {
     complianceRun,
     suppressedRun,
     stubRun,
+    accessRun,
     tenantAgentRun,
     precursor,
     staffContext,
@@ -908,6 +1058,9 @@ async function runInboundPipeline(o) {
       compliance: complianceRun,
       stub: stubRun
         ? { brain: stubRun.brain, reply: stubRun.replyText || "" }
+        : null,
+      access: accessRun
+        ? { brain: accessRun.brain, reply: accessRun.replyText || "" }
         : null,
       router_suppressed: suppressedRun ? true : false,
       outbound: outbound

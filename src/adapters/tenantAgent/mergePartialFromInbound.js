@@ -10,15 +10,17 @@ const {
   resolvePropertyForGather,
   bodyHasPropertyIntent,
 } = require("./resolvePropertyForGather");
+const { isGenericMaintenanceIntakePhrase } = require("./gatherIssueSubstance");
+const { bodyHasTimeWindowShape } = require("./scheduleFollowUpShape");
 
 /**
  * @param {string} body
  * @returns {string}
  */
 function leadingUnitFromBody(body) {
-  const m = String(body || "")
-    .trim()
-    .match(/^(\d{1,4}[a-z]?)\s*[.:\-]\s*/i);
+  const trimmed = String(body || "").trim();
+  if (bodyHasTimeWindowShape(trimmed)) return "";
+  const m = trimmed.match(/^(\d{1,4}[a-z]?)\s*[.:\-]\s*/i);
   return m ? String(m[1]).trim() : "";
 }
 
@@ -244,7 +246,7 @@ async function mergePartialFromInboundMessage(
   }
 
   const leadingUnit = leadingUnitFromBody(body);
-  if (leadingUnit && !parsed.unitLabel) {
+  if (leadingUnit && !parsed.unitLabel && !bodyHasTimeWindowShape(body)) {
     next.unit = leadingUnit;
   }
   if (parsed.unitLabel) {
@@ -255,7 +257,9 @@ async function mergePartialFromInboundMessage(
     String(next.property || prev.property || "").trim() &&
     isUnitOnlyReply(body)
   ) {
-    const unitHint = extractUnitFromBody(body) || leadingUnitFromBody(body);
+    const unitHint = bodyHasTimeWindowShape(body)
+      ? ""
+      : extractUnitFromBody(body) || leadingUnitFromBody(body);
     if (unitHint) next.unit = unitHint;
   }
   if (
@@ -272,9 +276,11 @@ async function mergePartialFromInboundMessage(
   }
   if (parsed.issueText && String(parsed.issueText).trim().length >= 2) {
     const issue = String(parsed.issueText).trim();
-    const prevIssue = String(next.issue || "").trim();
-    if (!prevIssue || issue.length >= prevIssue.length) {
-      next.issue = issue;
+    if (!isGenericMaintenanceIntakePhrase(issue)) {
+      const prevIssue = String(next.issue || "").trim();
+      if (!prevIssue || issue.length >= prevIssue.length) {
+        next.issue = issue;
+      }
     }
   }
   if (parsed.scheduleRaw) {

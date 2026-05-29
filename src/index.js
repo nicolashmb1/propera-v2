@@ -12,6 +12,7 @@ const {
 const { createTrace } = require("./trace/createTrace");
 const { isDbConfigured, pingDb, getSupabase } = require("./db/supabase");
 const { processDueLifecycleTimers } = require("./jobs/processLifecycleTimers");
+const { processDueAccessLifecycleJobs } = require("./access/processAccessLifecycleJobs");
 const { processMeterRunsPendingCron } = require("./dal/meterBillingRuns");
 const { requestContext } = require("./middleware/requestContext");
 const { boot, emit } = require("./logging/structuredLog");
@@ -37,6 +38,7 @@ const { registerCommunicationsWebhooks } = require("./webhooks/communicationsSms
 const { registerMeterRunRoutes } = require("./meterRuns/registerMeterRunRoutes");
 const { registerTenantRoutes } = require("./tenant/registerTenantRoutes");
 const { registerAccessRoutes } = require("./portal/registerAccessRoutes");
+const { registerConflictMediationRoutes } = require("./conflictMediation/registerConflictMediationRoutes");
 const {
   buildInboundKey,
   isSeen,
@@ -57,6 +59,7 @@ registerCommunicationsWebhooks(app);
 registerMeterRunRoutes(app);
 registerTenantRoutes(app);
 registerAccessRoutes(app);
+registerConflictMediationRoutes(app);
 
 app.post("/internal/cron/lifecycle-timers", async (req, res) => {
   const secret = lifecycleCronSecret();
@@ -67,7 +70,8 @@ app.post("/internal/cron/lifecycle-timers", async (req, res) => {
   const sb = getSupabase();
   if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
   try {
-    const out = await processDueLifecycleTimers(sb, { traceId: req.traceId });
+    const maintenance = await processDueLifecycleTimers(sb, { traceId: req.traceId });
+    const access = await processDueAccessLifecycleJobs(sb, { traceId: req.traceId });
     emit({
       level: "info",
       trace_id: req.traceId,
@@ -75,13 +79,11 @@ app.post("/internal/cron/lifecycle-timers", async (req, res) => {
       log_kind: "cron",
       event: "lifecycle_timers_tick",
       data: {
-        due: out.due,
-        claimed: out.claimed,
-        processed: out.processed,
-        skipped: out.skipped,
+        maintenance,
+        access,
       },
     });
-    return res.json({ ok: true, ...out });
+    return res.json({ ok: true, maintenance, access });
   } catch (err) {
     return res.status(500).json({
       ok: false,

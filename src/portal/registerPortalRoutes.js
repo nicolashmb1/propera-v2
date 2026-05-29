@@ -67,6 +67,12 @@ const {
   applyPortalTicketTenantChange,
   listTenantsForUnitTicket,
 } = require("../dal/portalTicketTenant");
+const {
+  upsertPushSubscription,
+  deactivatePushSubscription,
+  getVapidPublicKeyForClient,
+} = require("./pushNotifications");
+const { portalPushEnabled } = require("../config/env");
 
 function registerPortalReadRoutes(app) {
   async function sendTickets(_req, res) {
@@ -93,9 +99,11 @@ function registerPortalReadRoutes(app) {
     }
   }
 
-  async function sendTenants(_req, res) {
+  async function sendTenants(req, res) {
     try {
-      const rows = await listTenantsForPortal();
+      const includeInactive =
+        String(req.query.includeInactive || "").trim() === "1";
+      const rows = await listTenantsForPortal({ includeInactive });
       return res.status(200).json(rows);
     } catch (err) {
       return res.status(500).json({
@@ -378,6 +386,9 @@ function registerPortalReadRoutes(app) {
             ? body.assigned_vendor_id
             : body.assignedVendorId,
         assignmentNote: body.assignment_note ?? body.assignmentNote,
+        dispatchOnAssign: body.dispatch_on_assign ?? body.dispatchOnAssign,
+        dispatchOnly: body.dispatch_only === true || body.dispatchOnly === true,
+        forceResend: body.force_resend === true || body.forceResend === true,
         traceId: req.traceId,
         portalUserAccessToken,
       });
@@ -395,6 +406,11 @@ function registerPortalReadRoutes(app) {
         assignedType: out.assignedType,
         assignedDisplayName: out.assignedDisplayName,
         assignmentSource: out.assignmentSource,
+        assigned: out.assigned,
+        assignmentSkipped: out.assignmentSkipped,
+        dispatched: out.dispatched,
+        dispatchSkippedReason: out.dispatchSkippedReason,
+        dispatchError: out.dispatchError,
       });
     } catch (err) {
       return res.status(500).json({
@@ -1307,6 +1323,65 @@ function registerPortalReadRoutes(app) {
         error: String(err && err.message ? err.message : err),
       });
     }
+  }));
+
+  app.get("/api/portal/push/vapid-public-key", gate(async (_req, res) => {
+    if (!portalPushEnabled()) {
+      return res.status(404).json({ ok: false, error: "portal_push_disabled" });
+    }
+    const publicKey = getVapidPublicKeyForClient();
+    if (!publicKey) {
+      return res.status(503).json({ ok: false, error: "vapid_not_configured" });
+    }
+    return res.status(200).json({ ok: true, publicKey });
+  }));
+
+  app.post("/api/portal/push/subscribe", gate(async (req, res) => {
+    if (!portalPushEnabled()) {
+      return res.status(404).json({ ok: false, error: "portal_push_disabled" });
+    }
+    const accessToken = String(req.get("authorization") || "")
+      .replace(/^Bearer\s+/i, "")
+      .trim();
+    const out = await upsertPushSubscription({
+      accessToken,
+      body: req.body || {},
+      userAgent: req.get("user-agent") || "",
+    });
+    if (!out.ok) {
+      const code =
+        out.error === "invalid_portal_access_token" ||
+        out.error === "missing_portal_access_token" ||
+        out.error === "portal_user_not_allowlisted"
+          ? 401
+          : 400;
+      return res.status(code).json({ ok: false, error: out.error || "subscribe_failed" });
+    }
+    return res.status(200).json({ ok: true });
+  }));
+
+  app.delete("/api/portal/push/subscribe", gate(async (req, res) => {
+    if (!portalPushEnabled()) {
+      return res.status(404).json({ ok: false, error: "portal_push_disabled" });
+    }
+    const accessToken = String(req.get("authorization") || "")
+      .replace(/^Bearer\s+/i, "")
+      .trim();
+    const out = await deactivatePushSubscription({
+      accessToken,
+      body: req.body || {},
+      endpoint: req.query?.endpoint,
+    });
+    if (!out.ok) {
+      const code =
+        out.error === "invalid_portal_access_token" ||
+        out.error === "missing_portal_access_token" ||
+        out.error === "portal_user_not_allowlisted"
+          ? 401
+          : 400;
+      return res.status(code).json({ ok: false, error: out.error || "unsubscribe_failed" });
+    }
+    return res.status(200).json({ ok: true });
   }));
 }
 

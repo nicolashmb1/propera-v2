@@ -17,8 +17,49 @@ const { getSchedPolicySnapshot } = require("./propertyPolicy");
 const { properaTimezone, scheduleLatestHour } = require("../config/env");
 const { emitTimed } = require("../logging/structuredLog");
 const { appendEventLog } = require("./appendEventLog");
+const {
+  needsPreferredWindowInterpretation,
+} = require("../adapters/tenantAgent/preferredWindowNeedsInterpretation");
+const {
+  normalizePreferredWindowWithLlm,
+} = require("../adapters/tenantAgent/normalizePreferredWindowWithLlm");
+const { tenantAgentLlmEnabled, openaiApiKey } = require("../config/env");
 
 const MIN_SCHEDULE_LEN = 2;
+
+/**
+ * LLM normalize when tenant text contradicts itself; else raw for GAS parser.
+ * @param {string} raw
+ * @param {{ traceId?: string, recentMessages?: object[] }} [o]
+ * @returns {Promise<{ text: string, normalizeSource: string }>}
+ */
+async function resolvePreferredWindowTextForParse(raw, o) {
+  const opts = o && typeof o === "object" ? o : {};
+  const text = String(raw || "").trim();
+  if (!text) return { text: "", normalizeSource: "empty" };
+
+  if (
+    tenantAgentLlmEnabled() &&
+    openaiApiKey() &&
+    needsPreferredWindowInterpretation(text)
+  ) {
+    const norm = await normalizePreferredWindowWithLlm({
+      rawText: text,
+      recentMessages: opts.recentMessages,
+      traceId: opts.traceId,
+    });
+    if (norm.ok && norm.normalizedText) {
+      await flightLog(opts.traceId, "PREFERRED_WINDOW_LLM_NORMALIZE", {
+        raw: text,
+        normalized: norm.normalizedText,
+        source: norm.source,
+      });
+      return { text: norm.normalizedText, normalizeSource: "llm" };
+    }
+  }
+
+  return { text, normalizeSource: "raw" };
+}
 
 async function flightLog(traceId, event, payload) {
   await appendEventLog({
@@ -84,8 +125,15 @@ async function checkPreferredWindowForProperty(propertyCode, preferredWindow, o)
     return { ok: false, error: "bad_input" };
   }
 
+  const opts = o && typeof o === "object" ? o : {};
+  const resolved = await resolvePreferredWindowTextForParse(raw, {
+    traceId: opts.traceId,
+    recentMessages: opts.recentMessages,
+  });
+  const parseText = resolved.text;
+
   const tz = properaTimezone();
-  const opts = {
+  const parseOpts = {
     now: new Date(),
     timeZone: tz,
     scheduleLatestHour: scheduleLatestHour(),
@@ -93,12 +141,12 @@ async function checkPreferredWindowForProperty(propertyCode, preferredWindow, o)
 
   let stageDay = "Today";
   try {
-    const inf = inferStageDayFromText_(raw);
+    const inf = inferStageDayFromText_(parseText);
     if (inf) stageDay = inf;
   } catch (_) {}
 
-  let d = parseWithStageFallback(raw, stageDay, opts);
-  let sched = buildSchedFromParsed(raw, d);
+  let d = parseWithStageFallback(parseText, stageDay, parseOpts);
+  let sched = buildSchedFromParsed(parseText, d);
 
   const policySnapshot = sb
     ? await getSchedPolicySnapshot(sb, propCode)
@@ -116,9 +164,9 @@ async function checkPreferredWindowForProperty(propertyCode, preferredWindow, o)
   const flexAdjust = adjustFlexibleScheduleForPolicy(
     d,
     sched,
-    raw,
+    parseText,
     stageDay,
-    opts,
+    parseOpts,
     propCode,
     policySnapshot
   );
@@ -179,6 +227,12 @@ async function applyPreferredWindowByTicketKey(o) {
     return { ok: false, error: "bad_input" };
   }
 
+  const resolved = await resolvePreferredWindowTextForParse(raw, {
+    traceId,
+    recentMessages: o.recentMessages,
+  });
+  const parseText = resolved.text;
+
   const { data: ticket, error: loadErr } = await sb
     .from("tickets")
     .select("property_code")
@@ -198,12 +252,12 @@ async function applyPreferredWindowByTicketKey(o) {
 
   let stageDay = "Today";
   try {
-    const inf = inferStageDayFromText_(raw);
+    const inf = inferStageDayFromText_(parseText);
     if (inf) stageDay = inf;
   } catch (_) {}
 
-  let d = parseWithStageFallback(raw, stageDay, opts);
-  let sched = buildSchedFromParsed(raw, d);
+  let d = parseWithStageFallback(parseText, stageDay, opts);
+  let sched = buildSchedFromParsed(parseText, d);
 
   const policySnapshot = await getSchedPolicySnapshot(sb, propCode);
   const when = new Date();
@@ -211,7 +265,7 @@ async function applyPreferredWindowByTicketKey(o) {
   const flexAdjust = adjustFlexibleScheduleForPolicy(
     d,
     sched,
-    raw,
+    parseText,
     stageDay,
     opts,
     propCode,
@@ -228,6 +282,8 @@ async function applyPreferredWindowByTicketKey(o) {
     has_start_end: !!(d && d.start && d.end),
     tz,
     raw_len: raw.length,
+    parse_text: parseText,
+    normalize_source: resolved.normalizeSource,
     crumb: "schedule_parsed",
   };
   emitTimed(traceStartMs, {

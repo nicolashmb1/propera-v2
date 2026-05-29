@@ -91,6 +91,26 @@ function parsePreferredWindowShared(text, stageDay, opts) {
     return { label, start: range.start, end: range.end, kind: "DAYPART" };
   }
 
+  const bestTime = s.match(
+    /\b(?:best time|better time|(?:would )?prefer(?:red)?)\s+(?:is|would be|around|about)?\s*(.+)$/i
+  );
+  if (bestTime) {
+    const tail = String(bestTime[1] || "")
+      .split(/\s*[.]{2,}/)[0]
+      .trim();
+    const t = parseTimeShared(tail, baseDay);
+    if (t) {
+      const label =
+        formatDayShared(baseDay, tz) + " at " + formatTimeShared(t, tz);
+      return { label, start: t, end: null, kind: "AT" };
+    }
+  }
+
+  const beforeNegated =
+    /\bbefore\s+.+?\b(?:no good|not good|won't work|doesn't work|does not work|not ok|not okay|can't|cannot)\b/i.test(
+      s
+    );
+
   const after = s.match(/\b(after|afterwards)\s+(.+)$/);
   if (after) {
     const t = parseTimeShared(after[2], baseDay);
@@ -105,7 +125,7 @@ function parsePreferredWindowShared(text, stageDay, opts) {
   }
 
   const before = s.match(/\b(before)\s+(.+)$/);
-  if (before) {
+  if (before && !beforeNegated) {
     const t = parseTimeShared(before[2], baseDay);
     if (!t) return null;
     const label =

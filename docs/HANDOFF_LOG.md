@@ -7,6 +7,88 @@
 
 ---
 
+## 2026-05-27 — Jarvis thread state v0 (foundation layer 2)
+
+| Area | Change |
+|------|--------|
+| **SQL** | **`070_jarvis_operator_threads.sql`** — `jarvis_operator_threads` (actor + channel + anchor fingerprint, `pending_proposals` jsonb, `last_receipt`). |
+| **Code** | `src/agent/thread/` — anchor fingerprint, `recordThreadForStaffRun`; wired on Plan propose/commit + portal cost capture. |
+| **Flag** | `JARVIS_THREAD_ENABLED=1` |
+| **Tests** | `tests/jarvisThread.test.js` |
+
+Apply migration **070** on Supabase before enabling thread flag in prod.
+
+---
+
+## 2026-05-27 — Jarvis Plan slice 1 (proposal spine + portal Plan tab)
+
+| Area | Change |
+|------|--------|
+| **Spine** | `src/agent/proposals/` — `attach_ticket_cost` op, signed confirm token, `commitProposal`, `enrichStaffRunWithProposal`. |
+| **Portal Plan** | `jarvis_plan` mode → `handleJarvisPlanTurn`; flags `JARVIS_PLAN_ENABLED=1`, app `NEXT_PUBLIC_PROPERA_JARVIS_PLAN_ENABLED=1` (requires finance cost capture). |
+| **Cost mode** | Medium-confidence confirms now include `resolution.proposal`; same **Plan** card in app. |
+| **App** | `PlanProposalCard.tsx`, command bar **Plan** tab, `portal_proposal_context` on confirm. |
+| **Tests** | `tests/jarvisProposals.test.js` |
+
+---
+
+## 2026-05-27 — Jarvis spine foundation doc
+
+| Area | Change |
+|------|--------|
+| **Doctrine** | **`docs/JARVIS_SPINE.md`** — seven foundation layers (scope, thread state, operation contract, query layer, tool gateway, coordination loops, receipts); proposal sketch; op registry seed table; anti-patterns; build order 1–7; PR review checklist. |
+| **Cross-links** | **`docs/PROPERA_JARVIS_NORTH_STAR.md`** — Related docs + immediate product direction point at spine doc. |
+
+---
+
+## 2026-05-27 — Jarvis Operational Scope (doctrine + compiler v0)
+
+| Area | Change |
+|------|--------|
+| **Doctrine** | **`docs/PROPERA_JARVIS_NORTH_STAR.md`** — new § **Operational Scope** (open-project model, one operator / all channels, Ask/Plan/Execute, readiness gates). Phase 1/2 deliverables updated. |
+| **Code** | **`src/agent/operationalScope/`** — `compileOperationalScope()` v0 (read-only): actor, anchor from `portal_page_context`, staff open WIs, property open tickets, focus candidates, `story` line. |
+| **Tests** | **`tests/operationalScope.test.js`** — story + anchor filter unit tests. |
+| **Portal observe** | `runInboundPipeline` calls `logOperationalScopeForPortalChat` on `portal_chat` → `OPERATIONAL_SCOPE_COMPILED` in `event_log`; `_operationalScopeJson` on router parameter for downstream. |
+| **Jarvis Ask (portal)** | `portal_chat_mode: jarvis_ask` → `handleJarvisAskTurn` (read-only). Flags: `JARVIS_ASK_ENABLED=1`, optional `JARVIS_ASK_LLM_ENABLED=1`. App: `NEXT_PUBLIC_PROPERA_JARVIS_ASK_ENABLED=1`, command bar **Ask** tab. |
+
+---
+
+## 2026-05-26 — Access Engine completion slice landed (lifecycle + outgate + inbound + tenant-agent seam)
+
+| Area | Change |
+|------|--------|
+| **Lifecycle automation** | Added **`066_access_lifecycle_jobs.sql`** plus access-owned job helpers/worker (`src/access/accessLifecycleJobs.js`, `src/access/processAccessLifecycleJobs.js`). The existing cron endpoint **`POST /internal/cron/lifecycle-timers`** now processes both maintenance lifecycle timers and access lifecycle jobs. Access now schedules approval timeout, reminder, start-window activation, and end-window completion beside maintenance core. |
+| **Access DAL / state progression** | `src/dal/accessEngine.js` now schedules/cancels lifecycle jobs on create/approve/cancel/reschedule, promotes **`CONFIRMED → ACTIVE`**, completes reservations at window end, and expires/revokes passes from the Access domain instead of trying to reuse maintenance `work_items`. |
+| **Canonical outgate seam** | Added deterministic access copy + send path via `src/outgate/accessMessageSpecs.js` and `src/access/accessNotifications.js`. Tenant/staff access notifications now go through the shared outgate seam / channel render, including reminder and lifecycle messages, instead of a parallel send path. |
+| **Shared inbound ACCESS_* path** | Added `src/access/handleAccessInbound.js` and routed access turns beside maintenance in `runInboundPipeline` / `routeInboundDecision`. SMS / WhatsApp / Telegram can now handle deterministic **reserve / cancel / status / list** style access requests without entering `handleInboundCore`. |
+| **Tenant Agent seam** | Added `src/adapters/tenantAgent/maybeHandleAccessTurn.js`. Access/amenity asks are no longer forced into the maintenance-only deflect path first; the agent can gather amenity + window and hand off `_accessPayloadJson` to the canonical access handler. Fallback remains safe prompts / tenant portal deep-link style guidance when identity or slots are ambiguous. |
+| **Focused tests** | Added `tests/accessIntentParser.test.js`, `tests/accessMessageSpecs.test.js`, and `tests/accessRouteDecision.test.js`. Focused access test run: `node --test tests/accessIntentParser.test.js tests/accessMessageSpecs.test.js tests/accessRouteDecision.test.js tests/accessReservationRules.test.js` |
+| **Still pending / explicitly out of this slice** | Real smart-lock providers beyond `noop`, deposit/payment hooks, and richer NL slot discovery / deeper multi-turn access memory. Do not treat the current text-channel handler as permission to move reservation truth into the agent. |
+
+---
+
+## 2026-05-26 — Communication portal deep link, recipient/reply tabs, and draft delete
+
+| Area | Change |
+|------|--------|
+| **propera-app cockpit** | Added dedicated **`/communications/[id]`** deep-link support while keeping the existing list/detail page behavior. Campaign selection now syncs to the URL so operators can bookmark or return to a specific campaign. |
+| **Detail drill-down** | Campaign detail now shows **recipient** and **reply** tabs backed by the V2 detail payload, so operators can inspect prepared recipients, delivery/error context, inbound reply classes, and auto-response/handoff metadata from the app. |
+| **Safe delete seam** | Added thin delete support from app → V2 via **`DELETE /api/communications/campaigns/:id`**. V2 only allows delete while the campaign is still **`DRAFT`** to preserve prepared/sent operational history. |
+| **Next follow-ups** | Hybrid `/communications/new` setup route, richer campaign editing (title/body metadata beyond current seam), fuller delivery drill-down / pagination for large campaigns, and the still-stubbed maintenance handoff from communication replies. |
+
+---
+
+## 2026-05-26 — Communication hybrid route shape landed
+
+| Area | Change |
+|------|--------|
+| **Hybrid UX** | Shifted the portal from an inline-create home page to a hybrid route shape: **`/communications`** is now the monitoring/list home, **`/communications/new`** is the dedicated setup route, and **`/communications/[id]`** remains the campaign operations/detail route. |
+| **Operator flow** | New campaigns are created from **`/communications/new`**, then redirected into the created campaign detail page for draft generation, footer preview, audience preview, replies/recipients, and send. |
+| **Architecture boundary** | No new business logic moved into the app. The change stays in the thin portal layer only; V2 contracts for create/draft/preview/resolve/send/delete remain canonical. |
+| **Next follow-ups** | If the setup flow keeps growing, turn `/communications/new` into a fuller step-by-step wizard; otherwise keep polishing delivery drill-down and reply-to-maintenance handoff. |
+
+---
+
 ## 2026-05-25 — Communication portal UI slice landed in propera-app
 
 | Area | Change |

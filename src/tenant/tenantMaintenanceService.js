@@ -19,7 +19,7 @@ const { normalizePhoneE164 } = require("../utils/phone");
 /** Closed tab — Propera canonical "Completed" (normalizePortalTicketStatus). */
 function isCompletedStatus(s) {
   const t = String(s || "").trim().toLowerCase();
-  return t === "completed" || t === "complete" || t === "done";
+  return t === "completed" || t === "complete" || t === "done" || t === "closed";
 }
 
 /** Portal canonical "Deleted" — hidden on every tab. */
@@ -34,7 +34,7 @@ function isVoidStatus(s) {
   return t === "canceled" || t === "cancelled" || t === "void";
 }
 
-/** Open tab — all statuses except Completed and Deleted (e.g. Open, In Progress). */
+/** Open tab — all statuses except closed/completed and Deleted (e.g. Open, In Progress). */
 function isTenantOpenStatus(s) {
   return !isCompletedStatus(s) && !isDeletedStatus(s);
 }
@@ -92,6 +92,105 @@ function mapTicketToTenantShape(row) {
   };
 }
 
+const TENANT_TIMELINE_KIND_COLORS = {
+  created: "#5E6AD2",
+  assigned: "#7c6fba",
+  scheduled: "#c07a0a",
+  schedule: "#c07a0a",
+  vendor_eta: "#a06820",
+  eta: "#a06820",
+  status_changed: "#1a9e5f",
+  status: "#1a9e5f",
+  resolved_closed: "#1a9e5f",
+  cost_added: "#0d9488",
+  cost_updated: "#0f766e",
+  tenant_charge_decision: "#7c3aed",
+  tenant_changed: "#5b6eae",
+};
+
+function sanitizeTimelineActorLabel(raw) {
+  const t = String(raw || "").trim();
+  if (!t) return "System";
+  if (/^POLICY:/i.test(t)) return "Policy";
+  if (t.toUpperCase() === "PM_PORTAL") return "Portal";
+  return t;
+}
+
+function timelineColorForKind(kind) {
+  const k = String(kind || "").trim().toLowerCase();
+  return TENANT_TIMELINE_KIND_COLORS[k] || "#6b7280";
+}
+
+function timelineActionLabel(row) {
+  const headline = String(row.headline || "").trim();
+  if (headline) return headline;
+  const kind = String(row.event_kind || "").trim().toLowerCase();
+  if (kind === "resolved_closed") return "Ticket completed";
+  if (kind === "status_changed") return "Status updated";
+  if (kind === "tenant_changed") return "Tenant updated";
+  if (kind === "cost_added") return "Cost added";
+  if (kind === "cost_updated") return "Cost updated";
+  return "Activity updated";
+}
+
+function isTenantVisibleTimelineKind(kindRaw) {
+  const kind = String(kindRaw || "").trim().toLowerCase();
+  // Tenant portal must not expose internal finance/cost events.
+  if (kind === "cost_added" || kind === "cost_updated" || kind === "tenant_charge_decision") {
+    return false;
+  }
+  return true;
+}
+
+function buildTenantTimelineFallbackFromTicketRow(row) {
+  const out = [];
+  const createdAt = row && row.created_at ? new Date(row.created_at).toISOString() : "";
+  const closedAt = row && row.closed_at ? new Date(row.closed_at).toISOString() : "";
+  const status = String((row && row.status) || "").trim().toLowerCase();
+  if (createdAt) {
+    out.push({
+      action: "Ticket created",
+      by: "System",
+      time: createdAt,
+      color: timelineColorForKind("created"),
+    });
+  }
+  if (closedAt && (status === "completed" || status === "complete" || status === "done" || status === "closed")) {
+    out.push({
+      action: "Ticket completed",
+      by: "System",
+      time: closedAt,
+      color: timelineColorForKind("resolved_closed"),
+    });
+  }
+  return out
+    .filter((e) => !!e.time)
+    .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
+}
+
+async function listTenantTicketTimeline(sb, ticketRow) {
+  const id = String(ticketRow && ticketRow.id ? ticketRow.id : "").trim();
+  if (!id) return [];
+  const { data, error } = await sb
+    .from("ticket_timeline_events")
+    .select("occurred_at, event_kind, headline, actor_label")
+    .eq("ticket_id", id)
+    .order("occurred_at", { ascending: false })
+    .limit(100);
+  if (error) throw Object.assign(new Error(error.message), { code: "DB_ERROR" });
+  const mapped = (data || [])
+    .filter((row) => isTenantVisibleTimelineKind(row.event_kind))
+    .map((row) => ({
+      action: timelineActionLabel(row),
+      by: sanitizeTimelineActorLabel(row.actor_label),
+      time: row.occurred_at ? new Date(row.occurred_at).toISOString() : "",
+      color: timelineColorForKind(row.event_kind),
+    }));
+  if (mapped.length > 0) return mapped;
+  // Older tickets may predate timeline event writes; keep resident Activity non-empty.
+  return buildTenantTimelineFallbackFromTicketRow(ticketRow);
+}
+
 /**
  * List tickets for the authenticated tenant (scoped by phone + property + unit).
  *
@@ -118,8 +217,21 @@ async function listTenantTickets(sb, tenantCtx, opts = {}) {
     )
     .eq("tenant_phone_e164", scope.phone)
     .eq("property_code", scope.propertyCode)
+    .not("status", "in", "(deleted,Deleted,DELETED,delete,DELETE,canceled,CANCELED,cancelled,CANCELLED,void,VOID)")
     .order("created_at", { ascending: false })
     .limit(scanCap);
+
+  // Push coarse status filtering into SQL so closed tickets are not lost
+  // when a tenant has many open tickets within the scan window.
+  if (status === "open") {
+    q = q.not(
+      "status",
+      "in",
+      "(completed,Completed,COMPLETED,complete,COMPLETE,done,DONE,closed,CLOSED)"
+    );
+  } else if (status === "closed") {
+    q = q.in("status", ["completed", "Completed", "COMPLETED", "complete", "COMPLETE", "done", "DONE", "closed", "CLOSED"]);
+  }
 
   const { data, error } = await q;
   if (error) throw Object.assign(new Error(error.message), { code: "DB_ERROR" });
@@ -156,8 +268,9 @@ async function getTenantTicket(sb, tenantCtx, ticketId) {
   if (!data) return null;
   if (!rowMatchesTenantScope(data, scope)) return null;
   if (isDeletedStatus(data.status) || isVoidStatus(data.status)) return null;
-
-  return mapTicketToTenantShape(data);
+  const ticket = mapTicketToTenantShape(data);
+  const timeline = await listTenantTicketTimeline(sb, data);
+  return { ...ticket, timeline };
 }
 
 /**

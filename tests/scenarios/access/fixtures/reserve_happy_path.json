@@ -1,0 +1,54 @@
+{
+  "name": "reserve_happy_path",
+  "description": "Tenant books Game Room for Sunday 10am-1pm. Schema-clean handoff; brain reserves; lane sticks; last_booking persisted.",
+  "frozenNow": "2026-05-27T18:00:00.000Z",
+  "timezone": "America/New_York",
+
+  "tenant": {
+    "tenantId": "11111111-1111-1111-1111-111111111111",
+    "propertyCode": "PENN",
+    "unitLabel": "502",
+    "residentName": "Nicolas",
+    "phoneE164": "+15551234001",
+    "transportChannel": "sms"
+  },
+
+  "amenities": [
+    {
+      "id": "22222222-2222-2222-2222-222222222222",
+      "slug": "game-room",
+      "name": "Game Room",
+      "propertyCode": "PENN"
+    }
+  ],
+
+  "initialReservations": [],
+
+  "turns": [
+    {
+      "userMessage": "i want to book the game room sunday 10am to 1pm",
+      "llm": {
+        "ok": true,
+        "reply": "Got it — booking the Game Room Sunday 10:00 AM to 1:00 PM.",
+        "accessIntent": "reserve",
+        "partialUpdates": {
+          "location_slug": "game-room",
+          "location_name": "Game Room",
+          "date_for_day": "sunday",
+          "start_at": "2026-05-31T10:00:00Z",
+          "end_at": "2026-05-31T13:00:00Z"
+        },
+        "handoffReady": true
+      },
+      "expect": {
+        "phase": "access_handoff",
+        "brain": "access_reserved",
+        "replyContains": "Booked",
+        "lane": "access",
+        "hasLastBooking": true,
+        "reservationsCount": 1,
+        "activeReservationsCount": 1
+      }
+    }
+  ]
+}

@@ -78,6 +78,8 @@ Use **`#`** only for **new staff capture** drafts; use plain text for lifecycle 
 
 If `decideLane` returns **vendor** or **system** (`vendorLane`, `systemLane`), maintenance core is **not** entered. The user receives a **deterministic stub** (`buildNonMaintenanceLaneStub`) and `event_log` records **`LANE_STUB`**.
 
+**Vendor lane full spec (phased implementation):** **[VENDOR_LANE.md](./VENDOR_LANE.md)** — replace vendor stub with `handleVendorInbound` in a later phase; portal vendor assign (no dispatch) already ships via `portalTicketAssignment.js`.
+
 | Lane | Maintenance core | Stub `brain` |
 |------|------------------|--------------|
 | `tenantLane` | Allowed | — |

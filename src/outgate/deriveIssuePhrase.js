@@ -27,7 +27,8 @@ function deriveIssuePhrase(issueText) {
   if (/\bclog\b|\bclogged\b/.test(t)) return "clog";
 
   let cleaned = raw
-    .replace(/^(yo|hi|hey|hello)\b[\s,!]*/gi, "")
+    .replace(/^(yo|hi|hey|hello|wassup|whatsup|what'?s\s*up|sup)\b[\s,.!]*/gi, "")
+    .replace(/\b(my\s+)?(brother|bro|man|dude|mate|friend|buddy|fam)\b[\s,.!]*$/gi, "")
     .replace(/\s+/g, " ")
     .trim();
   if (cleaned.length > 55) cleaned = cleaned.slice(0, 52).trim() + "…";

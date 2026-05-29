@@ -1,0 +1,22 @@
+/** CME lifecycle states — mirrors `conflict_case_state` enum. */
+const CONFLICT_CASE_STATES = [
+  "INTAKE",
+  "POLICY_MATCH",
+  "CASE_OPEN",
+  "NOTICE_DRAFTED",
+  "NOTICE_PENDING_APPROVAL",
+  "NOTICE_SENT",
+  "MONITORING",
+  "SUSPENDED_PENDING_MAINTENANCE",
+  "ESCALATED",
+  "RESOLVED",
+  "LEGAL_HOLD",
+  "CLOSED",
+];
+
+const CONFLICT_CASE_KINDS = ["VIOLATION", "COMPLAINT", "MIXED"];
+
+module.exports = {
+  CONFLICT_CASE_STATES,
+  CONFLICT_CASE_KINDS,
+};

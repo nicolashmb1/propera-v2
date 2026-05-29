@@ -87,10 +87,16 @@ async function classifyMaintenanceIntentWithLlm(o) {
     "needing service, elevator not working, 'send someone to clean/fix' a building area.\n\n" +
     "non_maintenance — NOT a repair request:\n" +
     "billing, invoices, rent, lease copies, amenity booking or hours (gym, pool, laundry), " +
+    "pool/gym availability or whether reservations are open ('is the pool available', 'still no open for reservations'), " +
     "janitorial SCHEDULE questions only ('when is the cleaning guy coming', 'what day do they clean'), " +
     "trash/recycling pickup schedule, parking, packages, office hours, speak to manager, general building info.\n\n" +
+    "Examples → non_maintenance: \"trying to use the pool, is it available for reservations?\".\n\n" +
     "If tenant asks to send someone to fix/clean a smelly or dirty area → maintenance_repair, not non_maintenance.\n\n" +
-    "unclear — greeting only or too vague to tell.\n\n" +
+    "unclear — greeting, chitchat, or too vague to open a ticket:\n" +
+    "hi/hello/hey/wassup/what's up/sup, with or without friendly words (bro, brother, man, dude); " +
+    "thanks/ok/cool with no problem described; random banter with no repair ask.\n\n" +
+    "Examples → unclear: \"wassup my brother\", \"hey bro\", \"yo\", \"thanks\", \"what's good\".\n" +
+    "Examples → maintenance_repair: \"sink dripping\", \"no heat\", \"can you send someone to fix the leak\".\n\n" +
     "Do not invent property, unit, or ticket ids.";
 
   const userPayload = {

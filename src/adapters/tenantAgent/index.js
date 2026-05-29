@@ -1,4 +1,5 @@
 const { runTenantAgentTurn, recordTenantAgentHandoffResult } = require("./runTenantAgentTurn");
+const { recordTenantAgentAccessResult } = require("./recordTenantAgentAccessResult");
 const { isTenantAgentEligible } = require("./eligibility");
 const { completenessCheck } = require("./completeness");
 const { buildHandoffRouterParameterFromAgent } = require("./buildHandoffRouterParameter");
@@ -17,6 +18,7 @@ const { buildTenantAgentGatherSystemPrompt } = require("./systemPrompt");
 module.exports = {
   runTenantAgentTurn,
   recordTenantAgentHandoffResult,
+  recordTenantAgentAccessResult,
   isTenantAgentEligible,
   completenessCheck,
   buildHandoffRouterParameterFromAgent,

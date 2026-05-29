@@ -1,5 +1,9 @@
 /**
- * Resolve maintenance vs non-maintenance — regex fast path, LLM when enabled, safe fallback.
+ * Resolve maintenance vs non-maintenance — regex for obvious cases, LLM for nuance.
+ *
+ * Doctrine: greeting vs repair is INTERPRETATION (LLM). Regex is fallback when
+ * LLM is off or API fails. Never treat LLM `unclear` as maintenance_repair —
+ * that was opening tickets for "wassup my brother".
  */
 const { openaiApiKey, tenantAgentLlmEnabled } = require("../../config/env");
 const {
@@ -7,6 +11,11 @@ const {
   isMaintenanceRepairRequest,
 } = require("./classifyNonMaintenanceRequest");
 const { classifyMaintenanceIntentWithLlm } = require("./classifyMaintenanceIntentWithLlm");
+const {
+  isAccessBookingCorrection,
+  hasRecentAccessBooking,
+} = require("./accessConversationSignals");
+const { isGatheringGreetingOnly } = require("./gatherGreetingReply");
 
 /**
  * @param {object} o
@@ -14,7 +23,7 @@ const { classifyMaintenanceIntentWithLlm } = require("./classifyMaintenanceInten
  * @param {object | null} [o.conv]
  * @param {object} [o.partial]
  * @param {string} [o.traceId]
- * @returns {Promise<{ intent: 'maintenance_repair' | 'non_maintenance', source: string, reason?: string }>}
+ * @returns {Promise<{ intent: 'maintenance_repair' | 'non_maintenance' | 'unclear', source: string, reason?: string }>}
  */
 async function resolveMaintenanceIntentForTurn(o) {
   const bodyText = String(o.bodyText || "").trim();
@@ -22,6 +31,10 @@ async function resolveMaintenanceIntentForTurn(o) {
   const issue = String(partial.issue || "").trim();
   const conv = o.conv || null;
   const convStatus = String((conv && conv.status) || "").trim();
+
+  if (hasRecentAccessBooking(conv) && isAccessBookingCorrection(bodyText, conv)) {
+    return { intent: "non_maintenance", source: "access_booking_correction" };
+  }
 
   if (isNonMaintenanceRequest(bodyText)) {
     return { intent: "non_maintenance", source: "regex_body" };
@@ -58,9 +71,25 @@ async function resolveMaintenanceIntentForTurn(o) {
     if (llm.intent === "maintenance_repair") {
       return { intent: "maintenance_repair", source: llm.source, reason: llm.reason };
     }
+    if (llm.intent === "unclear") {
+      return { intent: "unclear", source: llm.source, reason: llm.reason };
+    }
+    // LLM API/shape failure — regex fallbacks below, not permissive default.
   }
 
-  return { intent: "maintenance_repair", source: "default_gather" };
+  if (isGatheringGreetingOnly(bodyText, partial)) {
+    return { intent: "unclear", source: "regex_greeting" };
+  }
+
+  if (issue.length >= 2 && convStatus === "gathering") {
+    return { intent: "maintenance_repair", source: "active_issue_gather" };
+  }
+
+  if (isMaintenanceRepairRequest(bodyText)) {
+    return { intent: "maintenance_repair", source: "regex_repair_signal" };
+  }
+
+  return { intent: "unclear", source: "default_vague" };
 }
 
 module.exports = {

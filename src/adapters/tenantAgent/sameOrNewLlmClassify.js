@@ -73,6 +73,8 @@ async function classifySameOrNewWithLlm(o) {
     "}\n\n" +
     "Rules:\n" +
     "- choice=same when tenant confirms existing request (e.g. yes, yep same, same one, same issue).\n" +
+    "- choice=same when pending_follow_up is ONLY a preferred visit time / schedule change for that ticket " +
+    "(morning, 8-10am, tomorrow 9-10) — put the schedule text in append_note.\n" +
     "- choice=new when tenant says different/new/separate issue.\n" +
     "- append_note: the ACTUAL maintenance detail to store — from pending_follow_up.bodyText when confirming same, " +
     "plus any NEW symptom detail in inbound_message beyond confirmation words.\n" +

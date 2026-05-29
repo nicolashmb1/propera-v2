@@ -126,16 +126,21 @@ function checkTenantLimits(policy, tenantReservations, startAt) {
  * @param {Date} endAt
  * @returns {{ ok: boolean, reason?: string }}
  */
-function checkWeeklySchedule(schedules, startAt, endAt) {
+function checkWeeklySchedule(schedules, startAt, endAt, timeZone) {
   const rows = schedules || [];
   if (!rows.length) return { ok: true };
-  const dow = startAt.getDay();
-  const dayRows = rows.filter((s) => Number(s.day_of_week) === dow);
+
+  const { zonedWallClock } = require("./accessLocalTime");
+  const tz = String(timeZone || require("../config/env").properaTimezone() || "UTC").trim();
+  const startZ = zonedWallClock(startAt, tz);
+  const endZ = zonedWallClock(endAt, tz);
+
+  const dayRows = rows.filter((s) => Number(s.day_of_week) === startZ.dayOfWeek);
   if (!dayRows.length) return { ok: false, reason: "closed_day" };
 
-  const startMins = startAt.getHours() * 60 + startAt.getMinutes();
-  const endMins = endAt.getHours() * 60 + endAt.getMinutes();
-  if (endAt.getDate() !== startAt.getDate()) {
+  const startMins = startZ.minutesSinceMidnight;
+  const endMins = endZ.minutesSinceMidnight;
+  if (endZ.dateKey !== startZ.dateKey) {
     return { ok: false, reason: "must_end_same_day" };
   }
 
@@ -189,7 +194,7 @@ function evaluateCanReserve(policy, ctx, startAt, endAt, data, now = new Date())
   r = checkBlackouts(data.blackouts, startAt, endAt);
   if (!r.ok) return { allowed: false, reason: r.reason };
 
-  r = checkWeeklySchedule(data.schedules, startAt, endAt);
+  r = checkWeeklySchedule(data.schedules, startAt, endAt, data.propertyTimeZone);
   if (!r.ok) return { allowed: false, reason: r.reason };
 
   r = checkCapacity(data.overlapping, policy);

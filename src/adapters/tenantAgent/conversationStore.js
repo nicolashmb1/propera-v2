@@ -3,6 +3,7 @@
  */
 const { getSupabase } = require("../../db/supabase");
 const { tenantAgentMaxTurns } = require("../../config/env");
+const { normalizePartialPackage } = require("./conversationState");
 
 const MAX_MESSAGE_HISTORY = 20;
 
@@ -12,10 +13,9 @@ const MAX_MESSAGE_HISTORY = 20;
  */
 function normalizeRow(row) {
   if (!row) return null;
-  const partial =
-    row.partial_package && typeof row.partial_package === "object"
-      ? row.partial_package
-      : {};
+  // Coerce partial_package through the typed schema (drops invalid lane
+  // values, preserves unknown working-memory keys).
+  const partial = normalizePartialPackage(row.partial_package);
   if (partial._awaiting && partial._awaiting.expires_at) {
     try {
       if (new Date(partial._awaiting.expires_at) < new Date()) {

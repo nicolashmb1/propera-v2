@@ -4,8 +4,9 @@
 const { parseMediaJson } = require("../../brain/shared/mediaPayload");
 const { appendMessage, saveTenantConversation } = require("./conversationStore");
 const { setAwaiting, clearAwaiting } = require("./conversationAwaiting");
-const { classifyPostCompleteFollowUp } = require("./classifyPostCompleteFollowUp");
 const { isPostHandoffChitchat, postHandoffAckReply } = require("./postHandoffReply");
+const { resolvePostCompleteFollowUpIntent } = require("./resolvePostCompleteFollowUpIntent");
+const { isScheduleFollowUpContent } = require("./scheduleFollowUpShape");
 const {
   buildSameOrNewPrompt,
   buildSameOrNewReaskPrompt,
@@ -72,6 +73,69 @@ function conversationForNewIntake(conv) {
 
 /**
  * @param {object} o
+ * @returns {Promise<{ handled: boolean, phase?: string, replyText?: string, conversationId?: string, tenantLocale?: string } | null>}
+ */
+async function applyScheduleUpdateForOpenTicket(o) {
+  const { conv, schedText, messages, turnCount, traceId } = o;
+  const ticketKey = String(conv.active_ticket_key || "").trim();
+  const windowText = String(schedText || "").trim();
+  if (!ticketKey || windowText.length < MIN_SCHEDULE_LEN) return null;
+
+  const applied = await applyPreferredWindowByTicketKey({
+    ticketKey,
+    preferredWindow: windowText,
+    traceId,
+    recentMessages: o.recentMessages || messages,
+    ticketChangedBy: telegramStaffCaptureActor(),
+  });
+  const partialPkg = clearAwaiting({ ...(conv.partial_package || {}) });
+  delete partialPkg._schedule_retry_pending;
+  delete partialPkg._follow_up_pending;
+
+  if (applied.ok) {
+    const label = (applied.parsed && applied.parsed.label) || windowText;
+    const replyText = `Got it — preferred visit window noted: ${label}.`;
+    await saveTenantConversation({
+      ...conv,
+      status: STATUS_COMPLETE,
+      turn_count: turnCount,
+      partial_package: partialPkg,
+      messages: appendMessage({ messages }, "assistant", replyText),
+    });
+    return {
+      handled: true,
+      phase: "post_handoff",
+      replyText,
+      conversationId: conv.id,
+      tenantLocale: conv.tenant_locale || "en",
+    };
+  }
+  if (applied.policyKey) {
+    const replyText = schedulePolicyRejectMessage(applied.policyKey, applied.policyVars);
+    partialPkg._schedule_retry_pending = true;
+    const partialWithAwaiting = setAwaiting(partialPkg, "schedule_retry", {
+      policyKey: applied.policyKey,
+    });
+    await saveTenantConversation({
+      ...conv,
+      status: STATUS_COMPLETE,
+      turn_count: turnCount,
+      partial_package: partialWithAwaiting,
+      messages: appendMessage({ messages }, "assistant", replyText),
+    });
+    return {
+      handled: true,
+      phase: "post_handoff",
+      replyText,
+      conversationId: conv.id,
+      tenantLocale: conv.tenant_locale || "en",
+    };
+  }
+  return null;
+}
+
+/**
+ * @param {object} o
  * @returns {Promise<{ handled: boolean, phase?: string, replyText?: string, routerParameter?: object, conversationId?: string, tenantLocale?: string } | null>}
  */
 async function handlePostCompleteConversationTurn(o) {
@@ -90,72 +154,96 @@ async function handlePostCompleteConversationTurn(o) {
   let messages = appendMessage(conv, "user", bodyText);
   const mediaJson = String(routerParameter._mediaJson || "");
   const mediaItems = parseMediaJson(mediaJson);
+  const activeTicketKey = String(conv.active_ticket_key || "").trim();
 
-  if (
-    String(conv.status || "").trim() === STATUS_COMPLETE &&
-    String(conv.active_ticket_key || "").trim()
-  ) {
-    const awaitingSchedule =
+  if (activeTicketKey) {
+    const awaitingScheduleRetry =
       !!(conv.partial_package && conv.partial_package._schedule_retry_pending) ||
       lastAssistantAskedScheduleRetry(conv.messages);
     const schedText = String(bodyText || "").trim();
-    if (
-      awaitingSchedule &&
-      schedText.length >= MIN_SCHEDULE_LEN &&
-      (isScheduleOnlyReply(schedText) || awaitingSchedule)
-    ) {
-      const applied = await applyPreferredWindowByTicketKey({
-        ticketKey: String(conv.active_ticket_key).trim(),
-        preferredWindow: schedText,
-        traceId,
-        ticketChangedBy: telegramStaffCaptureActor(),
-      });
-      const partialPkg = clearAwaiting({ ...(conv.partial_package || {}) });
-      delete partialPkg._schedule_retry_pending;
 
-      if (applied.ok) {
-        const label =
-          (applied.parsed && applied.parsed.label) || schedText;
-        const replyText = `Got it — preferred visit window noted: ${label}.`;
-        await saveTenantConversation({
-          ...conv,
-          status: STATUS_COMPLETE,
-          turn_count: turnCount,
-          partial_package: partialPkg,
-          messages: appendMessage({ messages }, "assistant", replyText),
-        });
-        return {
-          handled: true,
-          phase: "post_handoff",
-          replyText,
-          conversationId: conv.id,
-          tenantLocale: conv.tenant_locale || "en",
-        };
-      }
-      if (applied.policyKey) {
-        const replyText = schedulePolicyRejectMessage(
-          applied.policyKey,
-          applied.policyVars
-        );
-        partialPkg._schedule_retry_pending = true;
-        const partialWithAwaiting = setAwaiting(partialPkg, "schedule_retry", {
-          policyKey: applied.policyKey,
-        });
-        await saveTenantConversation({
-          ...conv,
-          status: STATUS_COMPLETE,
-          turn_count: turnCount,
-          partial_package: partialWithAwaiting,
-          messages: appendMessage({ messages }, "assistant", replyText),
-        });
-        return {
-          handled: true,
-          phase: "post_handoff",
-          replyText,
-          conversationId: conv.id,
-          tenantLocale: conv.tenant_locale || "en",
-        };
-      }
+    if (
+      awaitingScheduleRetry &&
+      schedText.length >= MIN_SCHEDULE_LEN &&
+      (isScheduleOnlyReply(schedText) || awaitingScheduleRetry)
+    ) {
+      const scheduleOut = await applyScheduleUpdateForOpenTicket({
+        conv,
+        schedText,
+        messages,
+        turnCount,
+        traceId,
+        recentMessages: messages,
+      });
+      if (scheduleOut) return scheduleOut;
+    }
+
+    const followUp = await resolvePostCompleteFollowUpIntent({
+      bodyText,
+      activeTicketKey,
+      lastBrainResult: conv.last_brain_result,
+      recentMessages: messages,
+      mediaItems,
+      traceId,
+    });
+
+    if (followUp.intent === "schedule_update") {
+      const windowText = String(followUp.preferredWindow || bodyText).trim();
+      const scheduleOut = await applyScheduleUpdateForOpenTicket({
+        conv,
+        schedText: windowText,
+        messages,
+        turnCount,
+        traceId,
+      });
+      if (scheduleOut) return scheduleOut;
+    }
+
+    if (followUp.intent === "ack_only" && isPostHandoffChitchat(bodyText)) {
+      const replyText = postHandoffAckReply(bodyText);
+      await saveTenantConversation({
+        ...conv,
+        status: STATUS_COMPLETE,
+        turn_count: turnCount,
+        messages: appendMessage({ messages }, "assistant", replyText),
+      });
+      return {
+        handled: true,
+        phase: "post_handoff",
+        replyText,
+        conversationId: conv.id,
+        tenantLocale: conv.tenant_locale || "en",
+      };
+    }
+
+    if (followUp.intent === "new_intake") {
+      const reset = conversationForNewIntake(conv);
+      let partial = await mergePartialFromInboundMessage(
+        {},
+        bodyText,
+        known,
+        propertiesList,
+        { traceId }
+      );
+      await saveTenantConversation({
+        ...reset,
+        turn_count: 1,
+        partial_package: partial,
+        messages,
+        tenant_locale: conv.tenant_locale || "en",
+      });
+      return {
+        handled: false,
+        continueGather: true,
+        conversationId: conv.id,
+        conv: {
+          ...reset,
+          turn_count: 1,
+          partial_package: partial,
+          messages,
+          tenant_locale: conv.tenant_locale || "en",
+        },
+      };
     }
   }
 
@@ -171,6 +259,25 @@ async function handlePostCompleteConversationTurn(o) {
 
     if (choice === "same") {
       const ticketKey = String(conv.active_ticket_key || "").trim();
+      const pendingBody = String(pending.bodyText || "").trim();
+      const scheduleNote = String(resolved.appendNote || "").trim();
+      const scheduleText =
+        (scheduleNote && isScheduleFollowUpContent(scheduleNote) && scheduleNote) ||
+        (pendingBody && isScheduleFollowUpContent(pendingBody) && pendingBody) ||
+        (isScheduleFollowUpContent(bodyText) && bodyText) ||
+        "";
+
+      if (ticketKey && scheduleText) {
+        const scheduleOut = await applyScheduleUpdateForOpenTicket({
+          conv,
+          schedText: scheduleText,
+          messages,
+          turnCount,
+          traceId,
+        });
+        if (scheduleOut) return scheduleOut;
+      }
+
       if (!ticketKey) {
         const replyText = buildSameOrNewPrompt(conv);
         await saveTenantConversation({
@@ -229,6 +336,17 @@ async function handlePostCompleteConversationTurn(o) {
     if (choice === "new") {
       const seedBody =
         String(pending.bodyText || "").trim() || String(bodyText || "").trim();
+
+      if (activeTicketKey && seedBody && isScheduleFollowUpContent(seedBody)) {
+        const scheduleOut = await applyScheduleUpdateForOpenTicket({
+          conv,
+          schedText: seedBody,
+          messages,
+          turnCount,
+          traceId,
+        });
+        if (scheduleOut) return scheduleOut;
+      }
 
       if (seedBody && isNonMaintenanceRequest(seedBody)) {
         const deflect = await maybeDeflectNonMaintenanceTurn({
@@ -293,9 +411,7 @@ async function handlePostCompleteConversationTurn(o) {
     };
   }
 
-  const classification = classifyPostCompleteFollowUp({ bodyText, mediaItems });
-
-  if (classification === "ack_only" && isPostHandoffChitchat(bodyText)) {
+  if (isPostHandoffChitchat(bodyText)) {
     const replyText = postHandoffAckReply(bodyText);
     await saveTenantConversation({
       ...conv,
@@ -309,36 +425,6 @@ async function handlePostCompleteConversationTurn(o) {
       replyText,
       conversationId: conv.id,
       tenantLocale: conv.tenant_locale || "en",
-    };
-  }
-
-  if (classification === "explicit_new_intake") {
-    const reset = conversationForNewIntake(conv);
-    let partial = await mergePartialFromInboundMessage(
-      {},
-      bodyText,
-      known,
-      propertiesList,
-      { traceId }
-    );
-    await saveTenantConversation({
-      ...reset,
-      turn_count: 1,
-      partial_package: partial,
-      messages,
-      tenant_locale: conv.tenant_locale || "en",
-    });
-    return {
-      handled: false,
-      continueGather: true,
-      conversationId: conv.id,
-      conv: {
-        ...reset,
-        turn_count: 1,
-        partial_package: partial,
-        messages,
-        tenant_locale: conv.tenant_locale || "en",
-      },
     };
   }
 
@@ -367,6 +453,7 @@ async function handlePostCompleteConversationTurn(o) {
 
 module.exports = {
   handlePostCompleteConversationTurn,
+  applyScheduleUpdateForOpenTicket,
   conversationForNewIntake,
   STATUS_COMPLETE,
   STATUS_SAME_OR_NEW,

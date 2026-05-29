@@ -2,6 +2,7 @@
  * Rule-based handoff completeness — adapter confirms before brain call (not LLM alone).
  */
 const { isCommonAreaGatherPartial } = require("./resolveGatherLocation");
+const { isSubstantiveMaintenanceIssue } = require("./gatherIssueSubstance");
 
 /**
  * @param {object} partial
@@ -33,7 +34,7 @@ function completenessCheck(partial, knownPropertyCodesUpper) {
   if (locationKind === "unit" && !unit) {
     return { ready: false, missing: "unit" };
   }
-  if (issue.length < 2) {
+  if (!isSubstantiveMaintenanceIssue(issue)) {
     return { ready: false, missing: "issue" };
   }
   return { ready: true, missing: null };

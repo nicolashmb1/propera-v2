@@ -110,7 +110,7 @@ async function executeConfirmedExpenseCapture(sb, proposal, o) {
       normStr(proposal.normalizedBody)
     );
 
-  return postExpenseCaptureRow({
+  const run = await postExpenseCaptureRow({
     sb,
     traceId: o.traceId,
     ticket,
@@ -123,6 +123,15 @@ async function executeConfirmedExpenseCapture(sb, proposal, o) {
     channel: o.channel,
     confidence: "high",
   });
+  if (!run.ok) return run;
+  return {
+    ...run,
+    resolution: {
+      ...(run.resolution || {}),
+      committed_op: "attach_ticket_cost",
+      proposal_id: String(proposal.proposal_id || "").trim(),
+    },
+  };
 }
 
 /**
@@ -503,7 +512,10 @@ async function tryStaffExpenseCapture(o) {
       portalMode = String(nest.portal_chat_mode || nest.portalChatMode || "").trim().toLowerCase();
     } catch (_) {}
   }
-  const hasMarker = isExpenseCaptureMessage(bodyRaw) || portalMode === "cost";
+  const hasMarker =
+    isExpenseCaptureMessage(bodyRaw) ||
+    portalMode === "cost" ||
+    portalMode === "jarvis_plan";
   if (!hasMarker && !isUndoMessage(bodyRaw) && !CONFIRM_BODY_RE.test(bodyRaw)) return null;
 
   const sb = getSupabase();
@@ -736,6 +748,8 @@ async function tryStaffExpenseCapture(o) {
       receiptStatus: parsed.receiptStatus,
       idempotencyKey,
       normalizedBody,
+      op: "attach_ticket_cost",
+      proposal_id: crypto.randomUUID(),
     });
     await stashExpenseConfirmPending(sb, actorKey, confirmToken);
     await appendEventLog({
@@ -809,6 +823,8 @@ async function tryStaffExpenseCapture(o) {
 
 module.exports = {
   tryStaffExpenseCapture,
+  executeConfirmedExpenseCapture,
+  clearExpenseConfirmPending,
   listTicketsForCostAttach,
   isExpenseCaptureMessage,
 };

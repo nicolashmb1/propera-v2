@@ -15,6 +15,8 @@ test("isGatheringGreetingOnly — hi without maintenance", () => {
   assert.equal(isGatheringGreetingOnly("good morning", {}), true);
   assert.equal(isGatheringGreetingOnly("whatsup", {}), true);
   assert.equal(isGatheringGreetingOnly("what's up", {}), true);
+  assert.equal(isGatheringGreetingOnly("wassup my brother", {}), true);
+  assert.equal(isGatheringGreetingOnly("hey bro", {}), true);
   assert.equal(isGatheringGreetingOnly("/start", {}), true);
   assert.equal(isGatheringGreetingOnly("/start propera", {}), true);
   assert.equal(isGatheringGreetingOnly("heat not working", {}), false);

@@ -51,6 +51,12 @@ const { captureFollowUpPending } = require("./sameOrNewClarify");
 const { buildStrongMatchClarifyPrompt } = require("./findRelatedPrompt");
 const { intakeExplicitNewTicketMarkers } = require("../../brain/core/intakeAttachClassify");
 const { maybeDeflectNonMaintenanceTurn } = require("./handleNonMaintenanceDeflect");
+const { isNonMaintenanceRequest } = require("./classifyNonMaintenanceRequest");
+const { isGenericMaintenanceIntakePhrase } = require("./gatherIssueSubstance");
+const { resolveMaintenanceIntentForTurn } = require("./resolveMaintenanceIntentForTurn");
+const { maybeHandleAccessTurn } = require("./maybeHandleAccessTurn");
+const { dispatchByActiveLane } = require("./dispatchByActiveLane");
+const { resolveActiveLane, CONVERSATION_LANE } = require("./conversationLane");
 const {
   handlePostClosedConversationTurn,
   isConversationClosed,
@@ -66,6 +72,10 @@ const {
 } = require("../../dal/ticketPreferredWindow");
 const { getAwaiting, setAwaiting, clearAwaiting } = require("./conversationAwaiting");
 const { validateHandoffPayload, handoffRejectionPrompt } = require("./handoffContract");
+const {
+  recordMaintenanceContractRejection,
+  recordMaintenanceTicketSuccess,
+} = require("./conversationState");
 const { mergeGatherSafety, getGatherSafety } = require("./detectGatherSafety");
 
 /**
@@ -123,10 +133,17 @@ async function tryTenantAgentHandoff(o) {
   });
   if (!contractResult.valid) {
     const replyText = handoffRejectionPrompt(contractResult.rejectedFields[0]);
-    const repairedPartial = { ...partial };
+    let repairedPartial = { ...partial };
     for (const field of contractResult.rejectedFields) {
       delete repairedPartial[field];
     }
+    // Stamp the rejection as a typed audit slot so the LLM (and any
+    // observability tooling) can see *why* the brain refused this turn.
+    repairedPartial = recordMaintenanceContractRejection(repairedPartial, {
+      rejectedFields: contractResult.rejectedFields,
+      rejectionReasons: contractResult.rejectionReasons,
+      replyText,
+    });
     await saveTenantConversation({
       ...conv,
       status: "gathering",
@@ -187,11 +204,12 @@ async function tryTenantAgentHandoff(o) {
     };
   }
 
+  const { withConversationLane } = require("./conversationLane");
   await saveTenantConversation({
     ...conv,
     status: "handoff_pending",
     turn_count: turnCount,
-    partial_package: partial,
+    partial_package: withConversationLane(partial, CONVERSATION_LANE.MAINTENANCE),
     messages,
     handoff_trace_id: traceId,
   });
@@ -329,7 +347,42 @@ async function runTenantAgentTurn(o) {
   const _skipForScheduleAwaiting =
     _activeAwaiting && _activeAwaiting.type === "schedule_retry";
 
+  // Sticky lane: one decision per session — if a lane is active, dispatch to it
+  // and skip per-turn re-detection. The lane owns interpretation.
+  if (!_skipForScheduleAwaiting) {
+    const laneTurn = await dispatchByActiveLane({
+      conv,
+      bodyText,
+      routerParameter,
+      tenantActorKey,
+      traceId,
+      transportChannel,
+    });
+    if (laneTurn) {
+      if (laneTurn.phase === "access_handoff" && laneTurn.routerParameter) {
+        return laneTurn;
+      }
+      return laneTurn;
+    }
+  }
+
+  // No active lane — try to detect access for the first time.
   const deflectTurn = _skipForScheduleAwaiting
+    ? null
+    : await maybeHandleAccessTurn({
+        conv,
+        bodyText,
+        routerParameter,
+        tenantActorKey,
+        traceId,
+        transportChannel,
+      });
+  if (deflectTurn && deflectTurn.phase === "access_handoff" && deflectTurn.routerParameter) {
+    return deflectTurn;
+  }
+  if (deflectTurn) return deflectTurn;
+
+  const nonMaintenanceTurn = _skipForScheduleAwaiting
     ? null
     : await maybeDeflectNonMaintenanceTurn({
         conv,
@@ -341,7 +394,7 @@ async function runTenantAgentTurn(o) {
         transportChannel,
         propertiesList,
       });
-  if (deflectTurn) return deflectTurn;
+  if (nonMaintenanceTurn) return nonMaintenanceTurn;
 
   const partialEarly = conv && conv.partial_package ? conv.partial_package : {};
   const signalEarly = _skipForScheduleAwaiting
@@ -422,7 +475,14 @@ async function runTenantAgentTurn(o) {
     if (deflectNew) return deflectNew;
 
     const mediaItems = parseMediaJson(String(routerParameter._mediaJson || ""));
-    const greetingOnlySeed = isGatheringGreetingOnly(bodyText, {});
+    const intentSeed = await resolveMaintenanceIntentForTurn({
+      bodyText,
+      conv: null,
+      partial: {},
+      traceId,
+    });
+    const greetingOnlySeed =
+      intentSeed.intent === "unclear" || isGatheringGreetingOnly(bodyText, {});
     const partialSeed = greetingOnlySeed
       ? {}
       : mergeScheduleSlotFromInbound(
@@ -439,6 +499,7 @@ async function runTenantAgentTurn(o) {
     const shouldFindRelated =
       justExpired &&
       !greetingOnlySeed &&
+      !isNonMaintenanceRequest(bodyText) &&
       (hasProblemSignal(bodyText) || mediaItems.length > 0);
 
     if (shouldFindRelated) {
@@ -509,7 +570,14 @@ async function runTenantAgentTurn(o) {
   const maxTurns = Number(conv.max_turns || 12);
 
   const priorPartial = conv.partial_package || {};
-  const greetingOnly = isGatheringGreetingOnly(bodyText, priorPartial);
+  const gatherIntent = await resolveMaintenanceIntentForTurn({
+    bodyText,
+    conv,
+    partial: priorPartial,
+    traceId,
+  });
+  const greetingOnly =
+    gatherIntent.intent === "unclear" || isGatheringGreetingOnly(bodyText, priorPartial);
   const skipSlotMerge =
     greetingOnly || shouldSkipInboundSlotMerge(bodyText) || isTenantConfusedMessage(bodyText);
 
@@ -706,6 +774,10 @@ async function runTenantAgentTurn(o) {
     return { handled: false };
   }
 
+  if (partial.issue && isGenericMaintenanceIntakePhrase(partial.issue)) {
+    delete partial.issue;
+  }
+
   const complete = completenessCheck(partial, known);
 
   if (complete.ready) {
@@ -878,12 +950,34 @@ async function recordTenantAgentHandoffResult(o) {
         ? STATUS_COMPLETE
         : "gathering";
 
+  // Mirror the access lane's last-booking slot: on a successful handoff,
+  // stamp a typed snapshot of the just-created ticket into partial_package
+  // so follow-up turns ("what happened with the leak from yesterday?") have
+  // a deterministic anchor instead of fishing through last_brain_result.
+  const succeeded =
+    coreRun.brain === "core_finalized" || coreRun.brain === "tenant_append_to_ticket";
+  const partialBefore =
+    row.partial_package && typeof row.partial_package === "object" ? row.partial_package : {};
+  const nextPartial = succeeded
+    ? recordMaintenanceTicketSuccess(partialBefore, {
+        ticketKey: String(ticketKey || "").trim(),
+        propertyCode: String(partialBefore.property || partialBefore.property_code || "").trim().toUpperCase(),
+        unitLabel: String(partialBefore.unit || partialBefore.unit_label || "").trim(),
+        locationKind: String(partialBefore.location_kind || "").trim().toLowerCase(),
+        category: String(partialBefore.category || fin.category || "").trim(),
+        issueSummary: String(partialBefore.issue || partialBefore.message || "").trim(),
+        preferredWindow: String(partialBefore.preferredWindow || "").trim(),
+        emergency: String(partialBefore.emergency || "").toLowerCase() === "yes",
+      })
+    : partialBefore;
+
   await saveTenantConversation({
     ...row,
     status: nextStatus,
     handoff_at: new Date().toISOString(),
     handoff_trace_id: String(o.traceId || row.handoff_trace_id || "").trim(),
     active_ticket_key: String(ticketKey || "").trim(),
+    partial_package: nextPartial,
     last_brain_result: {
       brain: coreRun.brain,
       replyText: coreRun.replyText,

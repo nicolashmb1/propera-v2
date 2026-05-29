@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node --test tests/*.test.js tests/tenantAgent/*.test.js tests/scenarios/*.test.js",
+    "test": "node --test tests/*.test.js tests/tenantAgent/*.test.js tests/scenarios/*.test.js tests/scenarios/access/*.test.js tests/vendor/*.test.js tests/agentContract/*.test.js tests/access/*.test.js",
     "test:integration": "node --test tests/integration/staffCaptureCrossChannel.test.js"
   },
   "engines": {
@@ -19,6 +19,7 @@
     "express": "^4.21.0",
     "jpeg-js": "^0.4.4",
     "jsqr": "^1.4.0",
-    "pngjs": "^7.0.0"
+    "pngjs": "^7.0.0",
+    "web-push": "^3.6.7"
   }
 }

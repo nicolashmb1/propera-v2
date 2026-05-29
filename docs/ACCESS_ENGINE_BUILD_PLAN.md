@@ -4,7 +4,7 @@
 
 **Audience:** product, engineering, next agent implementing access + staff cockpit.
 
-**Status:** **Partially shipped** — migrations **057** and **058**, V2 Access engine + portal API + tenant access API, propera-app **`/access`** command center + config UI, tenant **`/tenant/amenities`** surfaces, and QR/public reserve shell are live. **Not started:** inbound ACCESS_* router/channel path, access lifecycle worker (`CONFIRMED → ACTIVE → COMPLETED/NO_SHOW`), real lock adapters, and Tenant Agent access handoff.
+**Status:** **Expanded partial live** — migrations **057**, **058**, and **066**, V2 Access engine + portal API + tenant access API, propera-app **`/access`** command center + config UI, tenant **`/tenant/amenities`** surfaces, QR/public reserve shell, **shared text-channel ACCESS_* handling** (SMS / WhatsApp / Telegram), **access-owned lifecycle worker** (`PENDING_APPROVAL` timeout, reminder, `CONFIRMED → ACTIVE → COMPLETED`), and **Tenant Agent access gather/handoff seam** are live. **Still pending:** real lock adapters beyond `noop`, deposit/payment hooks, and richer NL slot discovery.
 
 **Naming:** **Access Engine** (product). Code module prefix: `access` (e.g. `src/access/`). Staff nav label: **Access** (`/access`). Avoid overloading “amenity” in table names unless we standardize later — tables use `access_*`.
 
@@ -45,15 +45,16 @@
 - Tenant access routes are live under **`/api/tenant/access/*`** with reservation create/cancel and QR/public reserve identify flow.
 - propera-app staff **`/access`** and **`/access/locations/[id]/config`** are live.
 - propera-app tenant **`/tenant/amenities`** and reservation detail flow are live.
+- Shared inbound ACCESS_* handling is live in `runInboundPipeline` via a dedicated access branch beside maintenance core.
+- Access-owned lifecycle jobs are live (`access_lifecycle_jobs`, same cron entrypoint) for approval timeouts, reminders, window activation, completion, and pass expiry.
+- Deterministic access notifications now ride the canonical outgate seam with access-specific copy and tenant/staff reminders.
+- Tenant Agent can now gather amenity intent/location/window and hand off a canonical access payload instead of always deflecting.
 
 **Still not started / incomplete**
 
-- Inbound ACCESS_* router branch for SMS / WhatsApp / Telegram.
-- Access-specific outgate templates and reminders.
-- Lifecycle worker for reservation status progression and pass expiry/revoke.
 - Real lock providers beyond **`noop`**.
 - Deposit / finance hooks.
-- Tenant Agent access handoff (today Access/amenity requests are still deflected by the maintenance-only lane).
+- Richer NL slot-discovery / multi-turn access conversation memory beyond the current deterministic gather.
 
 ---
 
@@ -103,7 +104,7 @@ Tenant Agent should participate in Access as the **communication layer between t
 - **Agent must not own:** availability truth, conflict decisions, policy enforcement, deposit state, credential issuance, or reservation lifecycle state.
 - **Access Engine owns:** deterministic reservation policy, state machine, pass issuance/revoke, reminders, and audit trail.
 - **Integration seam:** Agent gathers `location`, `window`, and `intent` (`reserve`, `cancel`, `status`, `list_slots`) then hands off a **canonical access signal package** to the Access domain. It must route **beside** `handleInboundCore`, not through maintenance intake.
-- **Safe rollout order:** keep today's deflect behavior as fallback; add deep links to existing tenant amenities surfaces first; add true ACCESS_* handoff only after Access lifecycle + outgate are production-solid.
+- **Fallback rule now:** if tenant identity or amenity/window resolution is ambiguous, fall back to a safe prompt or portal deep-link; do not fabricate reservation truth.
 
 ---
 
@@ -111,7 +112,7 @@ Tenant Agent should participate in Access as the **communication layer between t
 
 | Repo | Responsibility |
 |------|----------------|
-| **propera-v2** | Schema, DAL, `src/access/*` engine, lock adapters, router handlers, portal API routes, cron/scheduler for ACTIVE→COMPLETED and credential expiry, outgate templates. |
+| **propera-v2** | Schema, DAL, `src/access/*` engine, lock adapters, router handlers, portal API routes, cron/scheduler for approval timeout/reminder/ACTIVE→COMPLETED + credential expiry, outgate templates. |
 | **propera-app** | Staff **Access** module: location list, policy config tabs, reservation calendar (day/week), reservation detail actions, blackouts, lock status panel, stats bar. Proxies only — no reservation business logic in Next.js. |
 | **Supabase** | `access_*` tables, RLS by org; portal read views optional later (`portal_access_*_v1`). |
 
@@ -131,6 +132,7 @@ All tables include **`org_id`** (FK → `organizations` when present). **`proper
 | **`access_blackouts`** | One-off closures (`start_at`, `end_at`, `reason`, `created_by`). |
 | **`access_reservations`** | Booking record (state machine below). |
 | **`access_passes`** | Issued credential bound to reservation + lock. |
+| **`access_lifecycle_jobs`** | Access-owned approval timeout / reminder / activate / complete queue (migration `066`). |
 | **`access_locks`** | Lock abstraction row per location (0..n; pilot often 1). |
 | **`access_policy_audit`** | Who changed policy fields, when (staff accountability). |
 | **`access_policy_templates`** | *(V1 schema only, UI later)* Org-level named snapshots to seed new locations. |

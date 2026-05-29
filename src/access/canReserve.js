@@ -2,6 +2,7 @@ const { getSupabase } = require("../db/supabase");
 const { getActivePolicy } = require("./getActivePolicy");
 const { evaluateCanReserve } = require("./reservationRules");
 const { BLOCKING_RESERVATION_STATUSES } = require("./constants");
+const { propertyTimezone } = require("./accessLocalTime");
 
 /**
  * @param {object} params
@@ -72,6 +73,7 @@ async function canReserve(params) {
       tenantReservations: filterEx(tenantReservations),
       schedules: schedules || [],
       blackouts: blackouts || [],
+      propertyTimeZone: propertyTimezone(),
     },
     now
   );

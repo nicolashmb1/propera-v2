@@ -26,9 +26,21 @@
 
 **Keep docs current:** When you change behavior, update **this file**, **[PROPERA_V2_GAS_EXIT_PLAN.md](./PROPERA_V2_GAS_EXIT_PLAN.md)** (todos + narrative), and **[OUTSIDE_CURSOR.md](./OUTSIDE_CURSOR.md)** if operators must run new SQL or env steps. See *Documentation discipline* at the bottom.
 
+### Vendor lane (V0/V1 shipped — inbound stub until V2)
+
+Spec: **[VENDOR_LANE.md](./VENDOR_LANE.md)**. **V0/V1:** migration **`069`**, `preloadActorIdentity`, `vendorContacts.js`, `vendorAssignment.js`, portal assign + dispatch. Vendor SMS still **`lane_stub_vendor`** until V2.
+
+| Piece | Location |
+|-------|----------|
+| Lane classify | `preloadActorIdentity.js`, `decideLane.js`, `lanePolicy.js` |
+| Assign + dispatch | `src/dal/vendorAssignment.js` |
+| Portal | `portalTicketAssignment.js`, `registerPortalRoutes.js` |
+| Catalog + contacts | `046`, `069_vendor_lane_v1.sql` |
+| Inbound YES/NO (V2) | `src/brain/vendor/handleVendorInbound.js` (planned) |
+
 ### Access Engine (live partial — separate from maintenance brain)
 
-**Partially shipped.** Spec + status: **[ACCESS_ENGINE_BUILD_PLAN.md](./ACCESS_ENGINE_BUILD_PLAN.md)**. V2 engine/DAL, portal staff routes, tenant access routes, and propera-app `/access` / tenant amenities surfaces are live. Inbound ACCESS_* channel routing, lifecycle worker, and real lock adapters remain pending.
+**Expanded partial live.** Spec + status: **[ACCESS_ENGINE_BUILD_PLAN.md](./ACCESS_ENGINE_BUILD_PLAN.md)**. V2 engine/DAL, portal staff routes, tenant access routes, propera-app `/access` / tenant amenities surfaces, **shared inbound ACCESS_* handling** (SMS / WhatsApp / Telegram), **access-owned lifecycle jobs** (`access_lifecycle_jobs` via the cron seam), and **Tenant Agent access gather/handoff** are live. Real lock adapters and deposit/payment hooks remain pending.
 
 | Piece | Location (planned) |
 |-------|---------------------|
@@ -36,6 +48,10 @@
 | Lock adapters | `src/access/lockAdapter/*` (`noop` pilot) |
 | Portal / staff API | `src/portal/registerPortalRoutes.js` or `registerAccessRoutes.js` |
 | Staff UI | `propera-app` `/access/*` |
+| Shared inbound text path | `src/access/handleAccessInbound.js`, `src/inbound/runInboundPipeline.js`, `src/inbound/routeInboundDecision.js` |
+| Lifecycle jobs / worker | `src/access/accessLifecycleJobs.js`, `src/access/processAccessLifecycleJobs.js`, `supabase/migrations/066_access_lifecycle_jobs.sql` |
+| Access outgate copy | `src/outgate/accessMessageSpecs.js`, `src/access/accessNotifications.js` |
+| Tenant Agent seam | `src/adapters/tenantAgent/maybeHandleAccessTurn.js` |
 
 Inbound ACCESS_* intents route **beside** `handleInboundCore` — same channel adapters, dedicated domain engine.
 
@@ -63,6 +79,24 @@ Inbound ACCESS_* intents route **beside** `handleInboundCore` — same channel a
 | SQL | `supabase/migrations/055_communication_engine.sql`, `065_communication_agent_initiated.sql` |
 
 **Canonical spec + guardrails:** **[COMMUNICATION_ENGINE.md](./COMMUNICATION_ENGINE.md)**. Portal-first surface now; future agent adapter must call the same `/api/communications/*` routes rather than a parallel backend. Reply/status webhooks are live; maintenance handoff remains an explicit stub seam, not a hidden second brain.
+
+### Conflict Mediation Engine (CME-2 write slice — separate from maintenance brain)
+
+**CME-2 in repo:** schema + policy seeds + read/write portal API + courtesy notice SMS. Doctrine: **[CONFLICT_MEDIATION_ENGINE.md](./CONFLICT_MEDIATION_ENGINE.md)**.
+
+| Piece | Location |
+|-------|----------|
+| SQL | `supabase/migrations/067_conflict_mediation_v1.sql`, `071_conflict_policy_seed_v1.sql` |
+| Read DAL | `src/conflictMediation/conflictCaseRead.js` |
+| Write DAL | `src/conflictMediation/conflictCaseWrite.js`, `validateConflictAction.js`, `conflictNoticeOutgate.js` |
+| Portal API | `src/conflictMediation/registerConflictMediationRoutes.js` — `GET/POST /api/conflict/cases`, `GET …/notice-preview`, `POST …/issue-notice`, `GET /api/conflict/policies` |
+| Feature flag | `PROPERA_CONFLICT_MEDIATION_ENABLED=1` |
+| App UI | `propera-app` `/conflicts` — list, report violation, preview/send courtesy notice |
+| Jarvis proposals | Not started — agent does not own case truth (CME-5) |
+
+Inbound conflict-related signals route **beside** `handleInboundCore`. Outbound notices use canonical intent → Outgate; send may delegate to Communication Engine or main channel path. **Do not** model violation lifecycle inside `tickets` or `communication_campaigns`.
+
+Configurable parameters (monitoring window days, escalation thresholds) resolve via **[OPERATIONAL_POLICY_CONFIG.md](./OPERATIONAL_POLICY_CONFIG.md)** — not hardcoded constants. Partial precedent today: `property_policy` + `getSchedPolicySnapshot` / `validateSchedPolicy_`.
 
 ---
 

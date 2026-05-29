@@ -51,6 +51,18 @@ describe("parsePreferredWindowShared (GAS port)", () => {
     assert.equal(parsePreferredWindowShared("", null, { timeZone: "UTC" }), null);
   });
 
+  it("rejects negated before window and uses best time", () => {
+    const p = parsePreferredWindowShared(
+      "tomorrow before 3pm is no good.. best time is 4pm",
+      null,
+      { now: ANCHOR, timeZone: "UTC" }
+    );
+    assert.ok(p);
+    assert.equal(p.kind, "AT");
+    assert.match(p.label, /4:00\s*PM/i);
+    assert.doesNotMatch(p.label, /before\s+3/i);
+  });
+
   it("Intl timeZone must match Node TZ for morning labels (mismatch shows 1–4 PM)", () => {
     const prevTz = process.env.TZ;
     const prevP = process.env.PROPERA_TZ;

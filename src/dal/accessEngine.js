@@ -8,6 +8,14 @@ const { getActivePolicy } = require("../access/getActivePolicy");
 const { issuePassForReservation } = require("../access/issuePassForReservation");
 const { decryptCredentialValue } = require("../access/credentialCrypto");
 const { getLockAdapter } = require("../access/lockAdapter/getLockAdapter");
+const {
+  ACCESS_LIFECYCLE_JOB_TYPES,
+  upsertAccessLifecycleJob,
+  cancelAccessLifecycleJobs,
+} = require("../access/accessLifecycleJobs");
+const { dispatchAccessNotification } = require("../access/accessNotifications");
+const { appendEventLog } = require("./appendEventLog");
+const { staffPhoneForPropertyRole } = require("../adapters/tenantAgent/resolvePropertyStaffContact");
 
 /**
  * @param {object} row
@@ -377,9 +385,11 @@ async function listSchedulesForLocation(locationId) {
 async function listBlackoutsForLocation(locationId, from, to) {
   const sb = getSupabase();
   if (!sb) return [];
+  const fromIso = from instanceof Date ? from.toISOString() : from;
+  const toIso = to instanceof Date ? to.toISOString() : to;
   let q = sb.from("access_blackouts").select("*").eq("location_id", locationId);
-  if (from) q = q.gte("end_at", from);
-  if (to) q = q.lte("start_at", to);
+  if (fromIso) q = q.gte("end_at", fromIso);
+  if (toIso) q = q.lte("start_at", toIso);
   const { data } = await q.order("start_at");
   return (data || []).map((r) => ({
     id: r.id,
@@ -393,12 +403,14 @@ async function listBlackoutsForLocation(locationId, from, to) {
 async function listReservationsForLocation(locationId, from, to) {
   const sb = getSupabase();
   if (!sb) return [];
+  const fromIso = from instanceof Date ? from.toISOString() : from;
+  const toIso = to instanceof Date ? to.toISOString() : to;
   let q = sb
     .from("access_reservations")
     .select("*, tenant_roster:tenant_id (resident_name, unit_label, phone_e164)")
     .eq("location_id", locationId);
-  if (from) q = q.gte("end_at", from);
-  if (to) q = q.lte("start_at", to);
+  if (fromIso) q = q.gte("end_at", fromIso);
+  if (toIso) q = q.lte("start_at", toIso);
   const { data } = await q.order("start_at");
   const passIds = (data || []).map((r) => r.access_pass_id).filter(Boolean);
   let passesById = {};
@@ -682,8 +694,286 @@ async function getReservationDetail(reservationId) {
   return mapped;
 }
 
+function parseActorAndOptions(actorOrOptions, maybeOptions) {
+  if (actorOrOptions && typeof actorOrOptions === "object" && !Array.isArray(actorOrOptions)) {
+    return {
+      actor: String(actorOrOptions.actor || "").trim(),
+      opts: actorOrOptions,
+    };
+  }
+  return {
+    actor: String(actorOrOptions || "").trim(),
+    opts:
+      maybeOptions && typeof maybeOptions === "object" && !Array.isArray(maybeOptions)
+        ? maybeOptions
+        : {},
+  };
+}
+
+function prefersStructuredOnlyChannel(channel) {
+  const ch = String(channel || "").trim().toLowerCase();
+  return ch === "portal" || ch === "tenant_portal" || ch === "qr_portal" || ch === "staff_override";
+}
+
+async function resolveStaffNotificationPhone(sb, propertyCode) {
+  const code = String(propertyCode || "").trim().toUpperCase();
+  if (!sb || !code) return "";
+  for (const prefix of ["SUPER|", "PM|"]) {
+    const phone = await staffPhoneForPropertyRole(sb, code, prefix);
+    if (phone) return phone;
+  }
+  return "";
+}
+
+async function loadReservationBundle(sb, reservationId) {
+  const id = String(reservationId || "").trim();
+  if (!sb || !id) return null;
+  const { data: row } = await sb
+    .from("access_reservations")
+    .select("*, tenant_roster:tenant_id (resident_name, unit_label, phone_e164)")
+    .eq("id", id)
+    .maybeSingle();
+  if (!row) return null;
+
+  let pass = null;
+  if (row.access_pass_id) {
+    const { data: passRow } = await sb
+      .from("access_passes")
+      .select("*, access_locks:lock_id (*)")
+      .eq("id", row.access_pass_id)
+      .maybeSingle();
+    pass = passRow || null;
+  }
+
+  const location = await getAccessLocationById(row.location_id);
+  const policy = await getActivePolicy(sb, row.location_id);
+  return { row, pass, location, policy, tenant: row.tenant_roster || null };
+}
+
+async function updatePassStatusForReservation(sb, reservationRow, nextStatus, actor = "") {
+  if (!sb || !reservationRow || !reservationRow.access_pass_id) return null;
+  const status = String(nextStatus || "").trim().toUpperCase();
+  if (!status) return null;
+  const patch = {
+    status,
+  };
+  if (status === "ACTIVE") {
+    patch.revoked_at = null;
+    patch.revoked_by = "";
+  } else if (status === "REVOKED" || status === "EXPIRED") {
+    patch.revoked_at = new Date().toISOString();
+    patch.revoked_by = String(actor || "").trim();
+  }
+  const { data } = await sb
+    .from("access_passes")
+    .update(patch)
+    .eq("id", reservationRow.access_pass_id)
+    .select("*")
+    .maybeSingle();
+  return data || null;
+}
+
+async function revokePassForReservation(sb, reservationRow, actor = "", nextStatus = "REVOKED") {
+  if (!sb || !reservationRow || !reservationRow.access_pass_id) return null;
+  const { data: pass } = await sb
+    .from("access_passes")
+    .select("*, access_locks:lock_id (*)")
+    .eq("id", reservationRow.access_pass_id)
+    .maybeSingle();
+  if (!pass) return null;
+  if (pass.access_locks) {
+    const adapter = getLockAdapter(pass.access_locks.provider);
+    await adapter.revokeCredential(pass.access_locks.id, pass.id);
+  }
+  const status = String(nextStatus || "REVOKED").trim().toUpperCase() || "REVOKED";
+  await sb
+    .from("access_passes")
+    .update({
+      status,
+      revoked_at: new Date().toISOString(),
+      revoked_by: String(actor || "").trim(),
+    })
+    .eq("id", pass.id);
+  return pass;
+}
+
+async function syncReservationLifecycleJobsForRow(sb, reservationRow, policy) {
+  if (!sb || !reservationRow) return;
+  await cancelAccessLifecycleJobs(sb, reservationRow.id);
+
+  const status = String(reservationRow.status || "").trim().toUpperCase();
+  if (
+    status === "CANCELLED" ||
+    status === "COMPLETED" ||
+    status === "NO_SHOW" ||
+    status === "PENDING_DEPOSIT"
+  ) {
+    return;
+  }
+
+  const startAt = new Date(reservationRow.start_at);
+  const endAt = new Date(reservationRow.end_at);
+  if (!Number.isFinite(startAt.getTime()) || !Number.isFinite(endAt.getTime())) return;
+
+  if (status === "PENDING_APPROVAL") {
+    const timeoutMin = Math.max(1, Number(policy?.approval_timeout_min) || 60);
+    const approvalAt = new Date(
+      new Date(reservationRow.created_at || reservationRow.updated_at || new Date()).getTime() +
+        timeoutMin * 60000
+    );
+    await upsertAccessLifecycleJob(sb, {
+      reservationId: reservationRow.id,
+      jobType: ACCESS_LIFECYCLE_JOB_TYPES.APPROVAL_TIMEOUT,
+      runAt: approvalAt,
+      payload: {
+        action: String(policy?.approval_timeout_action || "auto_cancel").trim().toLowerCase(),
+      },
+    });
+    return;
+  }
+
+  if (status === "CONFIRMED" || status === "ACTIVE") {
+    const reminderBeforeMin = Math.max(0, Number(policy?.reminder_before_min) || 0);
+    if (reminderBeforeMin > 0) {
+      const reminderAt = new Date(startAt.getTime() - reminderBeforeMin * 60000);
+      if (reminderAt.getTime() > Date.now()) {
+        await upsertAccessLifecycleJob(sb, {
+          reservationId: reservationRow.id,
+          jobType: ACCESS_LIFECYCLE_JOB_TYPES.REMINDER,
+          runAt: reminderAt,
+        });
+      }
+    }
+
+    if (status === "CONFIRMED") {
+      await upsertAccessLifecycleJob(sb, {
+        reservationId: reservationRow.id,
+        jobType: ACCESS_LIFECYCLE_JOB_TYPES.START_WINDOW,
+        runAt: startAt,
+      });
+    }
+
+    await upsertAccessLifecycleJob(sb, {
+      reservationId: reservationRow.id,
+      jobType: ACCESS_LIFECYCLE_JOB_TYPES.END_WINDOW,
+      runAt: endAt,
+    });
+  }
+}
+
+async function syncReservationLifecycleJobs(reservationId) {
+  const sb = getSupabase();
+  if (!sb) return;
+  const bundle = await loadReservationBundle(sb, reservationId);
+  if (!bundle) return;
+  await syncReservationLifecycleJobsForRow(sb, bundle.row, bundle.policy);
+}
+
+async function notifyReservationEvent(bundle, templateKey, opts = {}) {
+  if (!bundle || !bundle.row || !bundle.location) return;
+  const sb = getSupabase();
+  if (!sb) return;
+  const traceId = String(opts.traceId || "").trim();
+  const detail = await getReservationDetail(bundle.row.id);
+  if (!detail) return;
+
+  const context = {
+    propertyCode: bundle.location.propertyCode,
+    locationName: bundle.location.name,
+    startAt: detail.startAt,
+    endAt: detail.endAt,
+    tenantName: detail.tenantName,
+    unitLabel: detail.unitLabel,
+    pin: detail.pin || "",
+    pinMasked: detail.pinMasked || "",
+  };
+  const preferredChannel = prefersStructuredOnlyChannel(detail.channel) ? "sms" : detail.channel;
+
+  const tenantTemplate = String(templateKey || "").trim();
+  const shouldSendTenant =
+    !!detail.tenantPhone &&
+    (!!opts.forceTenantNotification ||
+      !prefersStructuredOnlyChannel(detail.channel) ||
+      tenantTemplate === "ACCESS_TENANT_REMINDER" ||
+      tenantTemplate === "ACCESS_TENANT_ACTIVE" ||
+      tenantTemplate === "ACCESS_TENANT_COMPLETED" ||
+      tenantTemplate === "ACCESS_TENANT_DENIED");
+
+  if (shouldSendTenant && tenantTemplate) {
+    await dispatchAccessNotification({
+      sb,
+      traceId,
+      reservationId: detail.id,
+      templateKey: tenantTemplate,
+      recipientPhoneE164: detail.tenantPhone,
+      preferredChannel,
+      audience: "tenant",
+      tenantActorKey: detail.tenantPhone,
+      context,
+    });
+  }
+
+  const notifyReserve = bundle.policy?.staff_notify_on_reserve !== false;
+  const notifyCancel = bundle.policy?.staff_notify_on_cancel !== false;
+  const notifyReminder = !!bundle.policy?.staff_notify_reminder_copy;
+  let staffTemplateKey = "";
+  if (
+    tenantTemplate === "ACCESS_TENANT_RESERVATION_CONFIRMED" ||
+    tenantTemplate === "ACCESS_TENANT_APPROVED"
+  ) {
+    staffTemplateKey = notifyReserve ? "ACCESS_STAFF_NEW_RESERVATION" : "";
+  } else if (tenantTemplate === "ACCESS_TENANT_APPROVAL_REQUIRED") {
+    staffTemplateKey = "ACCESS_STAFF_APPROVAL_REQUIRED";
+  } else if (
+    tenantTemplate === "ACCESS_TENANT_CANCELLED" ||
+    tenantTemplate === "ACCESS_TENANT_DENIED"
+  ) {
+    staffTemplateKey = notifyCancel ? "ACCESS_STAFF_CANCELLED" : "";
+  } else if (tenantTemplate === "ACCESS_TENANT_REMINDER") {
+    staffTemplateKey = notifyReminder ? "ACCESS_STAFF_REMINDER" : "";
+  }
+
+  if (!staffTemplateKey) return;
+
+  if (
+    staffTemplateKey === "ACCESS_STAFF_NEW_RESERVATION" ||
+    staffTemplateKey === "ACCESS_STAFF_APPROVAL_REQUIRED"
+  ) {
+    try {
+      const { notifyPortalPushAmenityReservation } = require("../portal/pushNotifications");
+      void notifyPortalPushAmenityReservation({
+        reservationId: detail.id,
+        locationName: context.locationName,
+        tenantName: context.tenantName,
+        unitLabel: context.unitLabel,
+        propertyCode: context.propertyCode,
+        needsApproval: staffTemplateKey === "ACCESS_STAFF_APPROVAL_REQUIRED",
+      }).catch(() => {});
+    } catch (_) {
+      /* push is best-effort */
+    }
+  }
+
+  const staffPhone = await resolveStaffNotificationPhone(sb, bundle.location.propertyCode);
+  if (!staffPhone) return;
+
+  await dispatchAccessNotification({
+    sb,
+    traceId,
+    reservationId: detail.id,
+    templateKey: staffTemplateKey,
+    recipientPhoneE164: staffPhone,
+    preferredChannel: "sms",
+    audience: "staff",
+    context,
+  });
+}
+
 async function createReservationForPortal(body, actor = "") {
   const sb = getSupabase();
+  const parsed = parseActorAndOptions(actor);
+  actor = parsed.actor;
+  const opts = parsed.opts;
   const locationId = String(body.locationId || body.location_id || "").trim();
   const tenantId = String(body.tenantId || body.tenant_id || "").trim();
   const startAt = body.startAt || body.start_at;
@@ -744,11 +1034,38 @@ async function createReservationForPortal(body, actor = "") {
 
   const detail = await getReservationDetail(res.id);
   if (pin) detail.pin = pin;
+  await syncReservationLifecycleJobsForRow(sb, res, policy);
+  const bundle = await loadReservationBundle(sb, res.id);
+  if (bundle) {
+    try {
+      await notifyReservationEvent(
+        bundle,
+        status === "PENDING_APPROVAL"
+          ? "ACCESS_TENANT_APPROVAL_REQUIRED"
+          : "ACCESS_TENANT_RESERVATION_CONFIRMED",
+        { traceId: opts.traceId }
+      );
+    } catch (notifyErr) {
+      const message = String(notifyErr?.message || notifyErr || "access_notify_failed").trim();
+      await appendEventLog({
+        traceId: String(opts.traceId || "").trim(),
+        log_kind: "access_engine",
+        event: "ACCESS_RESERVE_NOTIFY_FAILED",
+        payload: {
+          reservation_id: res.id,
+          error: message.slice(0, 500),
+        },
+      });
+    }
+  }
   return detail;
 }
 
 async function approveReservation(reservationId, actor = "") {
   const sb = getSupabase();
+  const parsed = parseActorAndOptions(actor);
+  actor = parsed.actor;
+  const opts = parsed.opts;
   const { data: res } = await sb
     .from("access_reservations")
     .select("*")
@@ -775,11 +1092,23 @@ async function approveReservation(reservationId, actor = "") {
   }
   const detail = await getReservationDetail(reservationId);
   if (pin) detail.pin = pin;
+  await syncReservationLifecycleJobs(reservationId);
+  const bundle = await loadReservationBundle(sb, reservationId);
+  if (bundle) {
+    await notifyReservationEvent(
+      bundle,
+      String(opts.templateKey || "").trim() || "ACCESS_TENANT_APPROVED",
+      { traceId: opts.traceId }
+    );
+  }
   return detail;
 }
 
 async function cancelReservation(reservationId, actor = "") {
   const sb = getSupabase();
+  const parsed = parseActorAndOptions(actor);
+  actor = parsed.actor;
+  const opts = parsed.opts;
   const { data: res } = await sb
     .from("access_reservations")
     .select("*")
@@ -787,25 +1116,7 @@ async function cancelReservation(reservationId, actor = "") {
     .maybeSingle();
   if (!res) throw new Error("not_found");
 
-  if (res.access_pass_id) {
-    const { data: pass } = await sb
-      .from("access_passes")
-      .select("*, access_locks:lock_id (*)")
-      .eq("id", res.access_pass_id)
-      .maybeSingle();
-    if (pass?.access_locks) {
-      const adapter = getLockAdapter(pass.access_locks.provider);
-      await adapter.revokeCredential(pass.access_locks.id, pass.id);
-      await sb
-        .from("access_passes")
-        .update({
-          status: "REVOKED",
-          revoked_at: new Date().toISOString(),
-          revoked_by: actor,
-        })
-        .eq("id", pass.id);
-    }
-  }
+  await revokePassForReservation(sb, res, actor, "EXPIRED");
 
   await sb
     .from("access_reservations")
@@ -816,11 +1127,21 @@ async function cancelReservation(reservationId, actor = "") {
     })
     .eq("id", reservationId);
 
+  await syncReservationLifecycleJobs(reservationId);
+  const bundle = await loadReservationBundle(sb, reservationId);
+  if (bundle) {
+    await notifyReservationEvent(bundle, "ACCESS_TENANT_CANCELLED", {
+      traceId: opts.traceId,
+      forceTenantNotification: !!opts.forceTenantNotification,
+    });
+  }
   return getReservationDetail(reservationId);
 }
 
 async function regeneratePin(reservationId, actor = "") {
   const sb = getSupabase();
+  const parsed = parseActorAndOptions(actor);
+  actor = parsed.actor;
   const { data: res } = await sb
     .from("access_reservations")
     .select("*")
@@ -845,11 +1166,14 @@ async function regeneratePin(reservationId, actor = "") {
   const issued = await issuePassForReservation(sb, res, lock, actor);
   const detail = await getReservationDetail(reservationId);
   detail.pin = issued.pin;
+  await syncReservationLifecycleJobs(reservationId);
   return detail;
 }
 
 async function patchReservationTimes(reservationId, body, actor = "") {
   const sb = getSupabase();
+  const parsed = parseActorAndOptions(actor);
+  actor = parsed.actor;
   const { data: res } = await sb
     .from("access_reservations")
     .select("*")
@@ -866,6 +1190,7 @@ async function patchReservationTimes(reservationId, body, actor = "") {
     startAt,
     endAt,
     excludeReservationId: reservationId,
+    staffOverride: true,
   });
   if (!check.allowed) {
     const err = new Error(check.reason);
@@ -884,8 +1209,115 @@ async function patchReservationTimes(reservationId, body, actor = "") {
     })
     .eq("id", reservationId);
 
-  if (res.access_pass_id && res.status === "CONFIRMED") {
+  if (res.access_pass_id && (res.status === "CONFIRMED" || res.status === "ACTIVE")) {
     return regeneratePin(reservationId, actor);
+  }
+  await syncReservationLifecycleJobs(reservationId);
+  return getReservationDetail(reservationId);
+}
+
+async function denyReservationByTimeout(reservationId, actor = "", opts = {}) {
+  const sb = getSupabase();
+  const { data: res } = await sb
+    .from("access_reservations")
+    .select("*")
+    .eq("id", reservationId)
+    .maybeSingle();
+  if (!res) throw new Error("not_found");
+  if (res.status !== "PENDING_APPROVAL") return getReservationDetail(reservationId);
+
+  await sb
+    .from("access_reservations")
+    .update({
+      status: "CANCELLED",
+      cancelled_by: String(actor || "").trim(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", reservationId);
+
+  await syncReservationLifecycleJobs(reservationId);
+  const bundle = await loadReservationBundle(sb, reservationId);
+  if (bundle) {
+    await notifyReservationEvent(bundle, "ACCESS_TENANT_DENIED", {
+      traceId: opts.traceId,
+      forceTenantNotification: true,
+    });
+  }
+  return getReservationDetail(reservationId);
+}
+
+async function markReservationActive(reservationId, opts = {}) {
+  const sb = getSupabase();
+  const actor = String(opts.actor || "").trim();
+  const { data: res } = await sb
+    .from("access_reservations")
+    .select("*")
+    .eq("id", reservationId)
+    .maybeSingle();
+  if (!res) throw new Error("not_found");
+
+  if (opts.dryRunReminder) {
+    if (res.status !== "CONFIRMED") return getReservationDetail(reservationId);
+    const bundle = await loadReservationBundle(sb, reservationId);
+    if (bundle) {
+      await notifyReservationEvent(bundle, "ACCESS_TENANT_REMINDER", {
+        traceId: opts.traceId,
+        forceTenantNotification: true,
+      });
+    }
+    return getReservationDetail(reservationId);
+  }
+
+  if (res.status === "ACTIVE") return getReservationDetail(reservationId);
+  if (res.status !== "CONFIRMED") return getReservationDetail(reservationId);
+
+  await sb
+    .from("access_reservations")
+    .update({
+      status: "ACTIVE",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", reservationId);
+  await updatePassStatusForReservation(sb, res, "ACTIVE", actor);
+  await syncReservationLifecycleJobs(reservationId);
+  const bundle = await loadReservationBundle(sb, reservationId);
+  if (bundle) {
+    await notifyReservationEvent(bundle, "ACCESS_TENANT_ACTIVE", {
+      traceId: opts.traceId,
+      forceTenantNotification: true,
+    });
+  }
+  return getReservationDetail(reservationId);
+}
+
+async function completeReservationLifecycle(reservationId, opts = {}) {
+  const sb = getSupabase();
+  const actor = String(opts.actor || "").trim();
+  const { data: res } = await sb
+    .from("access_reservations")
+    .select("*")
+    .eq("id", reservationId)
+    .maybeSingle();
+  if (!res) throw new Error("not_found");
+  if (["CANCELLED", "COMPLETED", "NO_SHOW"].includes(String(res.status || "").trim())) {
+    return getReservationDetail(reservationId);
+  }
+
+  await revokePassForReservation(sb, res, actor);
+  await sb
+    .from("access_reservations")
+    .update({
+      status: "COMPLETED",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", reservationId);
+  await syncReservationLifecycleJobs(reservationId);
+  const bundle = await loadReservationBundle(sb, reservationId);
+  if (bundle) {
+    await notifyReservationEvent(bundle, "ACCESS_TENANT_COMPLETED", {
+      traceId: opts.traceId,
+      forceTenantNotification: true,
+    });
   }
   return getReservationDetail(reservationId);
 }
@@ -911,4 +1343,8 @@ module.exports = {
   cancelReservation,
   regeneratePin,
   patchReservationTimes,
+  syncReservationLifecycleJobs,
+  denyReservationByTimeout,
+  markReservationActive,
+  completeReservationLifecycle,
 };

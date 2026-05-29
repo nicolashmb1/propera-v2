@@ -38,7 +38,8 @@ Do these in your **web browser** at [supabase.com](https://supabase.com):
    - **Preventive → ticket bridge:** after **`059`**, run **`060_program_line_ticket_bridge.sql`** — links checklist lines to maintenance tickets.
    - **Open deck day chart:** optional **`061_open_deck_day_chart_note.sql`** (comment-only). Enable **`PROPERA_OPEN_DECK_DAY_CHART_ENABLED=1`** on V2 and **`NEXT_PUBLIC_PROPERA_OPEN_DECK_DAY_CHART_ENABLED=1`** on propera-app (no schema required).
    - **Propera Chat voice notes:** after **`026`**, run **`054_pm_attachments_audio_mime.sql`** — adds audio (and PDF) MIME types to **`pm-attachments`**; without it, `/api/portal/chat-audio-upload` fails with “mime type not allowed”.
-   - **Communication Engine:** run **`055_communication_engine.sql`** after **`012`** + **`030`**, then run **`065_communication_agent_initiated.sql`** (agent audit flag on campaigns). Set **`PROPERA_COMMUNICATION_ENGINE_ENABLED=1`**, **`TWILIO_OUTBOUND_ENABLED=1`**, **`COMM_ORG_ID`**, **`TWILIO_BROADCAST_FROM`**, and **`COMM_MAIN_NUMBER_DISPLAY`** in `propera-v2/.env`. Provision a **second** Twilio number; point its webhook to `https://<host>/webhooks/communications/sms` and status URL to `.../webhooks/communications/status` (not `/webhooks/sms`). See **`docs/COMMUNICATION_ENGINE.md`**.
+  - **Communication Engine:** run **`055_communication_engine.sql`** after **`012`** + **`030`**, then run **`065_communication_agent_initiated.sql`** (agent audit flag on campaigns). Set **`PROPERA_COMMUNICATION_ENGINE_ENABLED=1`**, **`TWILIO_OUTBOUND_ENABLED=1`**, **`COMM_ORG_ID`**, **`TWILIO_BROADCAST_FROM`**, and **`COMM_MAIN_NUMBER_DISPLAY`** in `propera-v2/.env`. Provision a **second** Twilio number; point its webhook to `https://<host>/webhooks/communications/sms` and status URL to `.../webhooks/communications/status` (not `/webhooks/sms`). See **`docs/COMMUNICATION_ENGINE.md`**.
+  - **Access Engine lifecycle completion:** after **`057_access_engine_v1.sql`** (and **`058`** if you already use the current access stack), run **`066_access_lifecycle_jobs.sql`** so access reservations can auto-timeout approvals, send reminders, activate on window start, and complete/expire passes on window end.
    - **Vendor directory + preventive line vendor:** run **`046_vendors_and_program_line_vendor.sql`**, then insert active vendors in SQL Editor, e.g. `insert into public.vendors (vendor_id, display_name, active) values ('VND_PLUMB_CO', 'Acme Plumbing', true) on conflict (vendor_id) do nothing;`
    - **Tenant Agent (AI Staff adapter):** run **`063_tenant_conversations.sql`** after **`001_core`** (needs Postgres). Required before **`TENANT_AGENT_ENABLED=1`** in prod. Conversation state only — not a substitute for `intake_sessions`. See **`docs/TENANT_AGENT_ADAPTER.md`**. Env: **`TENANT_AGENT_*`** in `.env.example`.
 
@@ -89,7 +90,7 @@ Production **Twilio → GAS** stays as-is until you intentionally change it.
 
 ## Lifecycle timer cron (outside V2 process)
 
-**Timestamps in Postgres do not run lifecycle.** Someone must periodically **`POST /internal/cron/lifecycle-timers`** on the V2 instance that uses your Supabase DB, with header **`x-propera-cron-secret`** matching **`LIFECYCLE_CRON_SECRET`** (must be non-empty in prod).
+**Timestamps in Postgres do not run lifecycle.** Someone must periodically **`POST /internal/cron/lifecycle-timers`** on the V2 instance that uses your Supabase DB, with header **`x-propera-cron-secret`** matching **`LIFECYCLE_CRON_SECRET`** (must be non-empty in prod). This cron now fans out to both **maintenance lifecycle timers** and **access lifecycle jobs**.
 
 - **Interval:** every 1–5 minutes is typical.
 - **Dev / ngrok:** point the caller at your tunnel URL; ngrok hostnames are temporary.

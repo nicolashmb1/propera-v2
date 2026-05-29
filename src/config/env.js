@@ -320,6 +320,28 @@ function communicationEngineEnabled() {
   return env("PROPERA_COMMUNICATION_ENGINE_ENABLED", "") === "1";
 }
 
+/** Conflict Mediation Engine — CME-1 portal read routes (`/api/conflict/*`). */
+function conflictMediationEngineEnabled() {
+  return env("PROPERA_CONFLICT_MEDIATION_ENABLED", "") === "1";
+}
+
+/** Staff portal Web Push (`PROPERA_PORTAL_PUSH_ENABLED=1` + VAPID keys). */
+function portalPushEnabled() {
+  return env("PROPERA_PORTAL_PUSH_ENABLED", "") === "1";
+}
+
+function vapidPublicKey() {
+  return String(env("PROPERA_VAPID_PUBLIC_KEY", "")).trim();
+}
+
+function vapidPrivateKey() {
+  return String(env("PROPERA_VAPID_PRIVATE_KEY", "")).trim();
+}
+
+function vapidSubject() {
+  return String(env("PROPERA_VAPID_SUBJECT", "mailto:ops@usepropera.com")).trim();
+}
+
 /** Dedicated Twilio number for broadcast SMS (separate from maintenance main number). */
 function twilioBroadcastFrom() {
   return String(env("TWILIO_BROADCAST_FROM", "")).trim();
@@ -430,6 +452,31 @@ function tenantAgentFallbackToLegacy() {
   return envFlagTrue("TENANT_AGENT_FALLBACK_TO_LEGACY", false);
 }
 
+/** Portal Jarvis Ask — read-only staff Q&A (`portal_chat_mode: jarvis_ask`). */
+function jarvisAskEnabled() {
+  return envFlagTrue("JARVIS_ASK_ENABLED", false);
+}
+
+/** Portal Jarvis Plan — propose → confirm (`portal_chat_mode: jarvis_plan`). */
+function jarvisPlanEnabled() {
+  return envFlagTrue("JARVIS_PLAN_ENABLED", false);
+}
+
+/** Jarvis operator thread state (`jarvis_operator_threads`). */
+function jarvisThreadEnabled() {
+  return envFlagTrue("JARVIS_THREAD_ENABLED", false);
+}
+
+/** Optional LLM wording on top of deterministic Jarvis Ask facts (requires OPENAI_API_KEY). */
+function jarvisAskLlmEnabled() {
+  return envFlagTrue("JARVIS_ASK_LLM_ENABLED", false);
+}
+
+function jarvisAskLlmModel() {
+  const m = String(env("JARVIS_ASK_LLM_MODEL", "")).trim();
+  return m || openaiModelExtract();
+}
+
 /** Adapter conversation row TTL (hours). Default 48; 0 = disable lazy expiry. */
 function tenantAgentConversationTtlHours() {
   const raw = env("TENANT_AGENT_CONVERSATION_TTL_HOURS", "48");
@@ -469,6 +516,11 @@ module.exports = {
   tenantAgentLlmModel,
   tenantAgentFallbackToLegacy,
   tenantAgentConversationTtlHours,
+  jarvisAskEnabled,
+  jarvisAskLlmEnabled,
+  jarvisAskLlmModel,
+  jarvisPlanEnabled,
+  jarvisThreadEnabled,
   intakeMediaSignalEnabled,
   intakeMediaVisionEnabled,
   openaiModelVision,
@@ -489,6 +541,11 @@ module.exports = {
   financeCostCaptureChatEnabled,
   financeCostCapturePropertyAllowlist,
   communicationEngineEnabled,
+  conflictMediationEngineEnabled,
+  portalPushEnabled,
+  vapidPublicKey,
+  vapidPrivateKey,
+  vapidSubject,
   twilioBroadcastFrom,
   communicationOrgId,
   commReplyWindowHours,

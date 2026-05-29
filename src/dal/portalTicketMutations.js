@@ -682,15 +682,21 @@ async function tryPortalPmTicketMutation(o) {
   );
   const f = parsed.fields || {};
   let canonicalStatus = "";
+  let statusTransitionApplied = false;
 
   if (f.statusRaw) {
     canonicalStatus = normalizePortalTicketStatus(String(f.statusRaw));
     if (canonicalStatus) {
-      ticketPatch.status = canonicalStatus;
-      if (canonicalStatus === "Open") {
-        ticketPatch.closed_at = null;
-      } else if (canonicalStatus === "Completed" || canonicalStatus === "Deleted") {
-        ticketPatch.closed_at = now;
+      const currentCanonicalStatus = normalizePortalTicketStatus(String(ticket.status || ""));
+      // Avoid redundant no-op transitions (e.g. OPEN -> Open) when saving edits.
+      if (currentCanonicalStatus !== canonicalStatus) {
+        statusTransitionApplied = true;
+        ticketPatch.status = canonicalStatus;
+        if (canonicalStatus === "Open") {
+          ticketPatch.closed_at = null;
+        } else if (canonicalStatus === "Completed" || canonicalStatus === "Deleted") {
+          ticketPatch.closed_at = now;
+        }
       }
     }
   }
@@ -802,28 +808,28 @@ async function tryPortalPmTicketMutation(o) {
 
   /** @type {Record<string, unknown> | null} */
   let wiPatch = null;
-  if (canonicalStatus === "Open") {
+  if (statusTransitionApplied && canonicalStatus === "Open") {
     wiPatch = {
       status: "OPEN",
       state: "UNSCHEDULED",
       substate: "",
       updated_at: now,
     };
-  } else if (canonicalStatus === "Completed") {
+  } else if (statusTransitionApplied && canonicalStatus === "Completed") {
     wiPatch = {
       status: "COMPLETED",
       state: "DONE",
       substate: "",
       updated_at: now,
     };
-  } else if (canonicalStatus === "Deleted") {
+  } else if (statusTransitionApplied && canonicalStatus === "Deleted") {
     wiPatch = {
       status: "CANCELED",
       state: "DONE",
       substate: "",
       updated_at: now,
     };
-  } else if (canonicalStatus === "In Progress") {
+  } else if (statusTransitionApplied && canonicalStatus === "In Progress") {
     wiPatch = {
       status: "OPEN",
       state: "IN_PROGRESS",
@@ -916,7 +922,7 @@ async function tryPortalPmTicketMutation(o) {
       lookup_hint: parsed.humanTicketId !== resolvedTicketId ? parsed.humanTicketId : undefined,
       ticket_key: ticketKey,
       fields: f,
-      canonical_status: canonicalStatus || undefined,
+      canonical_status: statusTransitionApplied ? canonicalStatus : undefined,
       attachments_added:
         f.attachmentsAdd && Array.isArray(f.attachmentsAdd) ? f.attachmentsAdd.length : 0,
       schedule_commit: scheduleAppliedLabel ? { applied: true, label: scheduleAppliedLabel } : undefined,
@@ -924,7 +930,7 @@ async function tryPortalPmTicketMutation(o) {
   });
 
   const bits = [];
-  if (canonicalStatus) bits.push("status " + canonicalStatus);
+  if (statusTransitionApplied && canonicalStatus) bits.push("status " + canonicalStatus);
   if (Object.prototype.hasOwnProperty.call(f, "issue")) bits.push("issue");
   if (Object.prototype.hasOwnProperty.call(f, "category")) bits.push("category");
   if (Object.prototype.hasOwnProperty.call(f, "urgency")) bits.push("urgency");
@@ -938,7 +944,11 @@ async function tryPortalPmTicketMutation(o) {
     ok: true,
     brain: "portal_ticket_mutation",
     replyText: "Saved: " + resolvedTicketId + " (" + (bits.length ? bits.join(", ") : "fields") + ").",
-    resolution: { kind: "update", humanTicketId: resolvedTicketId, canonicalStatus },
+    resolution: {
+      kind: "update",
+      humanTicketId: resolvedTicketId,
+      canonicalStatus: statusTransitionApplied ? canonicalStatus : "",
+    },
     db: { ticketPatch, work_items: wiPatch },
   };
 }

@@ -30,6 +30,8 @@ const COMM_STATUSES = new Set([
 
 const CAMPAIGN_SELECT =
   "id, org_id, title, comm_type, status, audience_kind, audience_filter, audience_snapshot, message_body, comm_type_key, ai_assisted, agent_initiated, tone, language, scheduled_at, sent_at, created_by, total_recipients, total_sent, total_delivered, total_failed, created_at, updated_at";
+const CAMPAIGN_RECIPIENT_DETAIL_LIMIT = 200;
+const CAMPAIGN_REPLY_DETAIL_LIMIT = 100;
 
 function normalizeCommType(raw) {
   const value = String(raw || "").trim().toUpperCase();
@@ -93,6 +95,11 @@ function countRecipientStatuses(rows) {
   return { totalRecipients, totalSendable, totalFailed };
 }
 
+function isPortalOnlyDelivery(audienceFilter) {
+  const f = audienceFilter && typeof audienceFilter === "object" ? audienceFilter : {};
+  return String(f.delivery_mode || "").trim().toLowerCase() === "portal_only";
+}
+
 function mapCampaignRow(row) {
   if (!row) return null;
   return {
@@ -125,6 +132,50 @@ function mapCampaignRow(row) {
     totalFailed: Number(row.total_failed || 0),
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null,
+  };
+}
+
+function mapRecipientDetailRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    tenantId: row.tenant_id || "",
+    propertyCode: String(row.property_code || "").trim().toUpperCase(),
+    unitId: row.unit_id || "",
+    unitLabel: String(row.unit_label_snapshot || "").trim(),
+    tenantName: String(row.tenant_name_snapshot || "").trim(),
+    phone: String(row.phone_e164_snapshot || "").trim(),
+    channel: String(row.channel || "sms").trim() || "sms",
+    status: String(row.status || "").trim(),
+    twilioMessageSid: String(row.twilio_message_sid || "").trim(),
+    errorCode: String(row.error_code || "").trim(),
+    errorMessage: String(row.error_message || "").trim(),
+    queuedAt: row.queued_at || null,
+    sentAt: row.sent_at || null,
+    deliveredAt: row.delivered_at || null,
+    failedAt: row.failed_at || null,
+    createdAt: row.created_at || null,
+  };
+}
+
+function mapReplyDetailRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    campaignId: row.campaign_id || null,
+    recipientId: row.recipient_id || null,
+    tenantId: row.tenant_id || null,
+    propertyCode: String(row.property_code || "").trim().toUpperCase(),
+    unitId: row.unit_id || null,
+    phoneFrom: String(row.phone_from || "").trim(),
+    messageBody: String(row.message_body || "").trim(),
+    replyClass: String(row.reply_class || "").trim(),
+    twilioMessageSid: String(row.twilio_message_sid || "").trim(),
+    autoResponseSent: String(row.auto_response_sent || "").trim(),
+    handoffCreated: row.handoff_created === true,
+    ticketSeedId: row.ticket_seed_id || null,
+    receivedAt: row.received_at || null,
+    createdAt: row.created_at || null,
   };
 }
 
@@ -195,6 +246,11 @@ async function updateCampaignDraft(input, opts) {
       language: nextLanguage,
       brandContext,
       audienceLabel: audienceLabelPreview.audienceLabel,
+      deliveryMode:
+        campaignOut.row.audience_filter &&
+        typeof campaignOut.row.audience_filter === "object"
+          ? campaignOut.row.audience_filter.delivery_mode
+          : "",
     });
     if (!drafted.ok) return drafted;
     nextMessageBody = normalizeDraftBody(drafted.body);
@@ -368,6 +424,32 @@ async function getCampaignDetail(id) {
     return { ok: false, error: replyError.message || "reply_summary_failed" };
   }
 
+  const { data: recipientDetailRows, error: recipientDetailError } = await sb
+    .from("communication_recipients")
+    .select(
+      "id, tenant_id, property_code, unit_id, unit_label_snapshot, tenant_name_snapshot, phone_e164_snapshot, channel, status, twilio_message_sid, error_code, error_message, queued_at, sent_at, delivered_at, failed_at, created_at"
+    )
+    .eq("campaign_id", String(id || "").trim())
+    .order("property_code", { ascending: true })
+    .order("unit_label_snapshot", { ascending: true })
+    .order("tenant_name_snapshot", { ascending: true })
+    .limit(CAMPAIGN_RECIPIENT_DETAIL_LIMIT);
+  if (recipientDetailError) {
+    return { ok: false, error: recipientDetailError.message || "recipient_detail_failed" };
+  }
+
+  const { data: replyRows, error: replyDetailError } = await sb
+    .from("communication_replies")
+    .select(
+      "id, campaign_id, recipient_id, tenant_id, property_code, unit_id, phone_from, message_body, reply_class, twilio_message_sid, auto_response_sent, handoff_created, ticket_seed_id, received_at, created_at"
+    )
+    .eq("campaign_id", String(id || "").trim())
+    .order("received_at", { ascending: false })
+    .limit(CAMPAIGN_REPLY_DETAIL_LIMIT);
+  if (replyDetailError) {
+    return { ok: false, error: replyDetailError.message || "reply_detail_failed" };
+  }
+
   const recipientStatusCounts = {};
   const byProperty = {};
   for (const row of recipientRows || []) {
@@ -384,6 +466,56 @@ async function getCampaignDetail(id) {
       recipientStatusCounts,
       byProperty,
       replyCount: Number(replyCount || 0),
+    },
+    recipients: (recipientDetailRows || []).map(mapRecipientDetailRow).filter(Boolean),
+    replies: (replyRows || []).map(mapReplyDetailRow).filter(Boolean),
+    detailLimits: {
+      recipients: CAMPAIGN_RECIPIENT_DETAIL_LIMIT,
+      replies: CAMPAIGN_REPLY_DETAIL_LIMIT,
+    },
+  };
+}
+
+async function deleteCampaign(id, opts) {
+  const sb = getSupabase();
+  if (!sb) return { ok: false, error: "no_db" };
+
+  const campaignOut = await fetchCampaignRow(sb, id);
+  if (!campaignOut.ok) return campaignOut;
+
+  const row = campaignOut.row;
+  const status = String(row.status || "").trim().toUpperCase();
+  const canDelete = status === "DRAFT" || status === "QUEUED" || status === "FAILED";
+  if (!canDelete) {
+    return { ok: false, error: "campaign_not_deletable" };
+  }
+
+  const { data, error } = await sb
+    .from("communication_campaigns")
+    .delete()
+    .eq("id", String(id || "").trim())
+    .select("id, title, status")
+    .maybeSingle();
+  if (error) return { ok: false, error: error.message || "campaign_delete_failed" };
+  if (!data) return { ok: false, error: "campaign_delete_failed" };
+
+  await appendEventLog({
+    traceId: opts && opts.traceId,
+    log_kind: "communication",
+    event: "COMM_CAMPAIGN_DELETED",
+    payload: {
+      campaign_id: data.id,
+      title: String(data.title || "").trim(),
+      status: String(data.status || "").trim(),
+    },
+  });
+
+  return {
+    ok: true,
+    deleted: {
+      id: data.id,
+      title: String(data.title || "").trim(),
+      status: String(data.status || "").trim(),
     },
   };
 }
@@ -514,11 +646,14 @@ async function prepareCampaign(id, opts) {
   if (!preview.willSend) {
     return { ok: false, error: "no_sendable_recipients" };
   }
+  const portalOnlyDelivery = isPortalOnlyDelivery(row.audience_filter);
 
   await sb.from("communication_recipients").delete().eq("campaign_id", String(id || "").trim());
 
   const inserts = preview.recipients.map((recipient) => {
     const skipReason = String(recipient.skipReason || "").trim().toUpperCase();
+    const nowIso = new Date().toISOString();
+    const portalOnlySendable = portalOnlyDelivery && !skipReason;
     return {
       campaign_id: row.id,
       tenant_id: recipient.tenantId,
@@ -527,14 +662,18 @@ async function prepareCampaign(id, opts) {
       unit_label_snapshot: recipient.unitLabel,
       tenant_name_snapshot: recipient.name,
       phone_e164_snapshot: recipient.phone,
-      channel: recipient.channel,
+      channel: portalOnlySendable ? "portal" : recipient.channel,
       status:
         skipReason === "NO_PHONE"
           ? "SKIPPED_NO_PHONE"
           : skipReason === "OPT_OUT"
             ? "SKIPPED_OPT_OUT"
-            : "PENDING",
-      queued_at: skipReason ? null : new Date().toISOString(),
+            : portalOnlySendable
+              ? "DELIVERED"
+              : "PENDING",
+      queued_at: skipReason ? null : nowIso,
+      sent_at: portalOnlySendable ? nowIso : null,
+      delivered_at: portalOnlySendable ? nowIso : null,
     };
   });
 
@@ -547,15 +686,18 @@ async function prepareCampaign(id, opts) {
   }
 
   const counts = countRecipientStatuses(insertedRows || []);
+  const campaignStatus = portalOnlyDelivery ? "SENT" : "QUEUED";
+  const sentAt = portalOnlyDelivery ? new Date().toISOString() : null;
   const { data, error } = await sb
     .from("communication_campaigns")
     .update({
       audience_snapshot: buildAudienceSnapshot(preview.recipients),
       total_recipients: counts.totalRecipients,
-      total_sent: 0,
-      total_delivered: 0,
+      total_sent: portalOnlyDelivery ? counts.totalSendable : 0,
+      total_delivered: portalOnlyDelivery ? counts.totalSendable : 0,
       total_failed: 0,
-      status: "QUEUED",
+      status: campaignStatus,
+      sent_at: sentAt,
       updated_at: new Date().toISOString(),
     })
     .eq("id", row.id)
@@ -575,6 +717,7 @@ async function prepareCampaign(id, opts) {
       skipped_no_phone: preview.skippedNoPhone,
       skipped_opt_out: preview.skippedOptOut,
       skipped_no_unit: preview.skippedNoUnit,
+      delivery_mode: portalOnlyDelivery ? "portal_only" : "sms_and_portal",
     },
   });
 
@@ -589,6 +732,7 @@ async function prepareCampaign(id, opts) {
       skippedOptOut: preview.skippedOptOut,
       skippedNoUnit: preview.skippedNoUnit,
       byProperty: preview.byProperty,
+      deliveryMode: portalOnlyDelivery ? "portal_only" : "sms_and_portal",
     },
   };
 }
@@ -609,6 +753,13 @@ async function sendCampaignNow(id, opts) {
     if (!campaignOut.ok) return campaignOut;
     row = campaignOut.row;
     status = String(row.status || "").trim().toUpperCase();
+    if (status === "SENT") {
+      return {
+        ok: true,
+        campaign: mapCampaignRow(row),
+        send: { status: "SENT", sent: Number(row.total_sent || 0), failed: Number(row.total_failed || 0) },
+      };
+    }
   }
 
   if (status !== "QUEUED" && status !== "SENDING") {
@@ -639,6 +790,7 @@ module.exports = {
   createCampaign,
   listCampaigns,
   getCampaignDetail,
+  deleteCampaign,
   updateCampaignDraft,
   resolveCampaignAudiencePreview,
   previewCampaignMessage,

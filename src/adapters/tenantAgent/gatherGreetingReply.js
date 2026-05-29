@@ -5,11 +5,19 @@ const { hasProblemSignal } = require("../../brain/core/splitIssueGroups");
 const { tenantAgentPropertyAllowlist } = require("../../config/env");
 const { buildRosterAwareGreeting } = require("./lookupTenantRosterForAgent");
 
-const GREETING_ONLY_RE =
-  /^(?:hi|hello|hey|yo|howdy|good\s+(?:morning|afternoon|evening))(?:\s+there)?[!.\s]*$/i;
+// Friendly tails tenants add to greetings — must not become ticket issue text.
+const GREETING_FRIENDLY_TAIL =
+  "(?:\\s+(?:(?:my\\s+)?(?:there|brother|bro|man|dude|mate|friend|buddy|fam)))*";
 
-const CASUAL_OPEN_RE =
-  /^(?:what'?s\s*up|whatsup|wassup|sup|how\s+are\s+you|how\s+r\s+u|how\s+are\s+u)(?:\s+there)?[!.\s]*$/i;
+const GREETING_ONLY_RE = new RegExp(
+  `^(?:hi|hello|hey|yo|howdy|good\\s+(?:morning|afternoon|evening))${GREETING_FRIENDLY_TAIL}[!.\\s]*$`,
+  "i"
+);
+
+const CASUAL_OPEN_RE = new RegExp(
+  `^(?:what'?s\\s*up|whatsup|wassup|sup|how\\s+are\\s+you|how\\s+r\\s+u|how\\s+are\\s+u)${GREETING_FRIENDLY_TAIL}[!.\\s]*$`,
+  "i"
+);
 
 const TELEGRAM_START_RE =
   /^\/start(?:@\w+)?(?:\s+.*)?$/i;

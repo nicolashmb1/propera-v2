@@ -12,6 +12,7 @@ const { updateWorkItemsByTicketKey } = require("./portalTicketMutations");
 const { getStaffDisplayNameByStaffId } = require("./staffPhoneByStaffId");
 const { resolvePortalStaffActorFromJwt } = require("../portal/resolvePortalStaffActor");
 const { mergeChangedByIntoTicketPatch } = require("./ticketAuditPatch");
+const { assignVendorToTicket } = require("./vendorAssignment");
 
 const HUMAN_ID = "([A-Za-z0-9]{2,12}-\\d{6}-\\d{4})";
 const HUMAN_TICKET_ID_RE = new RegExp(`^${HUMAN_ID}$`, "i");
@@ -532,26 +533,47 @@ async function applyPortalTicketAssignment(o) {
     Object.prototype.hasOwnProperty.call(o, "assignedVendorId") ||
     Object.prototype.hasOwnProperty.call(o, "assigned_vendor_id");
 
-  if (!staffFieldPresent && !vendorFieldPresent) {
+  const dispatchOnlyEarly =
+    o.dispatchOnly === true || o.dispatch_only === true;
+  if (!staffFieldPresent && !vendorFieldPresent && !dispatchOnlyEarly) {
     return { ok: false, error: "assigned_staff_id_or_assigned_vendor_id_required", status: 400 };
   }
 
   const rawStaff = o.assignedStaffId != null ? String(o.assignedStaffId).trim() : "";
-  const rawVendor = o.assignedVendorId != null ? String(o.assignedVendorId).trim() : "";
+  let rawVendor = o.assignedVendorId != null ? String(o.assignedVendorId).trim() : "";
+  const dispatchOnly = o.dispatchOnly === true || o.dispatch_only === true;
 
   const staffEmpty =
     !rawStaff || rawStaff === UNASSIGNED_TOKEN || rawStaff.toLowerCase() === "unassigned";
   const vendorEmpty =
     !rawVendor || rawVendor === UNASSIGNED_TOKEN || rawVendor.toLowerCase() === "unassigned";
 
-  if (!vendorEmpty && !staffEmpty) {
+  if (dispatchOnly) {
+    const onTicketVendor =
+      String(ticket.assigned_type || "").toUpperCase() === "VENDOR"
+        ? String(ticket.assigned_id || "").trim()
+        : "";
+    if (vendorEmpty && onTicketVendor) {
+      rawVendor = onTicketVendor;
+    }
+    if (!rawVendor) {
+      return { ok: false, error: "dispatch_only_requires_vendor_assignment", status: 400 };
+    }
+  }
+
+  const vendorEmptyNow =
+    !rawVendor || rawVendor === UNASSIGNED_TOKEN || rawVendor.toLowerCase() === "unassigned";
+
+  if (!vendorEmptyNow && !staffEmpty) {
     return { ok: false, error: "cannot_set_staff_and_vendor_together", status: 400 };
   }
 
   /** @type {"STAFF"|"VENDOR"} */
   let assignMode = "STAFF";
   let unassign = false;
-  if (!vendorEmpty) {
+  if (dispatchOnly) {
+    assignMode = "VENDOR";
+  } else if (!vendorEmptyNow) {
     assignMode = "VENDOR";
   } else if (!staffEmpty) {
     assignMode = "STAFF";
@@ -589,6 +611,67 @@ async function applyPortalTicketAssignment(o) {
       const st = chk.error === "vendors_migration_required" ? 500 : 400;
       return { ok: false, error: chk.error || "invalid_vendor", status: st };
     }
+
+    const dispatchOnAssign =
+      o.dispatchOnAssign !== false && o.dispatch_on_assign !== false;
+    const vOut = await assignVendorToTicket({
+      ticketLookupHint: decoded,
+      ticketKeyHint: o.ticketKeyHint ?? o.ticket_key,
+      ticketRowIdHint: o.ticketRowIdHint ?? o.ticket_row_id,
+      vendorId: rawVendor,
+      source: "PM_OVERRIDE",
+      assignedBy: resolvedActorLabel,
+      assignmentNote: note,
+      dispatch: dispatchOnAssign,
+      dispatchOnly,
+      forceResend: o.forceResend === true || o.force_resend === true,
+      traceId,
+      changedBy: actorRes.changedBy,
+    });
+    if (!vOut.ok) {
+      return {
+        ok: false,
+        error: vOut.error || "vendor_assign_failed",
+        status: vOut.status || 400,
+      };
+    }
+
+    await appendEventLog({
+      traceId,
+      log_kind: "portal",
+      event: "PORTAL_PM_TICKET_ASSIGNMENT",
+      payload: {
+        human_ticket_id: vOut.ticketId,
+        ticket_key: ticketKey,
+        assigned_vendor_id: rawVendor,
+        assigned_display: vOut.assignedDisplayName || rawVendor,
+        assigned_type: "VENDOR",
+        unassigned: false,
+        assignment_note: note || undefined,
+        changed_by: actorRes.changedBy,
+        dispatched: vOut.dispatched,
+        dispatch_skipped_reason: vOut.dispatchSkippedReason,
+        dispatch_error: vOut.dispatchError,
+        dispatch_only: dispatchOnly,
+      },
+    });
+
+    return {
+      ok: true,
+      status: 200,
+      ticketId: vOut.ticketId,
+      ticketRowId: vOut.ticketRowId,
+      assignedStaffId: "",
+      assignedVendorId: rawVendor,
+      assignedType: "VENDOR",
+      assignedDisplayName: vOut.assignedDisplayName || rawVendor,
+      assignmentSource: "PM_OVERRIDE",
+      assigned: vOut.assigned !== false,
+      assignmentSkipped: vOut.assignmentSkipped === true,
+      dispatched: !!vOut.dispatched,
+      dispatchSkippedReason: vOut.dispatchSkippedReason,
+      dispatchError: vOut.dispatchError,
+    };
   }
 
   const displayName = unassign
@@ -707,5 +790,7 @@ module.exports = {
   listVendorsForAssignment,
   createVendorForPortal,
   applyPortalTicketAssignment,
+  assertVendorAssignable,
+  assertStaffAssignable,
   UNASSIGNED_TOKEN,
 };

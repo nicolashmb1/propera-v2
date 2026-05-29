@@ -4,7 +4,7 @@
 const { hasProblemSignal } = require("../../brain/core/splitIssueGroups");
 
 const ACK_TOKEN =
-  /^(ok|okay|k|kk|thanks|thank|you|ty|thx|so|much|again|awesome|great|perfect|cool|nice|wonderful|np|nope|cheers|appreciate|it|that|got|sound|sounds|good|welcome|the|best)$/i;
+  /^(ok|okay|k|kk|thanks|thank|you|ty|thx|so|much|again|awesome|great|perfect|cool|nice|wonderful|np|nope|cheers|appreciate|it|that|got|sound|sounds|good|welcome|the|best|brother|bro|man|dude|mate|friend|buddy|fam|papa|mama|ma|dad|sir)$/i;
 
 const DEFAULT_ACK = "You're welcome!";
 

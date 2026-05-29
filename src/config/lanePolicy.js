@@ -54,7 +54,14 @@ function isManagerActorKey(actorKey) {
   return d10 && managerPhoneLast10Set().has(d10);
 }
 
-function isVendorActorKey(actorKey) {
+/**
+ * Sync vendor lane hint — env list only. DB vendor match lives on `actorIdentity.isVendor`
+ * from `preloadActorIdentity` (orchestrator).
+ * @param {string} actorKey
+ * @param {{ isVendor?: boolean }} [actorIdentity]
+ */
+function isVendorActorKey(actorKey, actorIdentity) {
+  if (actorIdentity && actorIdentity.isVendor === true) return true;
   const d10 = digitsLast10(actorKey);
   if (d10 && vendorPhoneLast10Set().has(d10)) return true;
   return false;

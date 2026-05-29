@@ -55,9 +55,10 @@ function mapRowToPortalShape(row, codeToDisplayName) {
 }
 
 /**
+ * @param {{ includeInactive?: boolean }} [opts]
  * @returns {Promise<object[]>}
  */
-async function listTenantsForPortal() {
+async function listTenantsForPortal(opts = {}) {
   const sb = getSupabase();
   if (!sb) return [];
 
@@ -72,11 +73,15 @@ async function listTenantsForPortal() {
       String(p.display_name || p.code || "").trim() || c;
   }
 
-  const { data: rows, error } = await sb
+  let query = sb
     .from("tenant_roster")
     .select(
       "id, property_code, unit_label, phone_e164, resident_name, email, active, notes, updated_at"
-    )
+    );
+  if (!opts.includeInactive) {
+    query = query.eq("active", true);
+  }
+  const { data: rows, error } = await query
     .order("property_code", { ascending: true })
     .order("unit_label", { ascending: true });
 

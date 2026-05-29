@@ -477,6 +477,18 @@ async function finalizeMaintenanceDraft(o) {
     );
   }
 
+  try {
+    const { notifyPortalPushNewTicket } = require("../portal/pushNotifications");
+    void notifyPortalPushNewTicket({
+      ticketId: humanTicketId,
+      propertyCode: propCodeUpper,
+      unitLabel: persistedUnit,
+      issue: messageRaw,
+    }).catch(() => {});
+  } catch (_) {
+    /* push is best-effort */
+  }
+
   return {
     ok: true,
     ticketId: humanTicketId,

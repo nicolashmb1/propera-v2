@@ -27,6 +27,9 @@ function shouldApplyMaintenanceOnlyGate(o) {
   if (mediaItems.length) return false;
   if (isGatheringGreetingOnly(bodyText, partial)) return false;
   if (conv && String(conv.status || "").trim() === "handoff_pending") return false;
+  const { readAccessLastBooking } = require("./conversationState");
+  if (readAccessLastBooking(conv?.partial_package)) return false;
+  if (String(conv?.last_brain_result?.brain || "").trim() === "access_reserved") return false;
   if (
     conv &&
     conv.partial_package &&

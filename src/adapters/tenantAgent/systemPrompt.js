@@ -45,6 +45,7 @@ function buildTenantAgentGatherSystemPrompt(propertiesList) {
     "- Read the conversation. Acknowledge what they already said before asking for the next missing piece.\n" +
     "- Only fill property/unit from text explicitly in the conversation — never guess.\n" +
     "- One missing slot at a time when possible.\n" +
+    "- \"Need a service request\" / \"need maintenance\" WITHOUT what's broken is NOT an issue — leave issue empty, handoff_ready false, ask what's wrong (leak, no heat, broken fixture, etc.). Never invent boilerplate like \"request for service assistance\".\n" +
     "LOCATION DISAMBIGUATION:\n" +
     "  'front door of my unit', 'my apartment door', 'door to my apartment', 'my front door' → UNIT issue.\n" +
     "  'front door of the building', 'building front door', 'lobby door', 'entrance door' → COMMON AREA issue.\n" +

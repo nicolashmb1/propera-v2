@@ -5,6 +5,7 @@ const {
   normalizeConversationSignal,
 } = require("./handleConversationSignals");
 const { normalizeLlmSafetyAssessment } = require("./detectGatherSafety");
+const { isGenericMaintenanceIntakePhrase } = require("./gatherIssueSubstance");
 
 const VALID_LOCATION_KINDS = new Set(["unit", "common_area", "property"]);
 
@@ -46,7 +47,13 @@ function mergePartialFromLlm(partial, updates, knownPropertyCodesUpper) {
   }
 
   const issue = String(u.issue || u.message || "").trim();
-  if (issue.length >= 2 && !isMetaMaintenanceIssue(issue)) next.issue = issue;
+  if (
+    issue.length >= 2 &&
+    !isMetaMaintenanceIssue(issue) &&
+    !isGenericMaintenanceIntakePhrase(issue)
+  ) {
+    next.issue = issue;
+  }
 
   const lk = String(u.location_kind || "").trim().toLowerCase();
   if (lk && VALID_LOCATION_KINDS.has(lk)) {

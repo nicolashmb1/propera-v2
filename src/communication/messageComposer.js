@@ -159,10 +159,15 @@ function buildDraftPrompt(input) {
     .filter(Boolean)
     .slice(0, 8);
 
+  const deliveryMode = String(opts.deliveryMode || "").trim().toLowerCase();
+  const portalOnly = deliveryMode === "portal_only";
   const system =
-    "You draft tenant-facing SMS notices for a property operations company.\n" +
+    "You draft tenant-facing notices for a property operations company.\n" +
     "Return plain text only. No markdown, no bullets unless the input clearly requires them.\n" +
-    "Keep the message concise, practical, and ready for SMS.\n" +
+    (portalOnly
+      ? "This draft is for tenant portal notices only. Use richer detail than SMS while staying concise and easy to scan.\n" +
+        "Prefer 2-5 short paragraphs; optionally include a brief 2-4 item list when clarity benefits.\n"
+      : "Keep the message concise, practical, and ready for SMS.\n") +
     "Do not include any footer, opt-out language, phone number, or signature line. Another layer adds that later.\n" +
     "Do not mention the product name Propera.\n" +
     "Use the requested language and tone.\n";
@@ -173,6 +178,7 @@ function buildDraftPrompt(input) {
       comm_type: String(opts.commType || "").trim(),
       tone: normalizeTone(opts.tone),
       language: normalizeLanguage(opts.language),
+      delivery_mode: portalOnly ? "portal_only" : "sms_and_portal",
       audience_label: String(opts.audienceLabel || "").trim(),
       organization_brand: String(brandContext.orgBrandName || "").trim(),
       property_names: propertyNames,

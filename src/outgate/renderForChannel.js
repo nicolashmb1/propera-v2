@@ -8,12 +8,14 @@ const SMS_COMPLIANCE_FOOTER =
 
 /**
  * @param {string} displayName
+ * @param {string} [contextLabel]
  * @returns {string}
  */
-function buildPropertyHeaderLine(displayName) {
+function buildPropertyHeaderLine(displayName, contextLabel = "maintenance") {
   const name = String(displayName || "").trim();
   if (!name) return "";
-  return `${name} — maintenance`;
+  const label = String(contextLabel || "maintenance").trim() || "maintenance";
+  return `${name} — ${label}`;
 }
 
 /**
@@ -38,6 +40,7 @@ function applyTelegramMarkdown(body) {
  * @param {string} o.audience — tenant | staff | unknown
  * @param {boolean} [o.includeFirstContactExtras] — property header + SMS footer trigger
  * @param {string} [o.propertyDisplayName]
+ * @param {string} [o.contextLabel]
  * @param {boolean} [o.applyTelegramReceiptMarkdown] — bold Ref # lines (default true)
  * @returns {{ body: string, parseMode: string | null, meta: object }}
  */
@@ -47,6 +50,7 @@ function renderForChannel(o) {
   const audience = String(o.audience || "unknown").toLowerCase();
   const includeFirstContactExtras = !!o.includeFirstContactExtras;
   const propertyDisplayName = String(o.propertyDisplayName || "").trim();
+  const contextLabel = String(o.contextLabel || "maintenance").trim() || "maintenance";
   const applyTelegramReceiptMarkdown =
     o.applyTelegramReceiptMarkdown !== false;
 
@@ -63,7 +67,7 @@ function renderForChannel(o) {
   }
 
   if (includeFirstContactExtras && propertyDisplayName) {
-    const header = buildPropertyHeaderLine(propertyDisplayName);
+    const header = buildPropertyHeaderLine(propertyDisplayName, contextLabel);
     if (header) {
       text = `${header}\n\n${text}`;
       meta.propertyHeader = true;

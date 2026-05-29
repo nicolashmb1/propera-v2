@@ -21,6 +21,32 @@ test("completenessCheck — requires property, unit, issue; schedule is post-cre
   );
 });
 
+test("completenessCheck — generic service request is not a substantive issue", () => {
+  const known = new Set(["PENN"]);
+  assert.deepEqual(
+    completenessCheck(
+      {
+        property: "PENN",
+        unit: "502",
+        issue: "Request for service assistance",
+      },
+      known
+    ),
+    { ready: false, missing: "issue" }
+  );
+  assert.deepEqual(
+    completenessCheck(
+      { property: "PENN", unit: "502", issue: "hey need a service request" },
+      known
+    ),
+    { ready: false, missing: "issue" }
+  );
+  assert.deepEqual(
+    completenessCheck({ property: "PENN", unit: "502", issue: "sink dripping" }, known),
+    { ready: true, missing: null }
+  );
+});
+
 test("completenessCheck — common_area skips unit and schedule", () => {
   const known = new Set(["PENN"]);
   assert.deepEqual(

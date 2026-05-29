@@ -7,14 +7,18 @@ const {
   isVendorActorKey,
 } = require("../../config/lanePolicy");
 
-function classifyLane(inbound) {
+function classifyLane(inbound, actorIdentity) {
   const actorId = String((inbound && inbound.actorId) || "");
+  const identity =
+    actorIdentity ||
+    (inbound && inbound.meta && inbound.meta.actorIdentity) ||
+    null;
   let lane = "tenantLane";
   let reason = "default";
 
-  if (isVendorActorKey(actorId)) {
+  if (isVendorActorKey(actorId, identity)) {
     lane = "vendorLane";
-    reason = "isVendor_";
+    reason = identity && identity.isVendor ? "vendor_directory" : "isVendor_";
   } else if (isManagerActorKey(actorId)) {
     lane = "managerLane";
     reason = "isManager_";
@@ -35,8 +39,8 @@ function classifyLane(inbound) {
   return { lane, reason, mode };
 }
 
-function decideLane(inbound) {
-  const c = classifyLane(inbound);
+function decideLane(inbound, actorIdentity) {
+  const c = classifyLane(inbound, actorIdentity);
   return {
     lane: c.lane,
     reason: c.reason,

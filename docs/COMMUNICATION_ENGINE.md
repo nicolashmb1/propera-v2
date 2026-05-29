@@ -357,9 +357,9 @@ Existing **`TWILIO_ACCOUNT_SID`**, **`TWILIO_AUTH_TOKEN`**, **`TWILIO_SMS_FROM`*
 
 | Route | Screen |
 |-------|--------|
-| `/communications` | Live first slice: campaign list + inline draft creation + detail panel (compose → preview → send) |
-| `/communications/new` | Planned follow-up: dedicated wizard route if the inline composer outgrows the list page |
-| `/communications/[id]` | Planned follow-up: dedicated detail route / deep-link for recipients, replies, and delivery drill-down |
+| `/communications` | Live monitoring surface: campaign list, filters, and existing campaign drill-down |
+| `/communications/new` | Live hybrid setup route: create campaign metadata + audience targeting, then continue from the created campaign detail |
+| `/communications/[id]` | Live detail route / deep-link for campaign drill-down, recipient/reply tabs, delivery snapshot, and draft delete |
 
 **Portal-first stance:** Build the wizard first because it validates the resolver, composer, footer, send path, and edge cases under human control. After that is stable, the wizard remains the **fallback/manual** surface while a future agent can become the faster owner interface over the same APIs.
 
@@ -403,9 +403,10 @@ Existing **`TWILIO_ACCOUNT_SID`**, **`TWILIO_AUTH_TOKEN`**, **`TWILIO_SMS_FROM`*
 
 ### Phase E — Portal UI
 
-1. List + inline draft create in `/communications`
-2. Compose + AI draft + preview + send from the detail panel
-3. Follow-up: dedicated detail route / recipients / replies tabs
+1. List + monitoring home in `/communications`
+2. Dedicated hybrid setup route in `/communications/new`
+3. Compose + AI draft + preview + send from the campaign detail panel
+4. Landed follow-up: dedicated `/communications/[id]` detail route, recipient/reply tabs, and draft delete from the app
 
 ### Phase F — Agent adapter (after portal validation)
 
@@ -466,7 +467,7 @@ When a phase ships, update:
 | B — Audience | In progress — `brandContextService`, `audienceResolver`, preview route landed; recipient snapshotting now happens during `prepareCampaign` |
 | C — Compose + send | In progress — `messageComposer`, footer enforcement in `commOutgate`, and `POST /api/communications/draft` + `POST /api/communications/campaigns/:id/send` landed |
 | D — Replies + delivery | In progress — `/webhooks/communications/sms` + `/webhooks/communications/status` are live; deterministic reply classification and delivery rollups landed; maintenance handoff seam exists but is still stubbed |
-| E — Portal UI | In progress — `propera-app` `/communications` is live behind `NEXT_PUBLIC_PROPERA_COMMUNICATIONS_ENABLED=1` with thin `/api/communications/*` proxies, campaign create/list/detail, AI draft generation, manual draft save/edit, final SMS footer preview + segment estimate, audience preview, send, and exact portfolio/property/floor/unit/tenant targeting controls; dedicated wizard/deep-link routes and recipient/reply tabs still pending |
+| E — Portal UI | In progress — `propera-app` communications is live behind `NEXT_PUBLIC_PROPERA_COMMUNICATIONS_ENABLED=1` with thin `/api/communications/*` proxies, `/communications` as the monitoring home, `/communications/new` as the hybrid setup route, `/communications/[id]` as the campaign detail route, AI draft generation, manual draft save/edit, final SMS footer preview + segment estimate, audience preview, send, exact portfolio/property/floor/unit/tenant targeting controls, recipient/reply tabs, and draft delete; richer editing and fuller delivery drill-down still pending |
 | F — Agent adapter | Not started |
 
 ---
@@ -483,3 +484,5 @@ When a phase ships, update:
 | 2026-05-26 | Extended the portal UI with exact unit and exact tenant targeting controls while keeping audience resolution in V2. |
 | 2026-05-26 | Extended the draft flow so the portal can manually edit/save `message_body` before preview/send using the same `/api/communications/draft` contract. |
 | 2026-05-26 | Added final SMS preview + segment estimate using a new thin preview seam over canonical `appendFooter()` / segment math in `messageComposer.js`. |
+| 2026-05-26 | Added `DELETE /api/communications/campaigns/:id` for safe draft deletion plus live `/communications/[id]` deep links and recipient/reply tabs in the portal. |
+| 2026-05-26 | Shifted the portal to the hybrid route shape: `/communications` for monitoring, `/communications/new` for setup, and `/communications/[id]` for campaign operations. |

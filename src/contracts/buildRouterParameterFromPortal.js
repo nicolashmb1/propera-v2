@@ -204,6 +204,14 @@ function buildRouterParameterFromPortal(payload) {
   const costCtxJson =
     costCtx && typeof costCtx === "object" ? JSON.stringify(costCtx) : "";
 
+  const proposalCtx = p.portal_proposal_context ?? p.portalProposalContext;
+  const proposalCtxJson =
+    proposalCtx && typeof proposalCtx === "object" ? JSON.stringify(proposalCtx) : "";
+
+  const pageCtx = p.portal_page_context ?? p.portalPageContext;
+  const pageCtxJson =
+    pageCtx && typeof pageCtx === "object" ? JSON.stringify(pageCtx) : "";
+
   const payloadForJson =
     action === "create_ticket"
       ? {
@@ -230,6 +238,8 @@ function buildRouterParameterFromPortal(payload) {
     _tenantPhoneE164: String(p.tenantPhoneE164 || p.phone || actor).trim(),
     _portalChatMode: portalChatMode,
     _portalCostContextJson: costCtxJson,
+    _portalProposalContextJson: proposalCtxJson,
+    _portalPageContextJson: pageCtxJson,
   };
 }
 

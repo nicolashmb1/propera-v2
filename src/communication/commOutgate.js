@@ -26,9 +26,6 @@ async function sendCampaign(input) {
   if (!campaignId) return { ok: false, error: "missing_campaign_id" };
   if (!campaign) return { ok: false, error: "missing_campaign_row" };
 
-  const from = twilioBroadcastFrom();
-  if (!from) return { ok: false, error: "missing_broadcast_from" };
-
   const { data: recipientRows, error: recipientError } = await sb
     .from("communication_recipients")
     .select("id, property_code, channel, phone_e164_snapshot, status")
@@ -41,6 +38,18 @@ async function sendCampaign(input) {
   if (!recipientRows || !recipientRows.length) {
     return { ok: false, error: "no_pending_recipients" };
   }
+
+  const smsRecipients = recipientRows.filter((row) => {
+    const ch = String(row.channel || "").trim().toLowerCase();
+    return ch === "sms" || ch === "whatsapp" || ch === "";
+  });
+  if (smsRecipients.length === 0) {
+    // Portal-only campaigns can be fully delivered without Twilio.
+    return { ok: true, status: "SENT", sent: 0, failed: 0 };
+  }
+
+  const from = twilioBroadcastFrom();
+  if (!from) return { ok: false, error: "missing_broadcast_from" };
 
   const propertyCodes = Array.from(
     new Set(
@@ -69,7 +78,7 @@ async function sendCampaign(input) {
     event: "COMM_SEND_STARTED",
     payload: {
       campaign_id: campaignId,
-      recipient_count: recipientRows.length,
+      recipient_count: smsRecipients.length,
       property_codes: propertyCodes,
     },
   });
@@ -77,7 +86,7 @@ async function sendCampaign(input) {
   let sent = 0;
   let failed = 0;
 
-  for (const row of recipientRows) {
+  for (const row of smsRecipients) {
     const fullBody = appendFooter(
       campaign.message_body || campaign.messageBody || "",
       brandContext,

@@ -5,6 +5,7 @@ const {
   createCampaign,
   listCampaigns,
   getCampaignDetail,
+  deleteCampaign,
   updateCampaignDraft,
   resolveCampaignAudiencePreview,
   previewCampaignMessage,
@@ -77,6 +78,29 @@ function registerCommunicationRoutes(app) {
         if (!out.ok) {
           const status = out.error === "not_found" ? 404 : out.error === "no_db" ? 503 : 400;
           return res.status(status).json({ ok: false, error: out.error || "detail_failed" });
+        }
+        return res.status(200).json(out);
+      } catch (err) {
+        return res.status(500).json({
+          ok: false,
+          error: String(err && err.message ? err.message : err),
+        });
+      }
+    })
+  );
+
+  app.delete(
+    "/api/communications/campaigns/:id",
+    gate(async (req, res) => {
+      try {
+        const out = await deleteCampaign(req.params.id, { traceId: req.traceId });
+        if (!out.ok) {
+          const status =
+            out.error === "not_found" ? 404 :
+            out.error === "no_db" ? 503 :
+            out.error === "campaign_not_deletable" ? 409 :
+            400;
+          return res.status(status).json({ ok: false, error: out.error || "delete_failed" });
         }
         return res.status(200).json(out);
       } catch (err) {

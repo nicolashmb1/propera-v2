@@ -19,6 +19,7 @@ const {
   createTenantMaintenanceTicket,
   getMaintenanceUploadUrl,
 } = require("./tenantMaintenanceService");
+const { listTenantNotices, getTenantNotice } = require("./tenantNoticesService");
 const { accessEngineEnabled } = require("../config/env");
 const {
   listTenantAccessLocations,
@@ -267,6 +268,34 @@ function registerTenantRoutes(app) {
       if (err.code === "VALIDATION_ERROR" || err.code === "SESSION_ERROR") {
         return res.status(400).json({ ok: false, error: err.message });
       }
+      return res.status(500).json({ ok: false, error: String(err.message || err) });
+    }
+  });
+
+  // ── Notices (Communication Engine recipients scoped to tenant) ──────────────
+
+  app.get("/api/tenant/notices", requireTenantAuth, async (req, res) => {
+    const sb = getSupabase();
+    if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+    try {
+      const notices = await listTenantNotices(sb, req.tenantCtx, {
+        limit: Number(req.query.limit || 20),
+        offset: Number(req.query.offset || 0),
+      });
+      return res.json({ ok: true, notices });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err.message || err) });
+    }
+  });
+
+  app.get("/api/tenant/notices/:id", requireTenantAuth, async (req, res) => {
+    const sb = getSupabase();
+    if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+    try {
+      const notice = await getTenantNotice(sb, req.tenantCtx, req.params.id);
+      if (!notice) return res.status(404).json({ ok: false, error: "not_found" });
+      return res.json({ ok: true, notice });
+    } catch (err) {
       return res.status(500).json({ ok: false, error: String(err.message || err) });
     }
   });

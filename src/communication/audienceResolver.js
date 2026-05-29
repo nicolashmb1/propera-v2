@@ -46,11 +46,17 @@ function normalizeAudienceFilter(filter) {
     tenantIds.push(id);
   }
 
+  const includeTenantPortal = src.include_tenant_portal !== false;
+  const deliveryModeRaw = String(src.delivery_mode || "").trim().toLowerCase();
+  const deliveryMode = deliveryModeRaw === "portal_only" ? "portal_only" : "sms_and_portal";
+
   return {
     property_codes: propertyCodes,
     floors,
     unit_ids: unitIds,
     tenant_ids: tenantIds,
+    include_tenant_portal: includeTenantPortal,
+    delivery_mode: deliveryMode,
   };
 }
 
@@ -138,6 +144,7 @@ async function resolveAudience(filter, orgId, input) {
   if (!sb) return { ok: false, error: "no_db", recipients: [] };
 
   const audienceFilter = normalizeAudienceFilter(filter);
+  const portalOnlyDelivery = String(audienceFilter.delivery_mode || "").trim().toLowerCase() === "portal_only";
   const propertyCodes = audienceFilter.property_codes;
   const floorSet = new Set(audienceFilter.floors);
   const unitIdSet = new Set(audienceFilter.unit_ids);
@@ -201,8 +208,10 @@ async function resolveAudience(filter, orgId, input) {
 
     const phone = normalizePhoneE164(String(row.phone_e164 || ""));
     let skipReason = "";
-    if (row.comm_broadcast_opt_out === true) skipReason = "OPT_OUT";
-    else if (!phone) skipReason = "NO_PHONE";
+    if (!portalOnlyDelivery) {
+      if (row.comm_broadcast_opt_out === true) skipReason = "OPT_OUT";
+      else if (!phone) skipReason = "NO_PHONE";
+    }
 
     recipients.push({
       tenantId,

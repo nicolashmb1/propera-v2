@@ -20,9 +20,10 @@ function getEffectiveCompliance(smsCompliance, precursor) {
  * @param {{ outcome: string, staffCapture?: object }} precursor
  * @param {object} inbound — normalized inbound event
  * @param {{ isStaff?: boolean }} [staffContext] — DB staff row match (not transport format)
+ * @param {{ isVendor?: boolean, vendor?: object | null }} [actorIdentity] — from preloadActorIdentity
  * @returns {{ lane: string, reason: string, mode: string, trace: string }}
  */
-function buildLaneDecision(precursor, inbound, staffContext) {
+function buildLaneDecision(precursor, inbound, staffContext, actorIdentity) {
   if (precursor.outcome === "STAFF_CAPTURE_HASH") {
     return {
       lane: "staffCapture",
@@ -59,7 +60,7 @@ function buildLaneDecision(precursor, inbound, staffContext) {
       trace: "lane_v1",
     };
   }
-  return decideLane(inbound);
+  return decideLane(inbound, actorIdentity);
 }
 
 /**
@@ -205,6 +206,35 @@ function computeCanEnterCore(o) {
 }
 
 /**
+ * Access handler runs beside maintenance on tenant messaging channels only.
+ * Portal remains the structured UI path.
+ * @param {object} o
+ */
+function computeCanEnterAccess(o) {
+  const {
+    laneDecision,
+    dbConfigured,
+    staffRun,
+    complianceRun,
+    suppressedRun,
+    effectiveCompliance,
+    precursor,
+    transportChannel,
+    staffContext,
+  } = o || {};
+
+  if (!laneAllowsMaintenanceCore(laneDecision)) return false;
+  if (!dbConfigured) return false;
+  if (staffRun || complianceRun || suppressedRun || effectiveCompliance) return false;
+  if (!precursor || precursor.outcome !== "PRECURSOR_EVALUATED") return false;
+  if (precursor.tenantCommand) return false;
+  if (staffContext && staffContext.isStaff) return false;
+
+  const transport = String(transportChannel || "").trim().toLowerCase();
+  return transport === "sms" || transport === "whatsapp" || transport === "telegram";
+}
+
+/**
  * `precursor.outcome === "STAFF_CAPTURE_HASH"` → MANAGER strip mode for core body.
  */
 function isStaffCaptureHash(precursor) {
@@ -224,6 +254,7 @@ function resolveDefaultBrain(o) {
     complianceRun,
     suppressedRun,
     stubRun,
+    accessRun,
     coreRun,
     precursor,
     staffContext,
@@ -232,6 +263,7 @@ function resolveDefaultBrain(o) {
   if (complianceRun && complianceRun.brain) return complianceRun.brain;
   if (suppressedRun && suppressedRun.brain) return suppressedRun.brain;
   if (stubRun && stubRun.brain) return stubRun.brain;
+  if (accessRun && accessRun.brain) return accessRun.brain;
   if (coreRun && coreRun.brain) return coreRun.brain;
   if (precursor.outcome === "STAFF_CAPTURE_HASH") return "staff_capture_pending_core";
   if (precursor.outcome === "STAFF_MAINTENANCE_MEDIA_INTAKE") {
@@ -264,6 +296,7 @@ module.exports = {
   shouldRunSmsComplianceBranch,
   shouldEvaluateSmsSuppress,
   computeCanEnterCore,
+  computeCanEnterAccess,
   isStaffCaptureHash,
   isStaffMaintenanceMediaIntake,
   resolveDefaultBrain,

@@ -13,6 +13,7 @@ const {
   getReservationDetail,
   cancelReservation,
   listReservationsForLocation,
+  listSchedulesForLocation,
 } = require("../dal/accessEngine");
 
 function tenantPropertyCode(tenantCtx) {
@@ -283,17 +284,29 @@ async function cancelTenantAccessReservation(tenantCtx, reservationId) {
  * @param {string} locationId
  * @param {Date|string} day
  */
+/**
+ * Weekly operating hours for an amenity (tenant's property only).
+ * @param {{ tenantId: string, propertyCode: string }} tenantCtx
+ * @param {string} locationId
+ */
+async function listSchedulesForTenantLocation(tenantCtx, locationId) {
+  const loc = await getAccessLocationById(locationId);
+  if (!loc || loc.propertyCode !== tenantPropertyCode(tenantCtx)) return [];
+  return listSchedulesForLocation(locationId);
+}
+
 async function listDayReservationsForTenantLocation(tenantCtx, locationId, day) {
   const loc = await getAccessLocationById(locationId);
   if (!loc || loc.propertyCode !== tenantPropertyCode(tenantCtx)) return [];
 
-  const d = new Date(day);
-  const start = new Date(d);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
+  const { propertyDayBoundsUtc } = require("../access/accessLocalTime");
+  const { startUtc, endUtc } = propertyDayBoundsUtc(day);
 
-  const rows = await listReservationsForLocation(locationId, start, end);
+  const rows = await listReservationsForLocation(
+    locationId,
+    startUtc instanceof Date ? startUtc.toISOString() : startUtc,
+    endUtc instanceof Date ? endUtc.toISOString() : endUtc
+  );
   return rows.map((r) => ({
     id: r.id,
     startAt: r.startAt,
@@ -312,4 +325,5 @@ module.exports = {
   createTenantAccessReservation,
   cancelTenantAccessReservation,
   listDayReservationsForTenantLocation,
+  listSchedulesForTenantLocation,
 };

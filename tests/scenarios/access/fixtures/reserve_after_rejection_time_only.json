@@ -1,0 +1,81 @@
+{
+  "name": "reserve_after_rejection_time_only",
+  "description": "Regression for the 'LLM latches into clarify after a rejection' bug. Game Room is already booked Sunday 8am-12pm. Tenant asks for 10am-12pm (overlap → rejected). Then tenant types a bare time window '1-2pm'. The LLM (scripted to mimic prod misbehavior) returns access_intent: 'clarify' with NO time updates and a chatty re-narration of the prior rejection. The deterministic time-window safety net in maybeHandleAccessTurn must (a) parse '1-2pm' against the pinned dateForDay ('sunday'), (b) override the LLM intent back to reserve, (c) write startAt/endAt, (d) force handoff. The brain then books Sunday 1pm-2pm successfully.",
+  "frozenNow": "2026-05-27T18:00:00.000Z",
+  "timezone": "America/New_York",
+
+  "tenant": {
+    "tenantId": "11111111-1111-1111-1111-111111111111",
+    "propertyCode": "PENN",
+    "unitLabel": "502",
+    "residentName": "Nicolas",
+    "phoneE164": "+15551234001",
+    "transportChannel": "sms"
+  },
+
+  "amenities": [
+    {
+      "id": "22222222-2222-2222-2222-222222222222",
+      "slug": "game-room",
+      "name": "Game Room",
+      "propertyCode": "PENN"
+    }
+  ],
+
+  "initialReservations": [
+    {
+      "id": "33333333-3333-3333-3333-333333333333",
+      "tenantId": "00000000-0000-0000-0000-000000000099",
+      "locationId": "22222222-2222-2222-2222-222222222222",
+      "startAt": "2026-05-31T12:00:00.000Z",
+      "endAt": "2026-05-31T16:00:00.000Z",
+      "status": "CONFIRMED"
+    }
+  ],
+
+  "turns": [
+    {
+      "userMessage": "i want to book the game room sunday 10am to 12pm",
+      "llm": {
+        "ok": true,
+        "reply": "Got it — trying Sunday 10:00 AM to 12:00 PM.",
+        "accessIntent": "reserve",
+        "partialUpdates": {
+          "location_slug": "game-room",
+          "location_name": "Game Room",
+          "date_for_day": "sunday",
+          "start_at": "2026-05-31T10:00:00Z",
+          "end_at": "2026-05-31T12:00:00Z"
+        },
+        "handoffReady": true
+      },
+      "expect": {
+        "phase": "access_handoff",
+        "brain": "access_reserve_rejected",
+        "lane": "access",
+        "hasLastBooking": false,
+        "reservationsCount": 1
+      }
+    },
+    {
+      "userMessage": "1-2pm",
+      "llm": {
+        "ok": true,
+        "reply": "It looks like Sunday 10 AM to 12 PM is also booked. The Game Room is reserved 8 AM to 12 PM that day. Would you like to try a different time?",
+        "accessIntent": "clarify",
+        "partialUpdates": {},
+        "handoffReady": false
+      },
+      "expect": {
+        "phase": "access_handoff",
+        "brain": "access_reserved",
+        "replyContains": "Booked",
+        "replyMatches": "1:00\\s*PM.*2:00\\s*PM",
+        "lane": "access",
+        "hasLastBooking": true,
+        "reservationsCount": 2,
+        "activeReservationsCount": 2
+      }
+    }
+  ]
+}
