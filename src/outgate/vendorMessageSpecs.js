@@ -38,7 +38,83 @@ function buildVendorConfirmInstructionsText() {
   );
 }
 
+function buildVendorNeedTicketIdText() {
+  return "Reply YES or NO with the ticket id (e.g. YES PENN-012626-0001 Mon 9-11am).";
+}
+
+/**
+ * @param {string} ticketId
+ */
+function buildVendorTicketNotFoundText(ticketId) {
+  const tid = cleanGsm7(ticketId || "");
+  return tid ? `Ticket ${tid} not found.` : "Ticket not found.";
+}
+
+/**
+ * @param {string} ticketId
+ * @param {string} [reason]
+ */
+function buildVendorDeclineRecordedText(ticketId, reason) {
+  const tid = cleanGsm7(ticketId || "");
+  const r = cleanGsm7(reason || "");
+  return r
+    ? `Recorded decline for ${tid}. Reason: ${r}`
+    : `Recorded decline for ${tid}.`;
+}
+
+/**
+ * @param {string} ticketId
+ */
+function buildVendorAcceptNeedWindowText(ticketId) {
+  const tid = cleanGsm7(ticketId || "");
+  return `Accepted ${tid}. Reply with your availability window (e.g. tomorrow 9-11am).`;
+}
+
+/**
+ * @param {string} ticketId
+ * @param {string} appt
+ */
+function buildVendorAcceptScheduledText(ticketId, appt) {
+  const tid = cleanGsm7(ticketId || "");
+  const a = cleanGsm7(appt || "");
+  return `Scheduled ${tid}${a ? `: ${a}` : ""}.`;
+}
+
+/**
+ * @param {string} ticketId
+ */
+function buildVendorWrongTicketText(ticketId) {
+  const tid = cleanGsm7(ticketId || "");
+  return `You are not assigned to ${tid}. Contact the property team if this is wrong.`;
+}
+
+/**
+ * @param {string} availability
+ * @param {string[]} ticketIds
+ */
+function buildVendorMultiPendingNeedTidText(availability, ticketIds) {
+  const a = cleanGsm7(availability || "");
+  const list = (ticketIds || [])
+    .map((id) => cleanGsm7(id))
+    .filter(Boolean)
+    .slice(0, 5)
+    .map((id) => `- ${id}`)
+    .join("\n");
+  return (
+    `You have multiple open jobs. Reply YES with ticket id and your window.\n` +
+    `Availability noted: ${a}\n` +
+    (list ? `Open tickets:\n${list}` : "")
+  );
+}
+
 module.exports = {
   buildVendorDispatchRequestText,
   buildVendorConfirmInstructionsText,
+  buildVendorNeedTicketIdText,
+  buildVendorTicketNotFoundText,
+  buildVendorDeclineRecordedText,
+  buildVendorAcceptNeedWindowText,
+  buildVendorAcceptScheduledText,
+  buildVendorWrongTicketText,
+  buildVendorMultiPendingNeedTidText,
 };

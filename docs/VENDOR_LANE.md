@@ -4,7 +4,7 @@
 
 **Audience:** product, engineering, next agent implementing vendor work.
 
-**Status:** **V0 + V1 in progress (2026-05)** — `069_vendor_lane_v1.sql`, `preloadActorIdentity`, `assignVendorToTicket` + `dispatchVendorRequest`, portal vendor assign calls shared service. **V2 inbound YES/NO** and **V3 policy auto-route** not started. Orchestrator still uses **lane stub** for vendor SMS until V2.
+**Status:** **V0 + V1 + V2 shipped (2026-05)** — dispatch SMS, YES/NO inbound (`handleVendorInbound`), portal vendor status on `portal_tickets_v1` (`073_portal_tickets_vendor_lane.sql`). **V3 policy auto-route** not started.
 
 **Related (do not duplicate here):**
 
@@ -81,14 +81,14 @@ Through **Phase V2** (inbound YES/NO):
 | Layer | Status | Location |
 |-------|--------|----------|
 | Lane classification | **Partial** | `src/brain/router/decideLane.js` → `vendorLane` via `src/config/lanePolicy.js` (`VENDOR_PHONE_LAST10_LIST` env only) |
-| Orchestrator | **Stub** | `src/inbound/routeInboundDecision.js` `buildNonMaintenanceLaneStub("vendorLane")`; `runInboundPipeline.js` → `LANE_STUB` |
+| Orchestrator | **V2 inbound** | `runInboundPipeline.js` → `handleVendorInbound`; system lane still stub |
 | Vendor catalog | **Shipped** | `supabase/migrations/046_vendors_and_program_line_vendor.sql` — `vendors` + program line vendor |
 | PM assign vendor on ticket | **Shipped** | `src/dal/portalTicketAssignment.js` → `assigned_type=VENDOR`, `work_items.owner_type=VENDOR` — **no SMS dispatch** |
 | Portal routes | **Shipped** | `POST /api/portal/tickets/:ticketId/assignment`, `GET /api/portal/vendors-for-assignment`, `POST /api/portal/vendors` |
 | propera-app UI | **Shipped** | `TicketDetailPanel` vendor tab; `/api/pm/vendors-for-assignment` |
 | Policy auto-vendor | **Not started** | GAS: `ASSIGN_VENDOR_BY_POLICY` + `property_policy` keys |
-| Vendor inbound (YES/NO) | **Not started** | GAS: `handleVendorAcceptDecline_`, `handleVendorAvailabilityOnly_` |
-| Outbound dispatch SMS | **Not started** | GAS: `notifyVendorForTicket_`, `assignVendorFromRow_` |
+| Vendor inbound (YES/NO) | **Shipped** | `src/vendor/handleVendorInbound.js`, `parseVendorReply.js` |
+| Outbound dispatch SMS | **Shipped** | `dispatchVendorRequest` in `vendorAssignment.js` |
 | Full policy rules engine | **Not started** | GAS `PolicyRules` sheet — use minimal `property_policy` keys in V3 |
 
 **PARITY_LEDGER:** `26_VENDOR_ENGINE.gs` → **NOT STARTED** (update per phase when code lands).
@@ -105,7 +105,7 @@ All assignment paths must converge on one brain service: **`assignVendorToTicket
 | **2. Portal action** | PM picks vendor on ticket in cockpit | Human + portal route | Yes (default on new assign) | **V1** (dispatch); assign already shipped |
 | **3. Staff lifecycle** | Staff SMS: “needs vendor”, “dispatch”, etc. | Policy key or explicit vendor id only — never guess | Optional | **V4** |
 | **4. Portal “route”** | Assign + send (or resend) to already-assigned vendor | Human | Yes / deduped | **V1** |
-| **5. Agent (later)** | “Assign vendor X to ticket Y” | Agent proposes; brain executes | Per assign flags | **V5** |
+| **5. Agent (Jarvis Plan)** | “Schedule plumber for unit 303 PENN” | `propose_vendor_request` → confirm → `assignVendorToTicket` | **Partial** — portal Plan mode; trade→vendor name match |
 
 **Staff lifecycle today:** `normalizeStaffOutcome.js` can emit `NEEDS_VENDOR` but does **not** assign or dispatch — see [Phase V4](#phase-v4--staff-needs_vendor).
 
@@ -397,7 +397,7 @@ dispatchVendorRequest({ vendor, ticket, traceId })
 |---------|--------|
 | `YES` / `Y` [ticketId] [availability…] | `vendor_status` → `Accepted` (and `Scheduled` when appt parsed); `vendor_appt` from availability text; `event_log` only — **no** `TENANT_VENDOR_SCHEDULED` |
 | `NO` / `N` [ticketId] [reason…] | `vendor_status` → `Declined`; optional internal/manager log in V2 — **no** tenant SMS |
-| Availability-only (no YES prefix) | Treat as `YES` + window (GAS `handleVendorAvailabilityOnly_`) |
+| Availability-only (no YES prefix) | **Shipped** — `extractVendorAvailabilityText` + implicit YES when one active job (GAS `handleVendorAvailabilityOnly_`) |
 | Unknown | `VENDOR_CONFIRM_INSTRUCTIONS` to vendor |
 
 **Ticket resolution order:**

@@ -6,6 +6,10 @@ const {
   proposalFromExpenseDraft,
   buildAttachTicketCostProposal,
 } = require("./attachTicketCost");
+const {
+  proposalFromVendorDraft,
+  buildProposeVendorRequestProposal,
+} = require("./proposeVendorRequest");
 
 module.exports = {
   PROPOSAL_VERSION,
@@ -17,4 +21,6 @@ module.exports = {
   enrichStaffRunWithProposal,
   proposalFromExpenseDraft,
   buildAttachTicketCostProposal,
+  proposalFromVendorDraft,
+  buildProposeVendorRequestProposal,
 };

@@ -20,6 +20,12 @@ const {
 } = require("../proposals");
 const { readProposalConfirmTokenFromPortal } = require("./readPortalProposalContext");
 const { recordThreadForStaffRun } = require("../thread/recordThreadForStaffRun");
+const { parseProposeVendorRequest } = require("./parseProposeVendorRequest");
+const { resolveProposeVendorRequestDraft } = require("./resolveProposeVendorRequestDraft");
+const {
+  buildProposeVendorRequestProposal,
+  normalizeProposalForPortal,
+} = require("../proposals");
 const CONFIRM_BODY_RE = /^(?:yes|y|confirm|ok|1)\.?$/i;
 
 /**
@@ -152,9 +158,59 @@ async function handleJarvisPlanTurn(opts) {
       brain: "jarvis_plan",
       replyText:
         "Plan mode: propose an action, then confirm.\n" +
-        "• Cost: $$amount vendor (e.g. $$42.00 homedepot parts) — pin ticket via page context or include ticket id.\n" +
-        "More operations (schedule, tenant message) will use the same confirm card.",
+        "• Vendor: schedule plumber for unit 303 PENN (or pin ticket / include ticket id).\n" +
+        "• Cost: $$amount vendor (e.g. $$42.00 homedepot parts).\n" +
+        "Confirm card applies to both.",
     };
+  }
+
+  const vendorParsed = parseProposeVendorRequest(bodyTrim, routerParameter);
+  if (vendorParsed) {
+    const draft = await resolveProposeVendorRequestDraft(
+      vendorParsed,
+      actorLabelFromPortal(routerParameter)
+    );
+    if (!draft.ok) {
+      return {
+        ok: true,
+        brain: "jarvis_plan",
+        replyText: draft.message || "Could not draft vendor assignment.",
+      };
+    }
+    const built = buildProposeVendorRequestProposal(draft.commitPayload, draft.summary);
+    const run = {
+      ok: true,
+      brain: "jarvis_plan",
+      replyText: `${draft.summary}\nReply Confirm on the card (or type yes).`,
+      resolution: {
+        needsConfirm: true,
+        confirmToken: built.confirmToken,
+        confirmSummary: draft.summary,
+        proposal: normalizeProposalForPortal(built.proposal),
+      },
+    };
+    const thread = await recordThreadForStaffRun({
+      traceId,
+      actorKey: staffActorKey,
+      transportChannel: "portal",
+      routerParameter,
+      staffRun: run,
+    });
+    if (thread) {
+      run.resolution = { ...run.resolution, thread };
+    }
+    await appendEventLog({
+      traceId,
+      log_kind: "agent",
+      event: "JARVIS_PLAN_PROPOSED",
+      payload: {
+        op: built.proposal.op,
+        proposal_id: built.proposal.proposal_id,
+        needs_confirm: true,
+        thread_id: thread?.thread_id,
+      },
+    });
+    return run;
   }
 
   const expenseRouter = {

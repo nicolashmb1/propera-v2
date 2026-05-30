@@ -73,11 +73,62 @@ const {
   getVapidPublicKeyForClient,
 } = require("./pushNotifications");
 const { portalPushEnabled } = require("../config/env");
+const { attachPortalOrgContextMiddleware } = require("./resolvePortalOrgContext");
+const {
+  canManageOrgSettings,
+  getOrganizationForPortal,
+  patchOrganizationForPortal,
+  listStaffForOrg,
+  createStaffForPortal,
+  patchStaffForPortal,
+  listPortalUsersForOrg,
+  createPortalUserForOrg,
+  patchPortalUserForOrg,
+  deletePortalUserForOrg,
+  listVendorsForOrg,
+  patchVendorForOrg,
+  listPropertiesForOrg,
+  createPropertyForOrg,
+  patchPropertyForOrg,
+  listStaffAssignmentsForOrg,
+  createStaffAssignmentForOrg,
+  patchStaffAssignmentForOrg,
+  deleteStaffAssignmentForOrg,
+} = require("../dal/portalOrgSettings");
+const {
+  listOrgChannelsForPortal,
+  patchOrgChannelForPortal,
+} = require("../dal/portalOrgChannels");
+const {
+  listPoliciesForOrgPortal,
+  patchPolicyForOrgPortal,
+  clearPolicyOverrideForOrgPortal,
+  listPolicyAuditForOrgPortal,
+} = require("../dal/portalOrgPolicies");
+const {
+  getTeamSettingsBundleForOrg,
+  patchOrgResponsibilityPrefs,
+  patchEscalationConfigForOrg,
+  savePropertyCoverageForOrg,
+  saveGlobalOwnerForOrg,
+  copyPropertyCoverageToAll,
+} = require("../dal/portalOrgResponsibility");
+
+function portalOrgFromReq(req) {
+  return (
+    req.portalOrg || {
+      orgId: "",
+      propertyCodes: [],
+      propertyCodesUpper: new Set(),
+    }
+  );
+}
 
 function registerPortalReadRoutes(app) {
-  async function sendTickets(_req, res) {
+  async function sendTickets(req, res) {
     try {
-      const rows = await listTicketsForPortal();
+      const org = portalOrgFromReq(req);
+      const rows = await listTicketsForPortal({ orgScope: org });
       return res.status(200).json(rows);
     } catch (err) {
       return res.status(500).json({
@@ -87,9 +138,10 @@ function registerPortalReadRoutes(app) {
     }
   }
 
-  async function sendProperties(_req, res) {
+  async function sendProperties(req, res) {
     try {
-      const rows = await listPropertiesForPortal();
+      const org = portalOrgFromReq(req);
+      const rows = await listPropertiesForPortal({ orgScope: org });
       return res.status(200).json(rows);
     } catch (err) {
       return res.status(500).json({
@@ -103,7 +155,11 @@ function registerPortalReadRoutes(app) {
     try {
       const includeInactive =
         String(req.query.includeInactive || "").trim() === "1";
-      const rows = await listTenantsForPortal({ includeInactive });
+      const org = portalOrgFromReq(req);
+      const rows = await listTenantsForPortal({
+        includeInactive,
+        orgId: org.orgId,
+      });
       return res.status(200).json(rows);
     } catch (err) {
       return res.status(500).json({
@@ -114,12 +170,28 @@ function registerPortalReadRoutes(app) {
   }
 
   function gate(handler) {
+    const sb = getSupabase();
+    const orgMw = sb ? attachPortalOrgContextMiddleware(sb) : null;
     return (req, res, next) => {
       if (!verifyPortalRequest(req)) {
         return res.status(401).json({ ok: false, error: "unauthorized" });
       }
+      if (orgMw) {
+        return orgMw(req, res, () => handler(req, res, next));
+      }
       return handler(req, res, next);
     };
+  }
+
+  /** Owner/Ops/PM only — requires portal user JWT (not portal token alone). */
+  function gateSettings(handler) {
+    return gate(async (req, res, next) => {
+      const org = portalOrgFromReq(req);
+      if (org.source !== "jwt" || !canManageOrgSettings(org.portalRole)) {
+        return res.status(403).json({ ok: false, error: "settings_forbidden" });
+      }
+      return handler(req, res, next);
+    });
   }
 
   /** Portal token + opt-in turnover flag (`PROPERA_TURNOVER_ENGINE_ENABLED=1`). */
@@ -264,13 +336,14 @@ function registerPortalReadRoutes(app) {
     })
   );
 
-  app.get("/api/portal/vendors-for-assignment", gate(async (_req, res) => {
+  app.get("/api/portal/vendors-for-assignment", gate(async (req, res) => {
     try {
       const sb = getSupabase();
       if (!sb) {
         return res.status(503).json({ ok: false, error: "no_db" });
       }
-      const out = await listVendorsForAssignment(sb);
+      const org = portalOrgFromReq(req);
+      const out = await listVendorsForAssignment(sb, { orgId: org.orgId });
       if (!out.ok) {
         const status = out.error === "vendors_migration_required" ? 503 : 500;
         return res.status(status).json({ ok: false, error: out.error || "list_failed" });
@@ -291,7 +364,8 @@ function registerPortalReadRoutes(app) {
         return res.status(503).json({ ok: false, error: "no_db" });
       }
       const body = req.body && typeof req.body === "object" ? req.body : {};
-      const out = await createVendorForPortal(sb, body);
+      const org = portalOrgFromReq(req);
+      const out = await createVendorForPortal(sb, { ...body, orgId: org.orgId });
       if (!out.ok) {
         const status =
           typeof out.status === "number" && out.status >= 400 && out.status < 600
@@ -1322,6 +1396,560 @@ function registerPortalReadRoutes(app) {
         ok: false,
         error: String(err && err.message ? err.message : err),
       });
+    }
+  }));
+
+  // ── MO-2 org settings (reference/admin catalog) ─────────────────────────
+  app.get("/api/portal/settings/organization", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const out = await getOrganizationForPortal(sb, org.orgId);
+      if (!out.ok) {
+        const status = out.status === 404 ? 404 : 500;
+        return res.status(status).json({ ok: false, error: out.error || "load_failed" });
+      }
+      return res.status(200).json({ ok: true, organization: out.organization });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.patch("/api/portal/settings/organization", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await patchOrganizationForPortal(sb, org.orgId, body);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "patch_failed" });
+      }
+      return res.status(200).json({ ok: true, organization: out.organization });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.get("/api/portal/settings/staff", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const out = await listStaffForOrg(sb, org.orgId);
+      if (!out.ok) return res.status(500).json({ ok: false, error: out.error || "list_failed" });
+      return res.status(200).json({ ok: true, staff: out.staff });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.post("/api/portal/settings/staff", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await createStaffForPortal(sb, org.orgId, body);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "create_failed" });
+      }
+      return res.status(201).json({ ok: true, staff: out.staff });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.patch("/api/portal/settings/staff/:staffId", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await patchStaffForPortal(sb, org.orgId, req.params.staffId, body);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "patch_failed" });
+      }
+      return res.status(200).json({ ok: true, staff: out.staff });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.get("/api/portal/settings/portal-users", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const out = await listPortalUsersForOrg(sb, org.orgId);
+      if (!out.ok) return res.status(500).json({ ok: false, error: out.error || "list_failed" });
+      return res.status(200).json({ ok: true, users: out.users });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.post("/api/portal/settings/portal-users", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await createPortalUserForOrg(sb, org.orgId, body);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "create_failed" });
+      }
+      return res.status(201).json({ ok: true, user: out.user });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.patch("/api/portal/settings/portal-users/:id", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await patchPortalUserForOrg(sb, org.orgId, req.params.id, body);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "patch_failed" });
+      }
+      return res.status(200).json({ ok: true, user: out.user });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.delete("/api/portal/settings/portal-users/:id", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const out = await deletePortalUserForOrg(sb, org.orgId, req.params.id);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "delete_failed" });
+      }
+      return res.status(200).json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.get("/api/portal/settings/vendors", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const includeInactive = String(req.query.includeInactive || "").trim() === "1";
+      const out = await listVendorsForOrg(sb, org.orgId, { includeInactive });
+      if (!out.ok) {
+        const status = out.error === "vendors_migration_required" ? 503 : 500;
+        return res.status(status).json({ ok: false, error: out.error || "list_failed" });
+      }
+      return res.status(200).json({ ok: true, vendors: out.vendors });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.patch("/api/portal/settings/vendors/:vendorId", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await patchVendorForOrg(sb, org.orgId, req.params.vendorId, body);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "patch_failed" });
+      }
+      return res.status(200).json({ ok: true, vendor: out.vendor });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.get("/api/portal/settings/properties", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const includeInactive = String(req.query.includeInactive || "").trim() === "1";
+      const out = await listPropertiesForOrg(sb, org.orgId, { includeInactive });
+      if (!out.ok) {
+        return res.status(500).json({ ok: false, error: out.error || "list_failed" });
+      }
+      return res.status(200).json({ ok: true, properties: out.properties });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.post("/api/portal/settings/properties", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await createPropertyForOrg(sb, org.orgId, body);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "create_failed" });
+      }
+      return res.status(201).json({ ok: true, property: out.property });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.patch("/api/portal/settings/properties/:propertyCode", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await patchPropertyForOrg(sb, org.orgId, req.params.propertyCode, body);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "patch_failed" });
+      }
+      return res.status(200).json({ ok: true, property: out.property });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.get("/api/portal/settings/staff-assignments", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const out = await listStaffAssignmentsForOrg(sb, org.orgId);
+      if (!out.ok) {
+        return res.status(500).json({ ok: false, error: out.error || "list_failed" });
+      }
+      return res.status(200).json({ ok: true, assignments: out.assignments });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.post("/api/portal/settings/staff-assignments", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await createStaffAssignmentForOrg(sb, org.orgId, body);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "create_failed" });
+      }
+      return res.status(201).json({ ok: true, assignment: out.assignment });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.patch("/api/portal/settings/staff-assignments/:id", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await patchStaffAssignmentForOrg(sb, org.orgId, req.params.id, body);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "patch_failed" });
+      }
+      return res.status(200).json({ ok: true, assignment: out.assignment });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.delete("/api/portal/settings/staff-assignments/:id", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const out = await deleteStaffAssignmentForOrg(sb, org.orgId, req.params.id);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "delete_failed" });
+      }
+      return res.status(200).json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.get("/api/portal/settings/team", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const out = await getTeamSettingsBundleForOrg(sb, org.orgId);
+      if (!out.ok) {
+        return res.status(500).json({ ok: false, error: out.error || "load_failed" });
+      }
+      return res.status(200).json({ ok: true, ...out });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.patch("/api/portal/settings/team/prefs", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await patchOrgResponsibilityPrefs(sb, org.orgId, body);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "patch_failed" });
+      }
+      return res.status(200).json({ ok: true, enabledRoleKeys: out.enabledRoleKeys });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.patch("/api/portal/settings/team/escalation", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await patchEscalationConfigForOrg(sb, org.orgId, body);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "patch_failed" });
+      }
+      return res.status(200).json({ ok: true, escalation: out.escalation });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.put("/api/portal/settings/team/coverage/:propertyCode", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const roles = body.roles ?? body.roleCoverage ?? body;
+      const out = await savePropertyCoverageForOrg(sb, org.orgId, req.params.propertyCode, roles);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "save_failed" });
+      }
+      return res.status(200).json({ ok: true, propertyCode: out.propertyCode, coverage: out.coverage });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.put("/api/portal/settings/team/global-owner", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const ownerStaffId = String(body.ownerStaffId ?? body.staffId ?? "").trim();
+      const out = await saveGlobalOwnerForOrg(sb, org.orgId, ownerStaffId);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "save_failed" });
+      }
+      return res.status(200).json({ ok: true, propertyCode: out.propertyCode, coverage: out.coverage });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.post("/api/portal/settings/team/copy-coverage", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const sourcePropertyCode = String(
+        body.sourcePropertyCode ?? body.propertyCode ?? body.from ?? ""
+      ).trim();
+      const out = await copyPropertyCoverageToAll(sb, org.orgId, sourcePropertyCode);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "copy_failed" });
+      }
+      return res.status(200).json({
+        ok: true,
+        copiedFrom: out.copiedFrom,
+        propertyCount: out.propertyCount,
+      });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.get("/api/portal/settings/channels", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const out = await listOrgChannelsForPortal(sb, org.orgId);
+      if (!out.ok) {
+        const status = out.error === "missing_org_id" ? 400 : 500;
+        return res.status(status).json({ ok: false, error: out.error || "load_failed" });
+      }
+      return res.status(200).json({
+        ok: true,
+        orgId: out.orgId,
+        publicBaseUrl: out.publicBaseUrl,
+        channels: out.channels,
+      });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.patch("/api/portal/settings/channels/:channelKey", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await patchOrgChannelForPortal(sb, org.orgId, req.params.channelKey, body);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "patch_failed" });
+      }
+      return res.status(200).json({ ok: true, channel: out.channel });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.get("/api/portal/settings/policies", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const scope = String(req.query.propertyCode || req.query.scope || "GLOBAL").trim();
+      const out = await listPoliciesForOrgPortal(sb, org.orgId, scope);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "load_failed" });
+      }
+      const propsOut = await listPropertiesForOrg(sb, org.orgId);
+      const properties = propsOut.ok
+        ? (propsOut.properties || []).map((p) => ({
+            propertyCode: p.propertyCode,
+            displayName: p.displayName,
+          }))
+        : [];
+      return res.status(200).json({
+        ok: true,
+        scope: out.scope,
+        groups: out.groups,
+        policies: out.policies,
+        properties,
+      });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.get("/api/portal/settings/policies/audit", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const out = await listPolicyAuditForOrgPortal(sb, org.orgId, req.query.limit);
+      if (!out.ok) return res.status(500).json({ ok: false, error: out.error || "audit_failed" });
+      return res.status(200).json({
+        ok: true,
+        entries: out.entries,
+        auditAvailable: out.auditAvailable !== false,
+      });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.patch("/api/portal/settings/policies/:propertyCode/:policyKey", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await patchPolicyForOrgPortal(
+        sb,
+        org.orgId,
+        req.params.propertyCode,
+        req.params.policyKey,
+        body.value,
+        { emailLower: org.emailLower }
+      );
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "patch_failed" });
+      }
+      return res.status(200).json({ ok: true, policy: out.policy });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.delete("/api/portal/settings/policies/:propertyCode/:policyKey", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const out = await clearPolicyOverrideForOrgPortal(
+        sb,
+        org.orgId,
+        req.params.propertyCode,
+        req.params.policyKey,
+        { emailLower: org.emailLower }
+      );
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "clear_failed" });
+      }
+      return res.status(200).json({ ok: true, policy: out.policy });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
     }
   }));
 

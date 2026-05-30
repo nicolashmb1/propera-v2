@@ -33,6 +33,7 @@ const { verifyPortalRequest } = require("./portal/portalAuth");
 const { runInboundPipeline } = require("./inbound/runInboundPipeline");
 const { registerDashboardRoutes } = require("./dashboard/registerDashboard");
 const { registerPortalReadRoutes } = require("./portal/registerPortalRoutes");
+const { registerOnboardingRoutes } = require("./portal/registerOnboardingRoutes");
 const { registerCommunicationRoutes } = require("./communication/registerCommunicationRoutes");
 const { registerCommunicationsWebhooks } = require("./webhooks/communicationsSms");
 const { registerMeterRunRoutes } = require("./meterRuns/registerMeterRunRoutes");
@@ -54,6 +55,7 @@ app.use(requestContext);
 
 registerDashboardRoutes(app);
 registerPortalReadRoutes(app);
+registerOnboardingRoutes(app);
 registerCommunicationRoutes(app);
 registerCommunicationsWebhooks(app);
 registerMeterRunRoutes(app);

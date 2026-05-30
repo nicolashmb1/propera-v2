@@ -16,6 +16,7 @@ const AGENT_TRANSPORTS = new Set(["sms", "whatsapp", "telegram"]);
  * @param {object | null} [o.complianceRun]
  * @param {object | null} [o.suppressedRun]
  * @param {object | null} [o.stubRun]
+ * @param {object | null} [o.vendorRun]
  * @param {boolean} o.coreEnabledFlag
  * @param {boolean} o.dbConfigured
  * @returns {boolean}
@@ -28,7 +29,9 @@ function isTenantAgentEligible(o) {
   if (!AGENT_TRANSPORTS.has(transport)) return false;
 
   if (o.staffContext && o.staffContext.isStaff) return false;
-  if (o.staffRun || o.complianceRun || o.suppressedRun || o.stubRun) return false;
+  if (o.staffRun || o.complianceRun || o.suppressedRun || o.stubRun || o.vendorRun) {
+    return false;
+  }
 
   const precursor = o.precursor || {};
   if (precursor.tenantCommand) return false;

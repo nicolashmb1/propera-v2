@@ -55,6 +55,11 @@ function readPortalCreateTicketPresentation(routerParameter) {
 const { parseMediaJson } = require("../brain/shared/mediaPayload");
 const { normalizePhoneE164 } = require("../utils/phone");
 const { getStaffDisplayNameByStaffId } = require("./staffPhoneByStaffId");
+const { responsibilityResolverEnabled } = require("../config/env");
+const {
+  resolveAssignee,
+  MAINTENANCE_RULE_ID,
+} = require("../responsibility/resolveAssignee");
 const {
   normalizeLocationType,
   isCommonAreaLocation,
@@ -74,6 +79,61 @@ function tenantContactKeyFromActor(actorKey) {
 
 function shortWiSuffix() {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase();
+}
+
+/**
+ * Maintenance create assignee — Team & routing (Phase 2) or legacy ASSIGN_DEFAULT_OWNER policy.
+ * @returns {Promise<{ ownerId: string, assignLabel: string, assignmentRef: string }>}
+ */
+async function resolveMaintenanceOwnerAtCreate(sb, propertyCode) {
+  const propCodeUpper = String(propertyCode || "").trim().toUpperCase();
+
+  if (responsibilityResolverEnabled()) {
+    try {
+      const resolved = await resolveAssignee(sb, {
+        propertyCode: propCodeUpper,
+        module: "maintenance",
+      });
+      if (resolved.ok) {
+        if (resolved.migrationMissing) {
+          /* staff_property_roles not applied — safe fallback below */
+        } else if (resolved.assigneeId) {
+          return {
+            ownerId: resolved.assigneeId,
+            assignLabel: resolved.assigneeName || resolved.assigneeId,
+            assignmentRef: resolved.ruleId || MAINTENANCE_RULE_ID,
+          };
+        } else {
+          return { ownerId: "", assignLabel: "", assignmentRef: "" };
+        }
+      }
+    } catch (_) {
+      /* fall through to legacy policy */
+    }
+  }
+
+  let ownerId = "";
+  try {
+    ownerId = String(
+      (await lifecyclePolicyGet(sb, propCodeUpper, "ASSIGN_DEFAULT_OWNER", "")) ||
+        ""
+    ).trim();
+  } catch (_) {}
+
+  let assignLabel = "";
+  if (ownerId) {
+    try {
+      assignLabel = (await getStaffDisplayNameByStaffId(sb, ownerId)) || ownerId;
+    } catch (_) {
+      assignLabel = ownerId;
+    }
+  }
+
+  return {
+    ownerId,
+    assignLabel,
+    assignmentRef: ownerId ? "ASSIGN_DEFAULT_OWNER" : "",
+  };
 }
 
 function buildTicketAttachmentsFromRouterParameter(routerParameter) {
@@ -244,23 +304,11 @@ async function finalizeMaintenanceDraft(o) {
   });
 
   const propCodeUpper = String(o.propertyCode || "").trim().toUpperCase();
-  let ownerId = "";
-  try {
-    ownerId = String(
-      (await lifecyclePolicyGet(sb, propCodeUpper, "ASSIGN_DEFAULT_OWNER", "")) ||
-        ""
-    ).trim();
-  } catch (_) {}
-
-  let assignLabel = "";
-  if (ownerId) {
-    try {
-      assignLabel =
-        (await getStaffDisplayNameByStaffId(sb, ownerId)) || ownerId;
-    } catch (_) {
-      assignLabel = ownerId;
-    }
-  }
+  const { ownerId, assignLabel, assignmentRef } = await resolveMaintenanceOwnerAtCreate(
+    sb,
+    propCodeUpper
+  );
+  const assignmentAuditTag = assignmentRef ? `POLICY:${assignmentRef}` : "";
 
   /** GAS lifecycle: unscheduled intake vs emergency (see `onWorkItemCreatedUnscheduled_`). */
   const wiState =
@@ -372,11 +420,11 @@ async function finalizeMaintenanceDraft(o) {
     assigned_id: ownerId,
     assigned_name: assignLabel,
     assigned_at: ownerId ? nowIso : null,
-    assigned_by: ownerId ? "POLICY:ASSIGN_DEFAULT_OWNER" : "",
+    assigned_by: ownerId ? assignmentAuditTag : "",
     assignment_source: ownerId ? "POLICY" : "",
     assignment_note: "",
     assignment_updated_at: ownerId ? nowIso : null,
-    assignment_updated_by: ownerId ? "POLICY:ASSIGN_DEFAULT_OWNER" : "",
+    assignment_updated_by: ownerId ? assignmentAuditTag : "",
     vendor_status: "",
     vendor_appt: "",
     vendor_notes: "",

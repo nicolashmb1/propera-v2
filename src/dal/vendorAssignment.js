@@ -451,4 +451,6 @@ module.exports = {
   dispatchVendorRequest,
   vendorDispatchEnabled,
   isDispatchDeduped,
+  upsertVendorConversationCtx,
+  loadTicketForVendorOps,
 };

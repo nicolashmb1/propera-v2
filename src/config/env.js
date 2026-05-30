@@ -349,6 +349,13 @@ function twilioBroadcastFrom() {
 
 /** Single-org V1 brand id used by communication campaigns unless a route provides one. */
 function communicationOrgId() {
+  return defaultOrgId();
+}
+
+/** Default management-company org when portal JWT/header does not resolve one (dev + single-tenant). */
+function defaultOrgId() {
+  const explicit = String(env("PROPERA_DEFAULT_ORG_ID", "")).trim().toLowerCase();
+  if (explicit) return explicit;
   return String(env("COMM_ORG_ID", "grand")).trim().toLowerCase() || "grand";
 }
 
@@ -400,6 +407,25 @@ function devOrgSubdomain() {
   return String(env("DEV_ORG_SUBDOMAIN", "thegrand")).trim().toLowerCase();
 }
 
+/** MO-4 — public company signup wizard (requires shared secret on bootstrap routes). */
+function orgSignupEnabled() {
+  return env("PROPERA_ORG_SIGNUP_ENABLED", "") === "1";
+}
+
+function orgSignupSecret() {
+  return String(env("PROPERA_ORG_SIGNUP_SECRET", "")).trim();
+}
+
+/** Phase 2 — Team & routing owns maintenance assignee at create (see resolveAssignee.js). Set 0 to use ASSIGN_DEFAULT_OWNER policy. */
+function responsibilityResolverEnabled() {
+  return envFlagTrue("PROPERA_USE_RESPONSIBILITY_RESOLVER", true);
+}
+
+/** Public HTTPS base for V2 (webhook URLs in Settings → Channels). No trailing slash. */
+function properaPublicBaseUrl() {
+  return String(env("PROPERA_PUBLIC_BASE_URL", "")).trim().replace(/\/+$/, "");
+}
+
 /**
  * Local dev only — skip SMS; expose fixed OTP on request-otp and accept on verify.
  * Hard-off when NODE_ENV=production even if env is set.
@@ -422,6 +448,11 @@ function outgateChannelRenderEnabled() {
 /** Tenant Agent adapter — default off (legacy slot machine). */
 function tenantAgentEnabled() {
   return envFlagTrue("TENANT_AGENT_ENABLED", false);
+}
+
+/** Vendor Agent adapter on vendorLane — default off; deterministic handleVendorInbound first. */
+function vendorAgentEnabled() {
+  return envFlagTrue("VENDOR_AGENT_ENABLED", false);
 }
 
 function tenantAgentLlmEnabled() {
@@ -510,6 +541,7 @@ module.exports = {
   intakeMediaOcrEnabled,
   outgateChannelRenderEnabled,
   tenantAgentEnabled,
+  vendorAgentEnabled,
   tenantAgentLlmEnabled,
   tenantAgentPropertyAllowlist,
   tenantAgentMaxTurns,
@@ -548,6 +580,7 @@ module.exports = {
   vapidSubject,
   twilioBroadcastFrom,
   communicationOrgId,
+  defaultOrgId,
   commReplyWindowHours,
   openaiCommDraftModel,
   intakeAudioEnabled,
@@ -567,6 +600,10 @@ module.exports = {
   tenantDocsBucket,
   commMainNumberDisplay,
   devOrgSubdomain,
+  orgSignupEnabled,
+  orgSignupSecret,
+  responsibilityResolverEnabled,
+  properaPublicBaseUrl,
   tenantDevOtpBypass,
   tenantDevOtpCode,
 };

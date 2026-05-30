@@ -9,6 +9,7 @@ const {
   laneAllowsMaintenanceCore,
   buildNonMaintenanceLaneStub,
   shouldShowNonMaintenanceLaneStub,
+  shouldInvokeVendorLane,
   shouldEvaluateSmsSuppress,
   shouldRunSmsComplianceBranch,
   resolveDefaultBrain,
@@ -202,7 +203,21 @@ test("computeCanEnterCore — blocked on vendor lane (20-C)", () => {
   );
 });
 
-test("shouldShowNonMaintenanceLaneStub", () => {
+test("shouldInvokeVendorLane", () => {
+  const base = {
+    precursor: { outcome: "PRECURSOR_EVALUATED" },
+    laneDecision: { lane: "vendorLane" },
+    staffRun: null,
+    complianceRun: null,
+    suppressedRun: null,
+    actorIdentity: { isVendor: true, vendor: { vendorId: "V1" } },
+  };
+  assert.equal(shouldInvokeVendorLane(base), true);
+  assert.equal(shouldInvokeVendorLane({ ...base, actorIdentity: { isVendor: false } }), false);
+  assert.equal(shouldInvokeVendorLane({ ...base, staffRun: { brain: "x" } }), false);
+});
+
+test("shouldShowNonMaintenanceLaneStub — vendor lane uses handleVendorInbound", () => {
   assert.equal(
     shouldShowNonMaintenanceLaneStub({
       precursor: { outcome: "PRECURSOR_EVALUATED" },
@@ -211,7 +226,7 @@ test("shouldShowNonMaintenanceLaneStub", () => {
       complianceRun: null,
       suppressedRun: null,
     }),
-    true
+    false
   );
   assert.equal(
     shouldShowNonMaintenanceLaneStub({

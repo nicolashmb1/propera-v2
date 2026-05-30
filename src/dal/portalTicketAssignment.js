@@ -273,17 +273,21 @@ async function getVendorDisplayNameByVendorId(sb, vendorIdText) {
 /**
  * Active vendors for PM assignment (portal token).
  * @param {import("@supabase/supabase-js").SupabaseClient} sb
+ * @param {{ orgId?: string }} [opts]
  */
-async function listVendorsForAssignment(sb) {
+async function listVendorsForAssignment(sb, opts = {}) {
   if (!sb) {
     return { ok: false, error: "no_db", vendors: [] };
   }
 
-  const { data: rows, error: vErr } = await sb
+  const orgId = String(opts.orgId || "").trim().toLowerCase();
+
+  let query = sb
     .from("vendors")
     .select("vendor_id, display_name, active")
-    .eq("active", true)
-    .order("display_name", { ascending: true });
+    .eq("active", true);
+  if (orgId) query = query.eq("org_id", orgId);
+  const { data: rows, error: vErr } = await query.order("display_name", { ascending: true });
 
   if (vErr) {
     if (vErr.code === "42P01" || /relation.*vendors.*does not exist/i.test(String(vErr.message || ""))) {
@@ -352,11 +356,15 @@ async function resolveUniqueVendorId(sb, baseId) {
  * @param {string} input.displayName
  * @param {string} [input.vendorId] — optional explicit slug; otherwise derived from display name
  * @param {string} [input.notes]
+ * @param {string} [input.orgId]
  */
 async function createVendorForPortal(sb, input) {
   if (!sb) {
     return { ok: false, error: "no_db" };
   }
+  const orgId =
+    String((input && input.orgId) || (input && input.org_id) || "").trim().toLowerCase() ||
+    "grand";
   const displayName = String((input && input.displayName) || (input && input.display_name) || "")
     .trim()
     .slice(0, 200);
@@ -393,6 +401,7 @@ async function createVendorForPortal(sb, input) {
     display_name: displayName,
     active: true,
     notes,
+    org_id: orgId,
     created_at: now,
     updated_at: now,
   });
@@ -613,7 +622,7 @@ async function applyPortalTicketAssignment(o) {
     }
 
     const dispatchOnAssign =
-      o.dispatchOnAssign !== false && o.dispatch_on_assign !== false;
+      o.dispatchOnAssign === true || o.dispatch_on_assign === true;
     const vOut = await assignVendorToTicket({
       ticketLookupHint: decoded,
       ticketKeyHint: o.ticketKeyHint ?? o.ticket_key,

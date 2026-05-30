@@ -78,7 +78,8 @@ async function recordThreadForStaffRun(opts) {
   const committedOp =
     resolution.committed_op ||
     (resolution.costEntryId && !resolution.needsConfirm ? "attach_ticket_cost" : "") ||
-    (staffRun.ok !== false && resolution.idempotent ? "attach_ticket_cost" : "");
+    (staffRun.ok !== false && resolution.idempotent ? "attach_ticket_cost" : "") ||
+    (resolution.committed_op === "propose_vendor_request" ? "propose_vendor_request" : "");
   const proposalId =
     resolution.proposal_id ||
     (proposal && proposal.proposal_id) ||

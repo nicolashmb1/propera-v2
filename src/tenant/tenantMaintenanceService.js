@@ -13,7 +13,7 @@
 const { buildRouterParameterFromPortal } = require("../contracts/buildRouterParameterFromPortal");
 const { runInboundPipeline } = require("../inbound/runInboundPipeline");
 const { getSupabase } = require("../db/supabase");
-const { supabaseTenantDocsBucket } = require("../config/env");
+const { supabaseTenantDocsBucket, supabaseUrl } = require("../config/env");
 const { normalizePhoneE164 } = require("../utils/phone");
 
 /** Closed tab — Propera canonical "Completed" (normalizePortalTicketStatus). */
@@ -42,6 +42,18 @@ function isTenantOpenStatus(s) {
 /** Case/space-insensitive unit match (roster "14B" vs ticket "14 B"). */
 function normalizeUnitLabel(label) {
   return String(label || "").trim().toUpperCase().replace(/\s+/g, "");
+}
+
+/** pm-attachments object path or legacy token → public Supabase object URL. */
+function resolveTenantAttachmentPublicUrl(token) {
+  const t = String(token || "").trim();
+  if (!t) return "";
+  if (/^https?:\/\//i.test(t)) return t;
+  const base = String(supabaseUrl || "").trim().replace(/\/$/, "");
+  if (!base) return t;
+  const path = t.replace(/^pm-attachments\//i, "").replace(/^\/+/, "");
+  if (!path.startsWith("tenant-portal/")) return t;
+  return encodeURI(`${base}/storage/v1/object/public/pm-attachments/${path}`);
 }
 
 function tenantTicketScope(tenantCtx) {
@@ -88,7 +100,11 @@ function mapTicketToTenantShape(row) {
     serviceNotes:   String(r.service_notes || "").trim(),
     assignee:       String(r.assigned_name || r.assign_to || "").trim(),
     attachments:    String(r.attachments || "").trim()
-                      .split(/[\n|]+/).map((s) => s.trim()).filter(Boolean),
+                      .split(/[\n|]+/)
+                      .map((s) => s.trim())
+                      .filter(Boolean)
+                      .map(resolveTenantAttachmentPublicUrl)
+                      .filter(Boolean),
   };
 }
 
@@ -382,7 +398,7 @@ async function createTenantMaintenanceTicket(tenantCtx, body, traceId) {
 
 /**
  * Generate a signed upload URL for a maintenance photo.
- * Path: maintenance-photos/{propertyCode}/{tenantId}/{fileName}
+ * Path: pm-attachments/tenant-portal/{propertyCode}/{tenantId}/{fileName}
  *
  * @param {import("@supabase/supabase-js").SupabaseClient} sb
  * @param {{ propertyCode: string, tenantId: string }} tenantCtx
@@ -393,20 +409,23 @@ async function getMaintenanceUploadUrl(sb, tenantCtx, fileName) {
   const safeName = String(fileName || "photo.jpg")
     .replace(/[^a-zA-Z0-9._-]/g, "_")
     .slice(0, 100);
-  const bucket = "maintenance-photos";
-  const path   = `${propertyCode.toUpperCase()}/${tenantId}/${Date.now()}_${safeName}`;
+  /** Same bucket as PM portal (`026_pm_attachments_storage_bucket.sql`) — public URLs on ticket rows. */
+  const bucket = "pm-attachments";
+  const path = `tenant-portal/${propertyCode.toUpperCase()}/${tenantId}/${Date.now()}_${safeName}`;
 
-  const { data, error } = await sb.storage
-    .from(bucket)
-    .createSignedUploadUrl(path);
+  /** @deprecated — propera-app uses POST /api/tenant/maintenance/upload (service-role upload). */
+  const { data, error } = await sb.storage.from(bucket).createSignedUploadUrl(path);
 
   if (error) throw Object.assign(new Error(error.message), { code: "STORAGE_ERROR" });
+
+  const { data: pub } = sb.storage.from(bucket).getPublicUrl(data.path);
 
   return {
     uploadUrl:  data.signedUrl,
     path:       data.path,
     token:      data.token,
-    publicPath: path,
+    publicPath: data.path,
+    publicUrl:  pub.publicUrl,
   };
 }
 

@@ -5,6 +5,7 @@
 const { getSupabase } = require("../../db/supabase");
 const { PROPOSAL_OPS } = require("./types");
 const { commitAttachTicketCost } = require("./attachTicketCost");
+const { commitProposeVendorRequest } = require("./proposeVendorRequest");
 
 /**
  * @param {{ op: string, proposal_id: string, payload: object }} verified
@@ -24,6 +25,8 @@ async function commitProposal(verified, ctx) {
   switch (op) {
     case PROPOSAL_OPS.ATTACH_TICKET_COST:
       return commitAttachTicketCost(sb, verified, ctx);
+    case PROPOSAL_OPS.PROPOSE_VENDOR_REQUEST:
+      return commitProposeVendorRequest(sb, verified, ctx);
     default:
       return {
         ok: false,

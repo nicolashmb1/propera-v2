@@ -7,6 +7,69 @@
 
 ---
 
+## 2026-05-30 — MO-4 Company onboarding wizard
+
+| Area | Change |
+|------|--------|
+| **SQL** | **`078_org_onboarding.sql`** — `organizations.onboarding_completed_at`, `created_via`. |
+| **V2** | `portalOrgOnboarding.js` + `registerOnboardingRoutes.js` — bootstrap org + owner + first property; gated by `PROPERA_ORG_SIGNUP_*`. |
+| **App** | `/signup/company` 4-step wizard; `/api/onboarding/*` proxies + Supabase auth link. |
+
+**Enable:** set `PROPERA_ORG_SIGNUP_ENABLED=1` and same `PROPERA_ORG_SIGNUP_SECRET` on **both** propera-v2 and propera-app. Run migration **078**.
+
+**Not in v1:** public signup without secret; multi-property wizard; DNS for custom domains; org-scoped GLOBAL policy.
+
+---
+
+## 2026-05-30 — MO-2c Policies (operational policy admin PC-2)
+
+| Area | Change |
+|------|--------|
+| **SQL** | **`077_policy_change_log.sql`** — append-only audit for Settings policy edits. |
+| **V2** | `portalOrgPolicies.js` — curated `property_policy` keys (sched, conflict, lifecycle/contact); `GET/PATCH/DELETE /api/portal/settings/policies*` + audit route. |
+| **App** | `/settings/policies` — scope selector (GLOBAL + properties), grouped table, revert override, recent changes. |
+
+**Not in v1:** effective dating; finance keys; org-scoped GLOBAL (shared `GLOBAL` row until org_id on policy); full PropertyPolicy sheet parity.
+
+---
+
+## 2026-05-30 — MO-3 Channels (org channel metadata + guided setup)
+
+| Area | Change |
+|------|--------|
+| **SQL** | **`076_org_channel_config.sql`** — `org_channel_configs` (per-org phone/Telegram metadata + setup status); seeds five channel keys per org. |
+| **V2** | `portalOrgChannels.js` + `GET/PATCH /api/portal/settings/channels`; merges catalog with platform env hints (masked); webhook URLs when `PROPERA_PUBLIC_BASE_URL` set. |
+| **App** | `/settings/channels` — checklist UI, edit modal; proxy `/api/settings/channels`. |
+
+**Not in v1:** inbound org routing by `To` number (brain paths unchanged); Twilio secrets in DB; auto webhook registration.
+
+---
+
+## 2026-05-30 — MO-2 Settings UI (org self-admin v1)
+
+| Area | Change |
+|------|--------|
+| **V2** | `portalOrgSettings.js` + `/api/portal/settings/*` routes (org, staff, portal-users, vendors); `gateSettings` requires JWT + Owner/Ops/PM. |
+| **App** | `/settings` — Organization, Staff, Portal access, Vendors; sidebar link for elevated roles; proxies under `/api/settings/*`. |
+
+**Not in v1:** property edit/aliases, staff property assignments, policies, audit log.
+
+---
+
+## 2026-05-30 — Multi-org spine MO-1 (portal isolation foundation)
+
+| Area | Change |
+|------|--------|
+| **SQL** | **`074_org_spine_core.sql`** — `org_id` on `portal_auth_allowlist`, `staff`, `vendors`, `tenant_roster`, `property_aliases`; allowlist unique `(org_id, email_lower)`. |
+| **Docs** | **`docs/MULTI_ORG_ARCHITECTURE.md`** — shared-DB multi-tenant doctrine + phases. |
+| **V2** | `resolvePortalOrgContext.js`, `portalOrgScope.js`, `defaultOrgId()`; portal list routes scoped (tickets, properties, tenants, vendors). |
+| **App** | `/api/me` org payload; `portalOrgScope.ts`; supabase + v2-http reads forward JWT / filter by org. |
+| **Ops** | Run **`074`** after **`073`** in Supabase SQL Editor. Set **`PROPERA_DEFAULT_ORG_ID=grand`** (or client org slug) on V2 + app. |
+
+**Next (MO-2):** Settings UI — staff, allowlist, vendors, property admin (no wizard yet).
+
+---
+
 ## 2026-05-27 — Jarvis thread state v0 (foundation layer 2)
 
 | Area | Change |

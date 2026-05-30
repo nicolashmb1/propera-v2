@@ -253,6 +253,7 @@ function resolveDefaultBrain(o) {
     staffRun,
     complianceRun,
     suppressedRun,
+    vendorRun,
     stubRun,
     accessRun,
     coreRun,
@@ -262,6 +263,7 @@ function resolveDefaultBrain(o) {
   if (staffRun && staffRun.brain) return staffRun.brain;
   if (complianceRun && complianceRun.brain) return complianceRun.brain;
   if (suppressedRun && suppressedRun.brain) return suppressedRun.brain;
+  if (vendorRun && vendorRun.brain) return vendorRun.brain;
   if (stubRun && stubRun.brain) return stubRun.brain;
   if (accessRun && accessRun.brain) return accessRun.brain;
   if (coreRun && coreRun.brain) return coreRun.brain;
@@ -277,12 +279,34 @@ function resolveDefaultBrain(o) {
 
 /**
  * Precursor evaluated + non-maintenance lane + no higher-priority branch → show lane stub.
+ * Vendor lane uses `handleVendorInbound` (V2) — never the generic stub.
  */
 function shouldShowNonMaintenanceLaneStub(o) {
   const { precursor, laneDecision, staffRun, complianceRun, suppressedRun } = o || {};
   if (!precursor || precursor.outcome !== "PRECURSOR_EVALUATED") return false;
+  if (String(laneDecision?.lane || "") === "vendorLane") return false;
   if (laneAllowsMaintenanceCore(laneDecision || {})) return false;
   if (staffRun || complianceRun || suppressedRun) return false;
+  return true;
+}
+
+/**
+ * Vendor SMS/WA/TG after precursor — YES/NO handler (not maintenance core, not stub).
+ * @param {object} o
+ * @param {{ outcome?: string }} o.precursor
+ * @param {{ lane?: string }} o.laneDecision
+ * @param {{ isVendor?: boolean }} o.actorIdentity
+ * @param {object | null} [o.staffRun]
+ * @param {object | null} [o.complianceRun]
+ * @param {object | null} [o.suppressedRun]
+ */
+function shouldInvokeVendorLane(o) {
+  const { precursor, laneDecision, actorIdentity, staffRun, complianceRun, suppressedRun } =
+    o || {};
+  if (!precursor || precursor.outcome !== "PRECURSOR_EVALUATED") return false;
+  if (String(laneDecision?.lane || "") !== "vendorLane") return false;
+  if (staffRun || complianceRun || suppressedRun) return false;
+  if (!actorIdentity || actorIdentity.isVendor !== true) return false;
   return true;
 }
 
@@ -292,6 +316,7 @@ module.exports = {
   laneAllowsMaintenanceCore,
   buildNonMaintenanceLaneStub,
   shouldShowNonMaintenanceLaneStub,
+  shouldInvokeVendorLane,
   shouldInvokeStaffLifecycle,
   shouldRunSmsComplianceBranch,
   shouldEvaluateSmsSuppress,

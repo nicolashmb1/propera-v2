@@ -4,6 +4,7 @@ const {
   buildProposalConfirmToken,
   verifyProposalConfirmToken,
   proposalFromExpenseDraft,
+  proposalFromVendorDraft,
   normalizeProposalForPortal,
   PROPOSAL_OPS,
 } = require("../src/agent/proposals");
@@ -72,4 +73,23 @@ test("proposalFromExpenseDraft shape", () => {
   assert.equal(p.op, PROPOSAL_OPS.ATTACH_TICKET_COST);
   assert.equal(p.summary_human, "Summary line");
   assert.equal(p.target.human_ticket_id, "PENN-1");
+});
+
+test("proposal token round-trip propose_vendor_request", () => {
+  const token = buildProposalConfirmToken(
+    {
+      proposal_id: "pid-v1",
+      ticketRowId: "uuid-row",
+      humanTicketId: "PENN-012626-0001",
+      vendorId: "VND_PLUMB",
+      vendorDisplayName: "Joe Plumbing",
+      dispatch: true,
+      idempotencyKey: "k1",
+    },
+    PROPOSAL_OPS.PROPOSE_VENDOR_REQUEST
+  );
+  const v = verifyProposalConfirmToken(token);
+  assert.ok(v);
+  assert.equal(v.op, PROPOSAL_OPS.PROPOSE_VENDOR_REQUEST);
+  assert.equal(v.payload.vendorId, "VND_PLUMB");
 });

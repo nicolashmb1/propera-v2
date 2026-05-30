@@ -104,4 +104,5 @@ async function getSchedPolicySnapshot(sb, propertyCode) {
 module.exports = {
   getSchedPolicySnapshot,
   SCHED_POLICY_KEYS,
+  PP_DEFAULTS,
 };

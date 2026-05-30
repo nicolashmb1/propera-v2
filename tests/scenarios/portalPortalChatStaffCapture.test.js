@@ -57,5 +57,14 @@ describe("scenarios — portal_chat staff capture (in-memory)", { concurrency: f
     assert.equal(mem._state.tickets.length, 1);
     assert.equal(String(mem._state.tickets[0].property_code || "").toUpperCase(), "PENN");
     assert.equal(String(mem._state.tickets[0].unit_label || "").trim(), "909");
+    assert.equal(
+      String(mem._state.tickets[0].changed_by_actor_label || "").trim(),
+      "Staff Scenario",
+      "portal_chat staff capture records roster display name, not transport label"
+    );
+    assert.notEqual(
+      String(mem._state.tickets[0].changed_by_actor_label || "").trim(),
+      "Telegram Staff Capture"
+    );
   });
 });

@@ -44,6 +44,11 @@ Run SQL files in **numeric order** in the Supabase SQL Editor (same project as `
 | **068_operational_policy_conflict_keys.sql** | `property_policy` GLOBAL seeds for `conflict.monitoring_window_days`, `conflict.complainant_confidentiality`, `conflict.auto_escalate_after_violations` | **Operational policy config** defaults for CME escalation rules (`src/brain/policy/resolveOperationalPolicy.js`) |
 | **071_conflict_policy_seed_v1.sql** | Starter **`conflict_policies`** rows per property (quiet hours, trash, parking, pets, smoking, common area) | **CME-2** staff report + courtesy notice (`src/conflictMediation/conflictCaseWrite.js`) |
 | **070_jarvis_operator_threads.sql** | **`jarvis_operator_threads`** | Jarvis spine thread state (pending proposals + last receipt) for plan/confirm flows (`src/dal/jarvisOperatorThreads.js`, `src/agent/thread/*`) |
+| **074_org_spine_core.sql** | **`org_id`** on allowlist, staff, vendors, roster, aliases; allowlist **`(org_id, email_lower)`** unique | **`docs/MULTI_ORG_ARCHITECTURE.md`** — portal org resolution (`resolvePortalOrgContext.js`); run after **055** / **056** |
+| **075_portal_staff_access_tier.sql** | `portal_auth_allowlist.staff_access_tier` (`assigned_only` \| `operations`) | **`propera-app`** layered Staff nav + Portal access tier dropdown |
+| **076_org_channel_config.sql** | **`org_channel_configs`** — per-org channel phone/Telegram metadata + setup status | **`portalOrgChannels.js`**, Settings → Channels (MO-3); run after **055** |
+| **077_policy_change_log.sql** | **`policy_change_log`** — append-only audit for Settings policy edits | **`portalOrgPolicies.js`**, Settings → Policies (MO-2c); run after **001** |
+| **078_org_onboarding.sql** | **`organizations.onboarding_completed_at`**, **`created_via`** | MO-4 wizard (`portalOrgOnboarding.js`); run after **055** |
 
 ### Minimum paths
 

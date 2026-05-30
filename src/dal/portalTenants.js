@@ -55,16 +55,18 @@ function mapRowToPortalShape(row, codeToDisplayName) {
 }
 
 /**
- * @param {{ includeInactive?: boolean }} [opts]
+ * @param {{ includeInactive?: boolean, orgId?: string }} [opts]
  * @returns {Promise<object[]>}
  */
 async function listTenantsForPortal(opts = {}) {
   const sb = getSupabase();
   if (!sb) return [];
 
-  const { data: props } = await sb
-    .from("properties")
-    .select("code, display_name");
+  const orgId = String(opts.orgId || "").trim().toLowerCase();
+
+  let propQuery = sb.from("properties").select("code, display_name");
+  if (orgId) propQuery = propQuery.eq("org_id", orgId);
+  const { data: props } = await propQuery;
   const codeToDisplayName = {};
   for (const p of props || []) {
     const c = String(p.code || "").trim().toUpperCase();
@@ -78,6 +80,7 @@ async function listTenantsForPortal(opts = {}) {
     .select(
       "id, property_code, unit_label, phone_e164, resident_name, email, active, notes, updated_at"
     );
+  if (orgId) query = query.eq("org_id", orgId);
   if (!opts.includeInactive) {
     query = query.eq("active", true);
   }
@@ -117,6 +120,13 @@ async function createTenantForPortal(input) {
   const notes = String(input.notes ?? "").trim();
   const active = input.active !== false;
 
+  const { data: propRow } = await sb
+    .from("properties")
+    .select("org_id")
+    .eq("code", propertyCode)
+    .maybeSingle();
+  const rosterOrgId = String(propRow?.org_id || "grand").trim().toLowerCase() || "grand";
+
   const { data: props } = await sb
     .from("properties")
     .select("code, display_name");
@@ -138,6 +148,7 @@ async function createTenantForPortal(input) {
       email,
       notes,
       active,
+      org_id: rosterOrgId,
     })
     .select(
       "id, property_code, unit_label, phone_e164, resident_name, email, active, notes"

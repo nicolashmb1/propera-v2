@@ -5,6 +5,7 @@
 const { getSupabase } = require("../db/supabase");
 const { mapTicketRowToRemoteShape } = require("../portal/mapTicketRowToRemoteShape");
 const { programExpansionProfileForApi } = require("./portalPropertyProgramProfile");
+const { filterRowsByOrgPropertyScope, propertyCodeInOrgScope } = require("../portal/portalOrgScope");
 
 const CLOSED = new Set([
   "completed",
@@ -103,9 +104,11 @@ async function tenantNamesForTicketRows(sb, ticketRows) {
 }
 
 /**
+ * @param {{ orgScope?: { propertyCodesUpper?: Set<string> } }} [opts]
  * @returns {Promise<object[]>} Remote-shaped rows (see mapTicketRowToRemoteShape)
  */
-async function listTicketsForPortal() {
+async function listTicketsForPortal(opts = {}) {
+  const orgScope = opts.orgScope || null;
   const sb = getSupabase();
   if (!sb) return [];
 
@@ -116,7 +119,8 @@ async function listTicketsForPortal() {
     .limit(2500);
 
   if (!viaView.error && Array.isArray(viaView.data)) {
-    return viaView.data.map((row) => mapTicketRowToRemoteShape(row));
+    const scoped = filterRowsByOrgPropertyScope(viaView.data, orgScope);
+    return scoped.map((row) => mapTicketRowToRemoteShape(row));
   }
 
   const { data, error } = await sb
@@ -163,6 +167,7 @@ async function listTicketsForPortal() {
 
   return data
     .filter((r) => String(r.status || "").trim().toLowerCase() !== "deleted")
+    .filter((r) => propertyCodeInOrgScope(r.property_code, orgScope))
     .map((row) => {
       const ph = String(row.tenant_phone_e164 || "").trim();
       const key = tenantLookupKey(ph, row.property_code, row.unit_label);
@@ -199,20 +204,39 @@ function mapPortalPropertyViewRow(p) {
 
 /**
  * Property deck row — GAS-like enough for propera-app `Property` type (minimal KPIs from tickets).
+ * @param {{ orgScope?: { orgId?: string, propertyCodesUpper?: Set<string> } }} [opts]
  */
-async function listPropertiesForPortal() {
+async function listPropertiesForPortal(opts = {}) {
+  const orgScope = opts.orgScope || null;
+  const orgId = orgScope && orgScope.orgId ? String(orgScope.orgId).trim() : "";
   const sb = getSupabase();
   if (!sb) return [];
 
   const viaView = await sb.from("portal_properties_v1").select("*");
   if (!viaView.error && Array.isArray(viaView.data) && viaView.data.length) {
-    return viaView.data.map(mapPortalPropertyViewRow);
+    let rows = viaView.data;
+    if (orgId) {
+      const { data: orgProps } = await sb
+        .from("properties")
+        .select("code")
+        .eq("org_id", orgId)
+        .eq("active", true);
+      const allowed = new Set(
+        (orgProps || [])
+          .map((p) => String(p.code || "").trim().toUpperCase())
+          .filter((c) => c && c !== "GLOBAL")
+      );
+      rows = rows.filter((p) => allowed.has(String(p.property_code || "").trim().toUpperCase()));
+    }
+    return rows.map(mapPortalPropertyViewRow);
   }
 
-  const { data: props, error: pErr } = await sb
+  let propQuery = sb
     .from("properties")
     .select("code, display_name, short_name, ticket_prefix, address, program_expansion_profile")
     .eq("active", true);
+  if (orgId) propQuery = propQuery.eq("org_id", orgId);
+  const { data: props, error: pErr } = await propQuery;
 
   if (pErr || !props || !props.length) return [];
 

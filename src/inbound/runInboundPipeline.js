@@ -28,6 +28,7 @@ const { tryStaffExpenseCapture } = require("../dal/staffExpenseCapture");
 const { financeCostCaptureChatEnabled } = require("../config/env");
 const { isExpenseCaptureMessage } = require("../brain/staff/expenseCaptureParse");
 const { portalPostImpliesPmTicketSave } = require("../contracts/buildRouterParameterFromPortal");
+const { isTenantPortalStructuredCreate } = require("../brain/core/handleInboundCoreScheduleHints");
 const { resolvePortalTicketMutationActor } = require("../portal/resolvePortalStaffActor");
 const { handleInboundCore } = require("../brain/core/handleInboundCore");
 const {
@@ -62,6 +63,7 @@ const {
   buildLaneDecision,
   buildNonMaintenanceLaneStub,
   shouldShowNonMaintenanceLaneStub,
+  shouldInvokeVendorLane,
   shouldInvokeStaffLifecycle,
   shouldRunSmsComplianceBranch,
   shouldEvaluateSmsSuppress,
@@ -72,6 +74,7 @@ const {
   resolveDefaultBrain,
 } = require("./routeInboundDecision");
 const { preloadActorIdentity } = require("./preloadActorIdentity");
+const { handleVendorInbound } = require("../vendor/handleVendorInbound");
 const { previewText } = require("../logging/inboundLogContext");
 const { emit } = require("../logging/structuredLog");
 const {
@@ -89,11 +92,11 @@ const { isPortalChatInbound } = require("../agent/operationalScope/logOperationa
 const { jarvisAskEnabled, jarvisPlanEnabled } = require("../config/env");
 
 /**
- * @param {{ staffRun?: object | null, complianceRun?: object | null, stubRun?: object | null, coreRun?: object | null }} o
+ * @param {{ staffRun?: object | null, complianceRun?: object | null, vendorRun?: object | null, stubRun?: object | null, coreRun?: object | null }} o
  * @returns {string}
  */
 function resolveOutboundIntentType(o) {
-  const { staffRun, complianceRun, stubRun, accessRun, coreRun } = o || {};
+  const { staffRun, complianceRun, vendorRun, stubRun, accessRun, coreRun } = o || {};
   if (complianceRun && complianceRun.brain) {
     const b = String(complianceRun.brain);
     if (b === "compliance_stop") return "COMPLIANCE_STOP";
@@ -103,6 +106,8 @@ function resolveOutboundIntentType(o) {
   }
   if (staffRun && staffRun.brain) return `STAFF_${String(staffRun.brain)}`;
   if (staffRun) return "STAFF_REPLY";
+  if (vendorRun && vendorRun.brain) return `VENDOR_${String(vendorRun.brain).toUpperCase()}`;
+  if (vendorRun) return "VENDOR_REPLY";
   if (stubRun && stubRun.brain) {
     const b = String(stubRun.brain);
     if (b === "lane_stub_vendor") return "STUB_VENDOR_LANE";
@@ -327,26 +332,40 @@ async function runInboundPipeline(o) {
 
   /** @type {string | null} */
   let portalActorGateError = null;
-  if (!staffRun && transportChannel === "portal" && isDbConfigured()) {
+  if (!staffRun && isDbConfigured()) {
     const sbAct = getSupabase();
-    const portalAct = String(routerParameter._portalAction || "").trim().toLowerCase();
-    let needsPortalActor = portalAct === "create_ticket";
-    if (!needsPortalActor) {
-      try {
-        const nested = JSON.parse(String(routerParameter._portalPayloadJson || "{}"));
-        needsPortalActor = portalPostImpliesPmTicketSave(nested);
-      } catch (_) {
-        needsPortalActor = false;
+    const portalAct =
+      transportChannel === "portal"
+        ? String(routerParameter._portalAction || "").trim().toLowerCase()
+        : "";
+    let needsPortalActor = false;
+    if (transportChannel === "portal") {
+      needsPortalActor =
+        portalAct === "create_ticket" && !isTenantPortalStructuredCreate(routerParameter);
+      if (!needsPortalActor) {
+        try {
+          const nested = JSON.parse(String(routerParameter._portalPayloadJson || "{}"));
+          needsPortalActor = portalPostImpliesPmTicketSave(nested);
+        } catch (_) {
+          needsPortalActor = false;
+        }
+      }
+      if (!needsPortalActor && portalAct === "portal_chat") {
+        needsPortalActor = isStaffCaptureHash(precursor);
       }
     }
-    if (needsPortalActor && sbAct) {
+    const shouldResolveStaffCaptureActor =
+      isStaffCaptureHash(precursor) && staffContext.isStaff === true;
+    if (sbAct && (needsPortalActor || shouldResolveStaffCaptureActor)) {
       const rAct = await resolvePortalTicketMutationActor(sbAct, {
-        accessToken: o.portalUserAccessToken,
+        accessToken: needsPortalActor ? o.portalUserAccessToken : "",
         staffContext,
         transportChannel,
       });
       if (!rAct.ok) {
-        portalActorGateError = rAct.error || "portal_actor_unresolved";
+        if (needsPortalActor) {
+          portalActorGateError = rAct.error || "portal_actor_unresolved";
+        }
       } else if (rAct.changedBy) {
         routerParameter._portalMutationActorJson = JSON.stringify(rAct.changedBy);
       }
@@ -522,6 +541,36 @@ async function runInboundPipeline(o) {
   }
 
   /** Phase 20-C — vendor/system lanes do not enter maintenance core. */
+  let vendorRun = null;
+  if (
+    shouldInvokeVendorLane({
+      precursor,
+      laneDecision,
+      actorIdentity,
+      staffRun,
+      complianceRun,
+      suppressedRun,
+    })
+  ) {
+    vendorRun = await handleVendorInbound({
+      inbound,
+      vendor: actorIdentity.vendor || { vendorId: "", displayName: "Vendor" },
+      traceId,
+      transportChannel,
+    });
+    await appendEventLog({
+      traceId,
+      log_kind: "vendor",
+      event: vendorRun.ok ? "VENDOR_INBOUND_HANDLED" : "VENDOR_INBOUND_FAILED",
+      payload: {
+        brain: vendorRun.brain,
+        lane: laneDecision.lane,
+        vendor_id: String(actorIdentity.vendor?.vendorId || "").trim() || null,
+        ticket_updated: vendorRun.ticketUpdated === true,
+      },
+    });
+  }
+
   let stubRun = null;
   if (
     shouldShowNonMaintenanceLaneStub({
@@ -560,6 +609,7 @@ async function runInboundPipeline(o) {
     complianceRun,
     suppressedRun,
     stubRun,
+    vendorRun,
     coreEnabledFlag: coreEnabled(),
     dbConfigured: isDbConfigured(),
   });
@@ -839,6 +889,7 @@ async function runInboundPipeline(o) {
 
   const replyText =
     (tenantAgentRun && tenantAgentRun.replyText) ||
+    (vendorRun && vendorRun.replyText) ||
     (accessRun && accessRun.replyText) ||
     (staffRun && staffRun.replyText) ||
     (complianceRun && complianceRun.replyText) ||
@@ -849,21 +900,24 @@ async function runInboundPipeline(o) {
   const intentType = resolveOutboundIntentTypeWithAgent({
     staffRun,
     complianceRun,
+    vendorRun,
     stubRun,
     accessRun,
     coreRun,
     tenantAgentRun,
   });
   const audience =
-    staffRun && staffRun.replyText
-      ? "staff"
-      : tenantAgentRun && tenantAgentRun.replyText
-        ? "tenant"
-        : accessRun && accessRun.replyText
+    vendorRun && vendorRun.replyText
+      ? "vendor"
+      : staffRun && staffRun.replyText
+        ? "staff"
+        : tenantAgentRun && tenantAgentRun.replyText
           ? "tenant"
-        : replyText
-          ? "tenant"
-          : "unknown";
+          : accessRun && accessRun.replyText
+            ? "tenant"
+            : replyText
+              ? "tenant"
+              : "unknown";
 
   const messageSpec = complianceRun
     ? messageSpecForComplianceBrain(complianceRun.brain)
@@ -977,6 +1031,7 @@ async function runInboundPipeline(o) {
         staffRun,
         complianceRun,
         suppressedRun,
+        vendorRun,
         stubRun,
         accessRun,
         coreRun,
@@ -1011,6 +1066,7 @@ async function runInboundPipeline(o) {
     coreRun,
     complianceRun,
     suppressedRun,
+    vendorRun,
     stubRun,
     accessRun,
     tenantAgentRun,
