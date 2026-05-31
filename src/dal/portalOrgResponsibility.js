@@ -11,6 +11,8 @@ const {
   DEFAULT_ESCALATION_CHAIN,
   LEGACY_ASSIGNMENT_ROLE_BY_KEY,
 } = require("../responsibility/roleCatalog");
+const { ASSIGNMENT_MODULES } = require("../responsibility/assignmentRuleCatalog");
+const { listAssignmentRulesForOrg } = require("./portalOrgAssignmentRules");
 
 function normOrg(orgId) {
   return String(orgId || "").trim().toLowerCase();
@@ -448,9 +450,14 @@ async function getTeamSettingsBundleForOrg(sb, orgId) {
     (c) => c.propertyCode === "GLOBAL" && c.roleKey === "owner" && c.isPrimary
   );
 
+  const rulesRes = await listAssignmentRulesForOrg(sb, oid);
+  if (!rulesRes.ok) return rulesRes;
+
   return {
     ok: true,
     roleCatalog: getRoleCatalog(),
+    assignmentModules: ASSIGNMENT_MODULES.map((m) => ({ ...m })),
+    assignmentRules: rulesRes.rules,
     enabledRoleKeys: prefs.enabledRoleKeys,
     escalation: escalation.escalation,
     coverage: coverage.coverage,

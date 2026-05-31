@@ -162,6 +162,20 @@ Every phase below extends this graph — it does not fork a new money silo.
 | **Financial snapshot API** | `GET /api/financial/properties/[code]?month=` — lease sums + ledger balance + maintenance rollup in one payload; unit rows now also expose deposit, selected-month posted payments, last payment, and 6-month payment history | propera-app only (**shipped**) |
 | **Portfolio snapshot API** | `GET /api/financial/portfolio?month=` — drives property cards (replace ad-hoc per-page math) | propera-app only (**shipped**) |
 
+### 1d — Property operating expenses (parallel-run operators)
+
+> Added 2026-05-30. For operators running Propera **in parallel** with a legacy accounting system (e.g. Leasehold) before full migration. Not Phase 1.5 incumbent ingest — these are PM-entered lines for expenses Propera does not yet receive from the incumbent.
+
+| Build | Detail | Migrations / code |
+|-------|--------|-------------------|
+| **`property_expenses`** table | Property-level operating costs: tax, insurance, utilities, landscaping, staff/payroll allocation, management fee, permits, legal, etc. Not ticket-backed. Category enum (19 types), recurrence tag, vendor, amount, date, void support. | Migration **082** |
+| **Expense entry UI** | Third tab ("Expenses") on `/financial/properties/[p]` — table with category, vendor, amount, date, recurrence. "+ Add Expense" opens modal. Void button on each row. | propera-app only |
+| **Bill scan** | "Scan Bill" photo capture in the Add Expense modal — image proxied to V2 `POST /api/portal/scan-expense`, which calls OpenAI or Anthropic vision (provider/model via `PROPERA_EXPENSE_SCAN_PROVIDER` / `PROPERA_EXPENSE_SCAN_MODEL` in V2 env). Pre-fills modal fields from extracted vendor, amount, date, category. | propera-app proxy + V2 `src/brain/shared/expenseScanVision.js` |
+| **Record Payment** (Phase 2 Option A early) | "Record Payment" button in the unit row expand panel on `/financial/properties/[p]`. Posts `entry_kind = 'payment'` to existing `tenant_ledger_entries` via existing ledger POST route. Amount, date, method, reference, notes. Updates "Payments this month" and standing balance immediately. | propera-app only — uses existing `POST /api/properties/[code]/units/[unitId]/ledger` |
+| **Snapshot rollup** | `GET /api/financial/properties/[code]` includes `operatingExpenses`, `operatingExpensesMonthCents`, `operatingExpensesYtdCents`; portfolio totals sum month operating expenses | propera-app `financialSnapshot.ts` |
+
+**Guardrail:** `property_expenses` rows are PM-entered operational facts — not a substitute for the incumbent accounting ledger. When Phase 1.5 snapshot ingest ships, the Expenses tab should clearly distinguish Propera-entered costs from imported accounting data.
+
 **Phase 1 deliverable:** Maintenance spend and ticket chargebacks are trustworthy in-app. Per unit: lease **template** in `unit_leases` is editable; ledger shows Propera-posted lines + ticket charges; **if snapshot ingest exists**, balance/rent/collected come from snapshot with **as-of** label — not re-keyed from Leasehold.
 
 ---
@@ -306,6 +320,7 @@ These items come **after** structured snapshots + enrichment exist. They do **no
 | 050 | Ledger unit+property index | 042 | applied |
 | **051** | `assigned_staff_id` + `assigned_staff_display` on `program_lines` (preventive ops — not finance tables) | 046 | applied |
 | **052** | `effective_date` + `notes` on `tenant_ledger_entries` | 042 | applied |
+| **082** | **`property_expenses`** — PM-entered operating costs (tax, insurance, utilities, staff allocation, management fee, etc.) not tied to tickets. Phase 1d for parallel-run operators. Writes via propera-app route + auth gate; bill scan via V2. | 042, properties | applied |
 | **058** | **`tenant_account_snapshots`** + payment history (incumbent read-only ingest) | 049, 030 | **deferred** — design after Leasehold export spec |
 | **053** | **`rent_postings`** | 049 | planned (Phase 2 — greenfield or promoted from snapshot) |
 | **054** | Invoice fields on `ticket_cost_entries` | 042 | planned (Phase 3) |

@@ -195,6 +195,30 @@ function openaiModelVision() {
   return String(env("OPENAI_MODEL_VISION", "gpt-4o-mini")).trim() || "gpt-4o-mini";
 }
 
+/** Anthropic API key — used when PROPERA_EXPENSE_SCAN_PROVIDER=anthropic. */
+function anthropicApiKey() {
+  return String(env("ANTHROPIC_API_KEY", "")).trim();
+}
+
+/**
+ * Vision provider for expense bill scan: "openai" (default) or "anthropic".
+ * Selects which API + key to use for photo → structured expense extraction.
+ */
+function expenseScanProvider() {
+  const v = String(env("PROPERA_EXPENSE_SCAN_PROVIDER", "openai")).trim().toLowerCase();
+  return v === "anthropic" ? "anthropic" : "openai";
+}
+
+/**
+ * Model override for expense scan vision.
+ * Defaults: gpt-4o-mini (openai) / claude-haiku-4-5-20251001 (anthropic).
+ */
+function expenseScanModel() {
+  const explicit = String(env("PROPERA_EXPENSE_SCAN_MODEL", "")).trim();
+  if (explicit) return explicit;
+  return expenseScanProvider() === "anthropic" ? "claude-haiku-4-5-20251001" : "gpt-4o-mini";
+}
+
 /**
  * Vision model for batch utility-meter photo extraction only (`meterRuns/extractMeterReading`).
  * When unset, uses {@link openaiModelVision} (intake default). Set e.g. `gpt-4o` for higher digit/OCR accuracy vs cost.
@@ -301,6 +325,14 @@ function financeCostCaptureChatEnabled() {
 }
 
 /**
+ * Financial capture via portal_chat_mode=financial — natural language expense/payment/charge.
+ * Requires `PROPERA_FINANCE_ENABLED=1` + `PROPERA_FINANCIAL_CAPTURE_ENABLED=1`.
+ */
+function financialCaptureEnabled() {
+  return financeCoreEnabled() && env("PROPERA_FINANCIAL_CAPTURE_ENABLED", "") === "1";
+}
+
+/**
  * Optional comma-separated property codes; empty = all properties when chat capture on.
  * @returns {Set<string>|null} null = no allowlist filter
  */
@@ -356,7 +388,7 @@ function communicationOrgId() {
 function defaultOrgId() {
   const explicit = String(env("PROPERA_DEFAULT_ORG_ID", "")).trim().toLowerCase();
   if (explicit) return explicit;
-  return String(env("COMM_ORG_ID", "grand")).trim().toLowerCase() || "grand";
+  return String(env("COMM_ORG_ID", "")).trim().toLowerCase();
 }
 
 function commReplyWindowHours() {
@@ -404,7 +436,7 @@ function commMainNumberDisplay() {
 }
 
 function devOrgSubdomain() {
-  return String(env("DEV_ORG_SUBDOMAIN", "thegrand")).trim().toLowerCase();
+  return String(env("DEV_ORG_SUBDOMAIN", "")).trim().toLowerCase();
 }
 
 /** MO-4 — public company signup wizard (requires shared secret on bootstrap routes). */
@@ -568,6 +600,7 @@ module.exports = {
   accessEngineEnabled,
   accessCredentialSecret,
   financeCoreEnabled,
+  financialCaptureEnabled,
   financeTicketCostsEnabled,
   financeLedgerEnabled,
   financeCostCaptureChatEnabled,
@@ -592,6 +625,9 @@ module.exports = {
   intakeAudioStorageBucket,
   intakeAudioStoragePathPrefix,
   openaiAudioTranscriptionModel,
+  anthropicApiKey,
+  expenseScanProvider,
+  expenseScanModel,
   tenantJwtSecret,
   tenantOtpTtlMinutes,
   tenantOtpMaxAttempts,

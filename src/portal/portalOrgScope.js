@@ -23,7 +23,7 @@ function normPropCode(code) {
 async function loadOrgPropertyScope(sb, orgId) {
   const oid = normOrgId(orgId) || normOrgId(defaultOrgId());
   if (!sb || !oid) {
-    return { orgId: oid || "grand", propertyCodes: [], propertyCodesUpper: new Set() };
+    return { orgId: oid || "", propertyCodes: [], propertyCodesUpper: new Set() };
   }
 
   const { data, error } = await sb

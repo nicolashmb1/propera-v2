@@ -363,8 +363,7 @@ async function createVendorForPortal(sb, input) {
     return { ok: false, error: "no_db" };
   }
   const orgId =
-    String((input && input.orgId) || (input && input.org_id) || "").trim().toLowerCase() ||
-    "grand";
+    String((input && input.orgId) || (input && input.org_id) || "").trim().toLowerCase();
   const displayName = String((input && input.displayName) || (input && input.display_name) || "")
     .trim()
     .slice(0, 200);

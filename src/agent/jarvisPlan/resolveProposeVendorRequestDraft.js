@@ -45,7 +45,7 @@ async function resolveTicketForVendorProposal(sb, hints) {
       ok: false,
       error: "need_ticket_or_unit",
       message:
-        "Include ticket id (e.g. PENN-012626-0001) or unit + property (e.g. schedule plumber for unit 303 PENN). Pin a ticket in the page context when viewing a unit.",
+        "Include ticket id (e.g. PROP-012626-0001) or unit + property (e.g. schedule plumber for unit 303 PENN). Pin a ticket in the page context when viewing a unit.",
     };
   }
 

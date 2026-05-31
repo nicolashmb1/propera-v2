@@ -234,7 +234,7 @@ async function mergePartialFromInboundMessage(
 
   const next = { ...prev };
 
-  if (bodyHasPropertyIntent(body) || !String(prev.property || "").trim()) {
+  if (bodyHasPropertyIntent(body, propertiesList) || !String(prev.property || "").trim()) {
     const resolution = resolvePropertyForGather(
       body,
       propertiesList,

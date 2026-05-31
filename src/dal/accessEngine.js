@@ -48,14 +48,13 @@ function slugFromLabel(label) {
 
 async function resolveOrgIdForProperty(sb, propertyCode) {
   const code = String(propertyCode || "").trim().toUpperCase();
-  if (!code) return "grand";
+  if (!code) return "";
   const { data } = await sb
     .from("properties")
     .select("org_id")
     .eq("code", code)
     .maybeSingle();
-  const orgId = String(data?.org_id || "").trim();
-  return orgId || "grand";
+  return String(data?.org_id || "").trim();
 }
 
 /**
@@ -487,7 +486,8 @@ async function getLocationStats(locationId, dateIso) {
 async function createAccessLocationForPortal(body, actor = "") {
   const sb = getSupabase();
   if (!sb) throw new Error("no_db");
-  const orgId = String(body.orgId || body.org_id || "grand").trim();
+  const orgId = String(body.orgId || body.org_id || "").trim();
+  if (!orgId) throw new Error("org_id_required");
   const propertyCode = String(body.propertyCode || body.property_code || "")
     .trim()
     .toUpperCase();

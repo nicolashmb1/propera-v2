@@ -34,12 +34,12 @@ function buildVendorDispatchRequestText(ctx) {
 function buildVendorConfirmInstructionsText() {
   return (
     "Propera vendor line: reply YES or NO, optional ticket id, then availability. " +
-    "Example: YES PENN-012626-0001 tomorrow 9-11am"
+    "Example: YES PROP-012626-0001 tomorrow 9-11am"
   );
 }
 
 function buildVendorNeedTicketIdText() {
-  return "Reply YES or NO with the ticket id (e.g. YES PENN-012626-0001 Mon 9-11am).";
+  return "Reply YES or NO with the ticket id (e.g. YES PROP-012626-0001 Mon 9-11am).";
 }
 
 /**

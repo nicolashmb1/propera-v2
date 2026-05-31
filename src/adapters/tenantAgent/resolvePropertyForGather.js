@@ -97,26 +97,33 @@ function stripPropertyLeadIns(text) {
 }
 
 /**
- * Bare brand token (e.g. "grand") shared by multiple portfolio properties.
+ * Bare shared brand token fallback — matches properties whose display name contains the token.
+ * DB-driven: no hardcoded property names. Used when a short token matches multiple properties.
  * @param {string} text
  * @param {object[]} propertiesList
  * @returns {Map<string, { property_code: string, display_name: string }>}
  */
-function collectGrandBrandCandidates(text, propertiesList) {
+function collectBrandTokenCandidates(text, propertiesList) {
   const matched = new Map();
   const t = stripPropertyLeadIns(text);
-  if (!/\bgrand\b/.test(t)) return matched;
+  if (!t || t.length < 3) return matched;
 
   const props = Array.isArray(propertiesList) ? propertiesList : [];
-  for (const row of props) {
-    const label = normalizePropText(propertyDisplayLabel(row));
-    if (label.includes("grand")) {
-      const code = propertyCodeUpper(row);
-      if (code) matched.set(code, candidateFromRow(row));
+  const tokens = t.split(" ").filter((tok) => tok.length >= 3);
+  for (const tok of tokens) {
+    for (const row of props) {
+      const label = normalizePropText(propertyDisplayLabel(row));
+      if (label.includes(tok)) {
+        const code = propertyCodeUpper(row);
+        if (code) matched.set(code, candidateFromRow(row));
+      }
     }
   }
   return matched;
 }
+
+// Keep backward-compatible alias
+const collectGrandBrandCandidates = collectBrandTokenCandidates;
 
 function collectPropertyCandidates(text, propertiesList) {
   const t = normalizePropText(text);
@@ -162,7 +169,7 @@ function collectPropertyCandidates(text, propertiesList) {
   }
 
   if (!matched.size) {
-    for (const [code, cand] of collectGrandBrandCandidates(text, props)) {
+    for (const [code, cand] of collectBrandTokenCandidates(text, props)) {
       matched.set(code, cand);
     }
   }
@@ -202,32 +209,40 @@ function collectPropertyCandidates(text, propertiesList) {
 
 /**
  * @param {string} body
+ * @param {object[]} [propertiesList] — active properties from DB; used to avoid hardcoding names
  * @returns {boolean}
  */
-function bodyHasPropertyIntent(body) {
+function bodyHasPropertyIntent(body, propertiesList) {
   const s = String(body || "").trim();
   if (!s) return false;
-  if (/\b(?:wrong|instead|rather)\b/i.test(s)) return true;
-  if (
-    /\bnot\s+(the\s+)?(grand|penn|morris|murray|westfield|westgrand|peen|that\s+one|this\s+one|that\s+building|this\s+building)\b/i.test(
-      s
-    )
-  ) {
-    return true;
-  }
-  if (/\b(building|property|location)\b/i.test(s)) return true;
-  if (/\bgrand\b/i.test(s)) return true;
-  if (/\b(penn|morris|murray|westgrand|westfield|peen)\b/i.test(s)) return true;
   if (/^\d{1,4}[a-z]?$/i.test(s)) return false;
+  if (/\b(?:wrong|instead|rather)\b/i.test(s)) return true;
+  if (/\b(building|property|location)\b/i.test(s)) return true;
   if (
-    /^(asap|today|tomorrow|anytime|flexible|morning|afternoon|evening|weekend)\b/i.test(
-      s
-    )
-  ) {
-    return false;
-  }
+    /^(asap|today|tomorrow|anytime|flexible|morning|afternoon|evening|weekend)\b/i.test(s)
+  ) return false;
   if (/\b(tomorrow|today)\s+(morning|afternoon|evening)\b/i.test(s)) return false;
   if (/\bafter\s+\d/i.test(s)) return false;
+
+  // DB-driven: check if any property name/code/alias appears in text
+  const props = Array.isArray(propertiesList) ? propertiesList : [];
+  if (props.length) {
+    const norm = normalizePropText(s);
+    for (const p of props) {
+      const targets = [
+        normalizePropText(p.code),
+        normalizePropText(p.display_name),
+        normalizePropText(p.short_name),
+        normalizePropText(p.display_name_short),
+      ].filter(Boolean);
+      for (const t of targets) {
+        if (t.length >= 3 && (norm === t || norm.includes(t) || t.includes(norm))) return true;
+      }
+    }
+    return false;
+  }
+
+  // Fallback when no properties list provided (keeps existing behavior for callers that don't pass it)
   return false;
 }
 

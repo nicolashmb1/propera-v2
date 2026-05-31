@@ -113,6 +113,7 @@ const {
   saveGlobalOwnerForOrg,
   copyPropertyCoverageToAll,
 } = require("../dal/portalOrgResponsibility");
+const { patchAssignmentRulesForOrg } = require("../dal/portalOrgAssignmentRules");
 
 function portalOrgFromReq(req) {
   return (
@@ -1755,6 +1756,24 @@ function registerPortalReadRoutes(app) {
     }
   }));
 
+  app.patch("/api/portal/settings/team/assignment-rules", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await patchAssignmentRulesForOrg(sb, org.orgId, body);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "patch_failed" });
+      }
+      return res.status(200).json({ ok: true, assignmentRules: out.rules });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
   app.put("/api/portal/settings/team/coverage/:propertyCode", gateSettings(async (req, res) => {
     try {
       const sb = getSupabase();
@@ -2010,6 +2029,29 @@ function registerPortalReadRoutes(app) {
       return res.status(code).json({ ok: false, error: out.error || "unsubscribe_failed" });
     }
     return res.status(200).json({ ok: true });
+  }));
+
+  // ── Expense bill scan ──────────────────────────────────────────────────────
+  // Accepts { base64, mimeType } JSON — propera-app converts uploaded file before proxying.
+  // Provider + model selected via PROPERA_EXPENSE_SCAN_PROVIDER / PROPERA_EXPENSE_SCAN_MODEL.
+  app.post("/api/portal/scan-expense", gate(async (req, res) => {
+    const { scanExpenseImage } = require("../brain/shared/expenseScanVision");
+    const base64 = String(req.body && req.body.base64 || "").trim();
+    const mimeType = String(req.body && req.body.mimeType || "image/jpeg").trim();
+
+    if (!base64) return res.status(400).json({ ok: false, error: "base64_required" });
+
+    try {
+      const result = await scanExpenseImage(base64, mimeType);
+      return res.status(200).json({ ok: true, ...result });
+    } catch (err) {
+      const msg = String(err && err.message ? err.message : err);
+      emit("error", { event: "expense_scan_error", error: msg });
+      if (msg.includes("api_key_missing")) {
+        return res.status(503).json({ ok: false, error: "scan_not_configured" });
+      }
+      return res.status(500).json({ ok: false, error: msg.slice(0, 200) });
+    }
   }));
 }
 

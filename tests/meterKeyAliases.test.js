@@ -12,13 +12,13 @@ describe("expandMeterKeyAliases", () => {
     assert.ok(out.includes("MTR_WESTGRAND_404_WATER"));
   });
 
-  test("fixes WESTGRAD typo", () => {
+  test("does not rewrite portfolio-specific typos in meter keys", () => {
     const out = expandMeterKeyAliases("MTR_WESTGRAD_302_WATER", "WESTGRAND");
-    assert.ok(out.includes("MTR_WESTGRAND_302_WATER"));
+    assert.deepEqual(out, ["MTR_WESTGRAD_302_WATER"]);
   });
 
-  test("MTR_WG shorthand for Grand West", () => {
-    const out = expandMeterKeyAliases("MTR_WG203_WATER", "WESTGRAND");
+  test("WG shorthand expands using property code", () => {
+    const out = expandMeterKeyAliases("WG_203_WATER", "WESTGRAND");
     assert.ok(out.includes("MTR_WESTGRAND_203_WATER"));
   });
 
@@ -27,7 +27,7 @@ describe("expandMeterKeyAliases", () => {
     assert.ok(out.includes("MTR_WESTGRAND_402_WATER"));
   });
 
-  test("does not map MTR_WG on non-Westgrand", () => {
+  test("leaves unrecognized shorthand keys unchanged", () => {
     const out = expandMeterKeyAliases("MTR_WG203_WATER", "PENN");
     assert.deepEqual(out, ["MTR_WG203_WATER"]);
   });

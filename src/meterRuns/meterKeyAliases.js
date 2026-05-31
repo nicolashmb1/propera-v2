@@ -36,24 +36,12 @@ function expandMeterKeyAliases(raw, propertyCode) {
 
   add(k0);
 
-  // Common QR typo
-  if (k0.includes("WESTGRAD") && !k0.includes("WESTGRAND")) {
-    add(k0.replace(/WESTGRAD/g, "WESTGRAND"));
-  }
-
-  // WESTGRAND_402_WATER → MTR_WESTGRAND_402_WATER
+  // PROP_402_WATER → MTR_PROP_402_WATER (any property code)
   if (pc && k0.startsWith(`${pc}_`) && !k0.startsWith("MTR_")) {
     add(`MTR_${k0}`);
   }
 
-  // Sticker shorthand MTR_WG203_WATER → MTR_WESTGRAND_203_WATER (Grand West only)
-  const mtrWg = k0.match(/^MTR_WG(\d{2,4})_(.+)$/);
-  if (mtrWg && pc === "WESTGRAND") {
-    const n = String(parseInt(mtrWg[1], 10));
-    add(`MTR_WESTGRAND_${n}_${mtrWg[2]}`);
-  }
-
-  // Human label WG 402 WATER → WG_402_WATER → MTR_WESTGRAND_402_WATER
+  // Human label WG 402 WATER → WG_402_WATER → MTR_PROP_402_WATER (generic shorthand for any property)
   const wg = k0.match(/^WG_(\d{2,4})_(.+)$/);
   if (wg && pc) {
     const n = String(parseInt(wg[1], 10));

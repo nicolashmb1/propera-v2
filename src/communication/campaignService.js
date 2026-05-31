@@ -314,7 +314,7 @@ async function createCampaign(input, opts) {
   const audienceKind = normalizeAudienceKind(body.audienceKind || body.audience_kind);
   if (!audienceKind) return { ok: false, error: "invalid_audience_kind" };
 
-  const orgId = String(body.orgId || body.org_id || communicationOrgId()).trim() || "grand";
+  const orgId = String(body.orgId || body.org_id || communicationOrgId()).trim();
   const audienceFilter = normalizeAudienceFilter(body.audienceFilter || body.audience_filter);
   const messageBody = String(body.messageBody || body.message_body || "").trim();
   const tone = normalizeTone(body.tone);
@@ -378,7 +378,7 @@ async function listCampaigns(input) {
   const status = normalizeCommStatus(opts.status);
   const limit = normalizePositiveInt(opts.limit, 50, 200) || 50;
   const offset = normalizePositiveInt(opts.offset, 0, 10000) || 0;
-  const orgId = String(opts.orgId || opts.org_id || communicationOrgId()).trim() || "grand";
+  const orgId = String(opts.orgId || opts.org_id || communicationOrgId()).trim();
 
   let query = sb
     .from("communication_campaigns")

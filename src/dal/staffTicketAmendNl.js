@@ -107,7 +107,7 @@ async function resolveHumanTicketIdForStaffAmend(sb, o) {
     return {
       ok: false,
       replyText:
-        "Include the ticket id (example: PENN-050426-6362) or start with what you want to change plus enough words to match one open ticket.",
+        "Include the ticket id (example: PROP-050426-6362) or start with what you want to change plus enough words to match one open ticket.",
     };
   }
 
@@ -161,7 +161,7 @@ async function resolveHumanTicketIdForStaffAmend(sb, o) {
     return {
       ok: false,
       replyText:
-        "Which ticket should I change? Reply with the ticket id (PENN-MMDDYY-####), or add property + unit and a few words from the issue so I can match one open ticket.",
+        "Which ticket should I change? Reply with the ticket id (PROP-MMDDYY-####), or add property + unit and a few words from the issue so I can match one open ticket.",
     };
   }
 
@@ -171,7 +171,7 @@ async function resolveHumanTicketIdForStaffAmend(sb, o) {
     return {
       ok: false,
       replyText:
-        "That work item is not linked to a ticket row yet — paste the human ticket id (PENN-MMDDYY-####).",
+        "That work item is not linked to a ticket row yet — paste the human ticket id (PROP-MMDDYY-####).",
     };
   }
 
@@ -184,7 +184,7 @@ async function resolveHumanTicketIdForStaffAmend(sb, o) {
   if (tErr || !trow || !trow.ticket_id) {
     return {
       ok: false,
-      replyText: "Could not load ticket id for that work item. Include PENN-MMDDYY-#### in your message.",
+      replyText: "Could not load ticket id for that work item. Include PROP-MMDDYY-#### in your message.",
     };
   }
 

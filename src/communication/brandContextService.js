@@ -39,7 +39,7 @@ function buildPropertyContext(row) {
 async function getBrandContext(input) {
   const sb = getSupabase();
   const opts = input && typeof input === "object" ? input : {};
-  const orgId = String(opts.orgId || communicationOrgId()).trim() || "grand";
+  const orgId = String(opts.orgId || communicationOrgId()).trim();
   const propertyCodes = normalizePropertyCodes(opts.propertyCodes);
 
   const out = {

@@ -36,7 +36,8 @@ If the user says anything about **finances, ledger, rent, delinquency, owner sta
 | Phase | Status | Last migration |
 |-------|--------|---------------|
 | **Baseline** | ✅ Complete | 051 (051 = program_lines staff — ops, not finance) |
-| **Phase 1** — credible daily use (snapshot APIs, lease/rent on cards, ledger void/date/notes) | 🟡 In progress | **052** applied in repo; current focus = Phase 1 read-side/UI completeness |
+| **Phase 1** — credible daily use (snapshot APIs, lease/rent on cards, ledger void/date/notes) | 🟡 In progress | **052** applied; Phase 1d (property expenses + record payment + bill scan) shipped **2026-05-30** — see roadmap §1d |
+| **Phase 1d** — parallel-run operating expenses (`property_expenses` table, expense tab, bill scan, record payment) | ✅ Shipped | **082** `property_expenses`; record payment uses existing ledger POST; bill scan via V2 `expenseScanVision.js` |
 | **Phase 1.5** — incumbent accounting **read-only snapshot** (Leasehold rent roll / ledger export → `/financial`) | 🔲 **Blocked** — no code until export samples + column spec | see roadmap §1.5; **do not** apply **058** until spec exists |
 | **Phase 2** — rent roll + delinquency (native `rent_postings` or promoted import) | 🔲 Not started | needs 053 |
 | **Phase 3** — vendor finance / AP | 🔲 Not started | needs 054–055 |

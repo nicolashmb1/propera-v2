@@ -212,6 +212,10 @@ function buildRouterParameterFromPortal(payload) {
   const pageCtxJson =
     pageCtx && typeof pageCtx === "object" ? JSON.stringify(pageCtx) : "";
 
+  const financialCtx = p.portal_financial_context ?? p.portalFinancialContext;
+  const financialCtxJson =
+    financialCtx && typeof financialCtx === "object" ? JSON.stringify(financialCtx) : "";
+
   const payloadForJson =
     action === "create_ticket"
       ? {
@@ -240,6 +244,7 @@ function buildRouterParameterFromPortal(payload) {
     _portalCostContextJson: costCtxJson,
     _portalProposalContextJson: proposalCtxJson,
     _portalPageContextJson: pageCtxJson,
+    _portalFinancialContextJson: financialCtxJson,
   };
 }
 

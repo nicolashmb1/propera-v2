@@ -125,7 +125,7 @@ async function createTenantForPortal(input) {
     .select("org_id")
     .eq("code", propertyCode)
     .maybeSingle();
-  const rosterOrgId = String(propRow?.org_id || "grand").trim().toLowerCase() || "grand";
+  const rosterOrgId = String(propRow?.org_id || "").trim().toLowerCase();
 
   const { data: props } = await sb
     .from("properties")

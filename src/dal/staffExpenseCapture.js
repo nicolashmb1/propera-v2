@@ -664,7 +664,7 @@ async function tryStaffExpenseCapture(o) {
       ok: true,
       brain: "staff_expense_capture",
       replyText:
-        "Which ticket is this for? Include the ticket id (PENN-MMDDYY-####) or pin unit + property in Propera chat and pick a ticket.",
+        "Which ticket is this for? Include the ticket id (PROP-MMDDYY-####) or pin unit + property in Propera chat and pick a ticket.",
     };
   }
 

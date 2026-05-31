@@ -26,6 +26,7 @@ const { handleStaffLifecycleCommand } = require("../brain/staff/handleStaffLifec
 const { tryPortalPmTicketMutation } = require("../dal/portalTicketMutations");
 const { tryStaffExpenseCapture } = require("../dal/staffExpenseCapture");
 const { financeCostCaptureChatEnabled } = require("../config/env");
+const { handleFinancialCapture, isPortalFinancialMode } = require("../brain/financial/handleFinancialCapture");
 const { isExpenseCaptureMessage } = require("../brain/staff/expenseCaptureParse");
 const { portalPostImpliesPmTicketSave } = require("../contracts/buildRouterParameterFromPortal");
 const { isTenantPortalStructuredCreate } = require("../brain/core/handleInboundCoreScheduleHints");
@@ -328,6 +329,20 @@ async function runInboundPipeline(o) {
           "Jarvis Plan is not enabled on this server. Set JARVIS_PLAN_ENABLED=1 on propera-v2.",
       };
     }
+  }
+
+  // Financial capture — portal_chat_mode = "financial" (also works from Telegram/SMS when staff)
+  if (!staffRun && isPortalFinancialMode(routerParameter)) {
+    staffRun = await handleFinancialCapture({
+      traceId,
+      routerParameter,
+      transportChannel,
+      staffActorKey:
+        staffContext && staffContext.staffActorKey
+          ? String(staffContext.staffActorKey || "").trim()
+          : String(routerParameter.From || "").trim(),
+    });
+    if (staffRun) staffRun = enrichStaffRunWithProposal(staffRun);
   }
 
   /** @type {string | null} */
