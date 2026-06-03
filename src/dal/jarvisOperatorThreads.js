@@ -310,5 +310,6 @@ module.exports = {
   addPendingProposalToThread,
   markProposalOnThread,
   threadSummaryForPortal,
+  latestAwaitingProposal,
   pruneExpiredPending,
 };

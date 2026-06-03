@@ -15,6 +15,11 @@ const { runInboundPipeline } = require("../inbound/runInboundPipeline");
 const { getSupabase } = require("../db/supabase");
 const { supabaseTenantDocsBucket, supabaseUrl } = require("../config/env");
 const { normalizePhoneE164 } = require("../utils/phone");
+const { prepareMaintenanceTextForBrain } = require("./tenantMaintenanceI18n");
+const {
+  applyDisplayToTenantTicket,
+  applyDisplayToTenantTickets,
+} = require("./tenantDisplayI18n");
 
 /** Closed tab — Propera canonical "Completed" (normalizePortalTicketStatus). */
 function isCompletedStatus(s) {
@@ -259,7 +264,8 @@ async function listTenantTickets(sb, tenantCtx, opts = {}) {
   if (status === "open") rows = rows.filter((row) => isTenantOpenStatus(row.status));
   if (status === "closed") rows = rows.filter((row) => isCompletedStatus(row.status));
 
-  return rows.slice(offset, offset + limit).map(mapTicketToTenantShape);
+  const mapped = rows.slice(offset, offset + limit).map(mapTicketToTenantShape);
+  return applyDisplayToTenantTickets(mapped, tenantCtx.preferredLanguage);
 }
 
 /**
@@ -286,7 +292,8 @@ async function getTenantTicket(sb, tenantCtx, ticketId) {
   if (isDeletedStatus(data.status) || isVoidStatus(data.status)) return null;
   const ticket = mapTicketToTenantShape(data);
   const timeline = await listTenantTicketTimeline(sb, data);
-  return { ...ticket, timeline };
+  const withTimeline = { ...ticket, timeline };
+  return applyDisplayToTenantTicket(withTimeline, tenantCtx.preferredLanguage);
 }
 
 /**
@@ -298,7 +305,7 @@ async function getTenantTicket(sb, tenantCtx, ticketId) {
  * @param {{ category: string, description: string, photoUrls?: string[] }} body
  * @param {string} traceId
  */
-async function createTenantMaintenanceTicket(tenantCtx, body, traceId) {
+async function createTenantMaintenanceTicket(tenantCtx, body, traceId, opts = {}) {
   const phone = normalizePhoneE164(tenantCtx.phone);
   const propertyCode = String(tenantCtx.propertyCode || "").trim().toUpperCase();
   const unitLabel = String(tenantCtx.unitLabel || "").trim();
@@ -306,17 +313,58 @@ async function createTenantMaintenanceTicket(tenantCtx, body, traceId) {
     throw Object.assign(new Error("tenant_session_incomplete"), { code: "SESSION_ERROR" });
   }
   const category    = String(body.category    || "General").trim();
-  const description = String(body.description || "").trim();
+  const descriptionRaw = String(body.description || "").trim();
   const photoUrls   = Array.isArray(body.photoUrls) ? body.photoUrls : [];
+  const intakeChannel = String(opts.intakeChannel || "tenant_portal").trim();
+  const channelLabel = String(opts.channel || "tenant_portal").trim();
+  const logKind = String(opts.logKind || "tenant_maintenance_create").trim();
+  const traceStartMs = opts.traceStartMs != null ? Number(opts.traceStartMs) : Date.now();
 
-  if (!description || description.length < 5) {
+  if (!descriptionRaw || descriptionRaw.length < 5) {
     throw Object.assign(new Error("Description too short"), { code: "VALIDATION_ERROR" });
   }
 
   const tenantId = String(tenantCtx.tenantId || "").trim();
+  const urgency = String(body.urgency || "").trim().toLowerCase();
+  const locationDetailRaw = String(body.location || body.locationDetail || "").trim();
+
+  let description = descriptionRaw;
+  let locationDetail = locationDetailRaw;
+  let i18nMeta = null;
+  try {
+    const prepared = await prepareMaintenanceTextForBrain({
+      description: descriptionRaw,
+      locationDetail: locationDetailRaw,
+      preferredLanguage: tenantCtx.preferredLanguage,
+      traceId,
+      traceStartMs,
+    });
+    description = prepared.description;
+    locationDetail = prepared.locationDetail;
+    i18nMeta = prepared.meta;
+  } catch (prepErr) {
+    if (prepErr.code === "TRANSLATION_ERROR") {
+      throw Object.assign(new Error("translation_unavailable"), {
+        code: "TRANSLATION_ERROR",
+      });
+    }
+    throw prepErr;
+  }
+  const locationKindOverride = String(body.locationKind || "").trim().toLowerCase();
+  const priority =
+    urgency === "emergency" ? "emergency" : urgency === "urgent" ? "high" : "normal";
+
+  const locationKind =
+    locationKindOverride === "unit" || locationKindOverride === "common_area"
+      ? locationKindOverride
+      : channelLabel === "voice" && unitLabel
+        ? "unit"
+        : locationDetail && !/^unit\b/i.test(locationDetail)
+          ? "common_area"
+          : "unit";
 
   const payloadJson = {
-    channel:        "tenant_portal",
+    channel:        channelLabel,
     actor_type:     "TENANT",
     action:         "create_ticket",
     property:       propertyCode,
@@ -327,7 +375,9 @@ async function createTenantMaintenanceTicket(tenantCtx, body, traceId) {
     category,
     message:        description,
     description,
-    location_kind:  "unit",
+    location_kind:  locationKind,
+    priority,
+    ...(locationDetail ? { location: locationDetail, location_detail: locationDetail } : {}),
     ...(photoUrls.length > 0 ? { attachmentUrls: photoUrls, photo_paths: photoUrls } : {}),
   };
 
@@ -342,11 +392,11 @@ async function createTenantMaintenanceTicket(tenantCtx, body, traceId) {
 
   const result = await runInboundPipeline({
     traceId,
-    traceStartMs: Date.now(),
+    traceStartMs,
     routerParameter,
     transportChannel: "portal",
     telegramSignal: null,
-    logKind: "tenant_maintenance_create",
+    logKind,
     portalUserAccessToken: "",
   });
 
@@ -381,10 +431,10 @@ async function createTenantMaintenanceTicket(tenantCtx, body, traceId) {
   }
 
   const sb = getSupabase();
-  if (sb && ticketDbId) {
+  if (sb && ticketDbId && intakeChannel) {
     await sb
       .from("tickets")
-      .update({ intake_channel: "tenant_portal" })
+      .update({ intake_channel: intakeChannel })
       .eq("id", ticketDbId);
   }
 
@@ -393,7 +443,17 @@ async function createTenantMaintenanceTicket(tenantCtx, body, traceId) {
     ticketId:   humanId || null,
     ticketKey:  ticketKey || null,
     humanId:    humanId || null,
+    ...(i18nMeta ? { i18n: i18nMeta } : {}),
   };
+}
+
+/** Max voice agent — same brain path as portal; intake_channel = phone. */
+async function createVoiceMaintenanceTicket(tenantCtx, body, traceId) {
+  return createTenantMaintenanceTicket(tenantCtx, body, traceId, {
+    intakeChannel: "phone",
+    channel: "voice",
+    logKind: "voice_maintenance_create",
+  });
 }
 
 /**
@@ -433,6 +493,7 @@ module.exports = {
   listTenantTickets,
   getTenantTicket,
   createTenantMaintenanceTicket,
+  createVoiceMaintenanceTicket,
   getMaintenanceUploadUrl,
   mapTicketToTenantShape,
 };

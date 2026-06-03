@@ -263,7 +263,13 @@ async function runInboundPipeline(o) {
   } else if (actorIdentity.isVendor) {
     inbound.meta = { ...(inbound.meta || {}), actorIdentity: { isVendor: true, vendor: null } };
   }
-  const laneDecision = buildLaneDecision(precursor, inbound, staffContext, actorIdentity);
+  const laneDecision = buildLaneDecision(
+    precursor,
+    inbound,
+    staffContext,
+    actorIdentity,
+    routerParameter
+  );
 
   await appendEventLog({
     traceId,

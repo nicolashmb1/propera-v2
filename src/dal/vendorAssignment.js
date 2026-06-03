@@ -11,10 +11,6 @@ const { getPropertyByCode } = require("./propertyLookup");
 const { dispatchOutbound } = require("../outgate/dispatchOutbound");
 const { buildVendorDispatchRequestText } = require("../outgate/vendorMessageSpecs");
 const { VENDOR_STATUS } = require("../vendor/vendorStatus");
-const {
-  resolveTicketForAssignment,
-  assertVendorAssignable,
-} = require("./portalTicketAssignment");
 
 const TICKET_VENDOR_SELECT =
   "id, ticket_id, ticket_key, property_code, unit_label, category, message_raw, status, is_imported_history, assign_to, assigned_name, assigned_type, assigned_id, assigned_at, assigned_by, assignment_source, assignment_note, assignment_updated_at, assignment_updated_by, vendor_status, vendor_dispatch_at, vendor_dispatched_to";
@@ -225,6 +221,7 @@ function vendorDispatchEnabled() {
  * @param {string} [o.portalUserAccessToken]
  */
 async function assignVendorToTicket(o) {
+  const { resolveTicketForAssignment, assertVendorAssignable } = require("./portalTicketAssignment");
   const traceId = String(o.traceId || "");
   if (!isDbConfigured()) {
     return { ok: false, error: "no_db", status: 503 };

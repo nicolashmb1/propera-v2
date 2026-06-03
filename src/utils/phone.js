@@ -13,4 +13,24 @@ function normalizePhoneE164(raw) {
   return s.startsWith("+") ? s : "+" + d;
 }
 
-module.exports = { normalizePhoneE164 };
+/** E.164 values to try when matching tenant_roster (legacy +10-digit saves). */
+function rosterPhoneLookupCandidates(phoneRaw) {
+  const out = new Set();
+  const canonical = normalizePhoneE164(phoneRaw);
+  if (canonical) out.add(canonical);
+
+  const digits = String(phoneRaw || "").replace(/\D/g, "");
+  if (digits.length === 10) {
+    out.add("+1" + digits);
+    out.add("+" + digits);
+  } else if (digits.length === 11 && digits.startsWith("1")) {
+    const ten = digits.slice(1);
+    out.add("+" + digits);
+    out.add("+1" + ten);
+    out.add("+" + ten);
+  }
+
+  return [...out];
+}
+
+module.exports = { normalizePhoneE164, rosterPhoneLookupCandidates };

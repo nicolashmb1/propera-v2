@@ -142,7 +142,7 @@ Conversations **drift**: freeze lifts, scope shifts, priorities change, a port l
 | **Conflict Mediation Engine** (policy enforcement, complaints, notice tiers — planned) | **`docs/CONFLICT_MEDIATION_ENGINE.md`**; Jarvis: **`docs/PROPERA_JARVIS_NORTH_STAR.md`**; SQL: **`067`**, **`068`**, **`071`**; code: `src/conflictMediation/` (CME-2 report + courtesy notice live) |
 | **Jarvis / company operating delegate** (tenant, staff, owner agents + outgate) | **`docs/PROPERA_JARVIS_NORTH_STAR.md`**, **`docs/JARVIS_SPINE.md`** |
 | **Tenant Agent** (AI Staff — conversational SMS/TG/WA front door) | **`docs/TENANT_AGENT_ADAPTER.md`**; code: `src/adapters/tenantAgent/`; brain append: `handleTenantAppendToTicket.js`; SQL: **`063_tenant_conversations.sql`**; flags: **`TENANT_AGENT_*`** in `.env.example` |
-| **Tenant portal** (resident `/tenant/*` in propera-app + `/api/tenant/*` in V2) | **`docs/TENANT_PORTAL_BUILD_PLAN.md`**; SQL: **`056_tenant_portal.sql`** (planned); not started in repo |
+| **Tenant portal** (resident `/tenant/*` in propera-app + `/api/tenant/*` in V2) | **`docs/TENANT_PORTAL_BUILD_PLAN.md`**; SQL: **`056_tenant_portal.sql`**; **i18n en/es:** **`docs/TENANT_PORTAL_I18N.md`** (spec locked — staff portal untouched) |
 | Env template | `propera-v2/.env.example` |
 | Intake attach classify (deterministic slice) | `src/brain/core/intakeAttachClassify.js` (used by `mergeMaintenanceDraft.js`) |
 | Attach clarify latch (DB) | `src/dal/conversationCtxAttach.js` — sets `conversation_ctx.pending_expected = ATTACH_CLARIFY` |

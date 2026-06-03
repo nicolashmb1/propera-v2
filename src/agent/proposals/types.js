@@ -9,6 +9,7 @@ const PROPOSAL_VERSION = "1";
 const PROPOSAL_OPS = Object.freeze({
   ATTACH_TICKET_COST: "attach_ticket_cost",
   PROPOSE_VENDOR_REQUEST: "propose_vendor_request",
+  APPEND_SERVICE_NOTE: "append_service_note",
 });
 
 /**

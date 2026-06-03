@@ -14,6 +14,7 @@ const {
   shouldRunSmsComplianceBranch,
   resolveDefaultBrain,
   isStaffCaptureHash,
+  buildLaneDecision,
 } = require("../src/inbound/routeInboundDecision");
 
 test("getEffectiveCompliance is SMS-only", () => {
@@ -315,4 +316,32 @@ test("resolveDefaultBrain fallbacks", () => {
 test("isStaffCaptureHash", () => {
   assert.equal(isStaffCaptureHash({ outcome: "STAFF_CAPTURE_HASH" }), true);
   assert.equal(isStaffCaptureHash({ outcome: "PRECURSOR_EVALUATED" }), false);
+});
+
+test("buildLaneDecision — staff on voice structured create uses tenant lane", () => {
+  const precursor = { outcome: "PRECURSOR_EVALUATED" };
+  const inbound = { meta: {} };
+  const staffContext = { isStaff: true, staffActorKey: "+19083380390" };
+  const routerParameter = {
+    _portalAction: "create_ticket",
+    _portalPayloadJson: JSON.stringify({
+      channel: "voice",
+      actor_type: "TENANT",
+      action: "create_ticket",
+    }),
+  };
+  const lane = buildLaneDecision(precursor, inbound, staffContext, {}, routerParameter);
+  assert.equal(lane.lane, "tenantLane");
+});
+
+test("buildLaneDecision — staff on non-voice portal still manager lane", () => {
+  const precursor = { outcome: "PRECURSOR_EVALUATED" };
+  const inbound = { meta: {} };
+  const staffContext = { isStaff: true };
+  const routerParameter = {
+    _portalAction: "create_ticket",
+    _portalPayloadJson: JSON.stringify({ channel: "pm_portal" }),
+  };
+  const lane = buildLaneDecision(precursor, inbound, staffContext, {}, routerParameter);
+  assert.equal(lane.lane, "managerLane");
 });

@@ -73,6 +73,7 @@ const {
   getVapidPublicKeyForClient,
 } = require("./pushNotifications");
 const { portalPushEnabled } = require("../config/env");
+const { handleJarvisPendingProposal } = require("./handleJarvisPendingProposal");
 const { attachPortalOrgContextMiddleware } = require("./resolvePortalOrgContext");
 const {
   canManageOrgSettings,
@@ -2029,6 +2030,10 @@ function registerPortalReadRoutes(app) {
       return res.status(code).json({ ok: false, error: out.error || "unsubscribe_failed" });
     }
     return res.status(200).json({ ok: true });
+  }));
+
+  app.get("/api/portal/jarvis/pending-proposal", gate(async (req, res) => {
+    return handleJarvisPendingProposal(req, res);
   }));
 
   // ── Expense bill scan ──────────────────────────────────────────────────────

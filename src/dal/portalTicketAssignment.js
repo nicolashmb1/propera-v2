@@ -12,7 +12,6 @@ const { updateWorkItemsByTicketKey } = require("./portalTicketMutations");
 const { getStaffDisplayNameByStaffId } = require("./staffPhoneByStaffId");
 const { resolvePortalStaffActorFromJwt } = require("../portal/resolvePortalStaffActor");
 const { mergeChangedByIntoTicketPatch } = require("./ticketAuditPatch");
-const { assignVendorToTicket } = require("./vendorAssignment");
 
 const HUMAN_ID = "([A-Za-z0-9]{2,12}-\\d{6}-\\d{4})";
 const HUMAN_TICKET_ID_RE = new RegExp(`^${HUMAN_ID}$`, "i");
@@ -622,6 +621,7 @@ async function applyPortalTicketAssignment(o) {
 
     const dispatchOnAssign =
       o.dispatchOnAssign === true || o.dispatch_on_assign === true;
+    const { assignVendorToTicket } = require("./vendorAssignment");
     const vOut = await assignVendorToTicket({
       ticketLookupHint: decoded,
       ticketKeyHint: o.ticketKeyHint ?? o.ticket_key,

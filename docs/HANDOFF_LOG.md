@@ -7,7 +7,35 @@
 
 ---
 
-## 2026-05-30 — MO-4 Company onboarding wizard
+## 2026-06-02 — Tenant portal bilingual (en / es) Phases 1–3 + push prompt
+
+| Area | Change |
+|------|--------|
+| **Spec** | **`docs/TENANT_PORTAL_I18N.md`** — locked decisions: display translate, English operational brain, `en`+`es`, profile + detect. |
+| **V2** | `tenant_roster.preferred_language` PATCH; `detectTextLanguage`, `translateToEnglish` (maintenance POST), `translateForDisplay` (maintenance + notices GET). Modules: `tenantI18nLocale.js`, `translateTenantText.js`, `tenantMaintenanceI18n.js`, `tenantDisplayI18n.js`. |
+| **App** | `src/lib/tenant/i18n/` catalogs + `TenantLocaleProvider`; profile language row (edit button like email); avatar → `/tenant/profile`. |
+| **Env** | `PROPERA_TENANT_I18N_ENABLED=1` + `OPENAI_API_KEY` for translate layers; optional `PROPERA_TENANT_TRANSLATE_MODEL`. Static UI works from profile without flag. |
+| **Tests** | `tests/tenantI18nLocale.test.js`, `tests/detectTextLanguage.test.js`, `tests/tenantMaintenanceI18n.test.js`, `tests/tenantDisplayI18n.test.js`. |
+| **Phase 4 (partial)** | Push permission banner localized (`TenantPushPrompt` + `tenantPushErrors.ts`). Login + amenity description display translate **not** done. |
+
+**Continue:** Phase 4 remainder (login strings, amenity `descriptionDisplay`) or next tenant portal slice per **`docs/TENANT_PORTAL_BUILD_PLAN.md`**.
+
+---
+
+## 2026-06-01 — Max voice agent (V2, brain-routed)
+
+| Area | Change |
+|------|--------|
+| **Voice module** | `src/voice/` — Max Realtime agent: Twilio Media Stream ↔ OpenAI Realtime (`voiceWebSocketBridge.js`). |
+| **Routes** | `POST /webhooks/twilio/voice` (TwiML), `WS /voice/stream` — wired in `index.js` when `PROPERA_VOICE_ENABLED=1`. |
+| **Brain rule** | Tools **never** insert tickets/work_items directly. `maxTools.js` → `tenantMaintenanceService` → `runInboundPipeline` (`createVoiceMaintenanceTicket`, `listTenantTickets`, `getTenantTicket`). |
+| **Roster / brand** | `lookupCallerRoster.js` (no tenant-agent pilot filter); `voiceBrandResolve.js` (brand from roster property → org). |
+| **Env** | `PROPERA_VOICE_ENABLED`, `PROPERA_VOICE_MODEL`, `PROPERA_VOICE_AGENT_VOICE` + existing `OPENAI_API_KEY`, `PROPERA_PUBLIC_BASE_URL`. |
+| **Tests** | `tests/voice/maxTools.test.js` |
+
+**Turn on:** set env vars, `npm install`, restart V2, point Twilio **voice** number webhook to `https://<PUBLIC_BASE>/webhooks/twilio/voice`.
+
+---
 
 | Area | Change |
 |------|--------|

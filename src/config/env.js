@@ -66,6 +66,45 @@ function twilioOutboundEnabled() {
   );
 }
 
+/** Max voice agent — PROPERA_VOICE_ENABLED=1 + OPENAI_API_KEY + PROPERA_PUBLIC_BASE_URL */
+function voiceEnabled() {
+  return envFlagTrue("PROPERA_VOICE_ENABLED", false);
+}
+
+/** Jarvis staff live voice — portal WS /voice/jarvis + JARVIS_ASK_ENABLED recommended */
+function jarvisVoiceEnabled() {
+  return envFlagTrue("JARVIS_VOICE_ENABLED", false);
+}
+
+function voiceModel() {
+  return String(env("PROPERA_VOICE_MODEL", "gpt-realtime-2")).trim();
+}
+
+function voiceAgentVoice() {
+  return String(env("PROPERA_VOICE_AGENT_VOICE", "alloy")).trim();
+}
+
+/** semantic_vad eagerness: low | medium | high — default low to avoid cutting callers off mid-thought */
+function voiceVadEagerness() {
+  const v = String(env("PROPERA_VOICE_VAD_EAGERNESS", "low")).trim().toLowerCase();
+  if (v === "medium" || v === "high") return v;
+  return "low";
+}
+
+/** server_vad | semantic_vad — server_vad waits for silence; better when callers pause mid-answer */
+function voiceTurnDetectionMode() {
+  const v = String(env("PROPERA_VOICE_TURN_DETECTION", "server_vad")).trim().toLowerCase();
+  if (v === "semantic_vad" || v === "semantic") return "semantic_vad";
+  return "server_vad";
+}
+
+/** Milliseconds of silence before the model takes its turn (server_vad). Higher = more patient. */
+function voiceSilenceDurationMs() {
+  const n = parseInt(env("PROPERA_VOICE_SILENCE_MS", "1200"), 10);
+  if (isFinite(n) && n >= 400 && n <= 3000) return n;
+  return 1200;
+}
+
 /** Core intake + finalize (Postgres). Off if CORE_ENABLED=0 */
 function coreEnabled() {
   return env("CORE_ENABLED", "1") !== "0";
@@ -297,6 +336,17 @@ function turnoverEngineEnabled() {
 /** Access Engine `/api/portal/access/*` — amenity reservations (`PROPERA_ACCESS_ENGINE_ENABLED=1`). */
 function accessEngineEnabled() {
   return env("PROPERA_ACCESS_ENGINE_ENABLED", "") === "1";
+}
+
+/** Tenant portal en/es UI + translate layers (`PROPERA_TENANT_I18N_ENABLED=1`). Phase 1 static UI works without flag. */
+function tenantI18nEnabled() {
+  return env("PROPERA_TENANT_I18N_ENABLED", "") === "1";
+}
+
+/** Model for tenant portal translate-on-write / display (`PROPERA_TENANT_TRANSLATE_MODEL`). */
+function tenantTranslateModel() {
+  const m = String(env("PROPERA_TENANT_TRANSLATE_MODEL", "")).trim();
+  return m || openaiModelExtract();
 }
 
 /** Encrypt access PINs at rest (`ACCESS_CREDENTIAL_SECRET`). Dev may omit (base64 only). */
@@ -563,6 +613,13 @@ module.exports = {
   twilioSmsFrom,
   twilioWhatsappFrom,
   twilioOutboundEnabled,
+  voiceEnabled,
+  jarvisVoiceEnabled,
+  voiceModel,
+  voiceAgentVoice,
+  voiceVadEagerness,
+  voiceTurnDetectionMode,
+  voiceSilenceDurationMs,
   coreEnabled,
   properaTimezone,
   scheduleLatestHour,
@@ -598,6 +655,8 @@ module.exports = {
   openDeckDayChartEnabled,
   turnoverEngineEnabled,
   accessEngineEnabled,
+  tenantI18nEnabled,
+  tenantTranslateModel,
   accessCredentialSecret,
   financeCoreEnabled,
   financialCaptureEnabled,

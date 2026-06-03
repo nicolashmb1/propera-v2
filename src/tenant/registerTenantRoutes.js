@@ -20,7 +20,16 @@ const {
   getMaintenanceUploadUrl,
 } = require("./tenantMaintenanceService");
 const { listTenantNotices, getTenantNotice } = require("./tenantNoticesService");
-const { accessEngineEnabled } = require("../config/env");
+const { accessEngineEnabled, portalPushEnabled, vapidPublicKey } = require("../config/env");
+const {
+  upsertTenantPushSubscription,
+  deactivateTenantPushSubscription,
+} = require("./tenantPushNotifications");
+const { updateTenantProfile } = require("./tenantProfileService");
+const {
+  listTenantDocuments,
+  getTenantDocumentDownloadUrl,
+} = require("./tenantDocumentsService");
 const {
   listTenantAccessLocations,
   getPublicAccessLocation,
@@ -99,8 +108,10 @@ function registerTenantRoutes(app) {
     }
 
     const phone = req.body?.phone;
+    const cancelVerificationSid =
+      req.body?.cancelVerificationSid || req.body?.cancel_verification_sid;
     try {
-      const out = await requestOtp(phone, orgCtx.id, req.traceId);
+      const out = await requestOtp(phone, orgCtx.id, req.traceId, cancelVerificationSid);
       return res.json({ ok: true, ...out });
     } catch (err) {
       const code = err.code || "request_failed";
@@ -132,8 +143,9 @@ function registerTenantRoutes(app) {
 
     const phone = req.body?.phone;
     const code = req.body?.code;
+    const verificationSid = req.body?.verificationSid || req.body?.verification_sid;
     try {
-      const out = await verifyOtp(phone, code, orgCtx.id);
+      const out = await verifyOtp(phone, code, orgCtx.id, verificationSid);
       return res.json({ ok: true, ...out });
     } catch (err) {
       const c = err.code || "verify_failed";
@@ -210,6 +222,62 @@ function registerTenantRoutes(app) {
     return res.json({ ok: true, ...session });
   });
 
+  app.patch("/api/tenant/profile", requireTenantAuth, async (req, res) => {
+    const sb = getSupabase();
+    if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+
+    try {
+      const result = await updateTenantProfile(sb, req.tenantCtx, req.body || {});
+      if (!result.ok) {
+        const err = result.error || "update_failed";
+        const status =
+          err === "invalid_email" ||
+          err === "invalid_preferred_language" ||
+          err === "nothing_to_update" ||
+          err === "invalid_body"
+            ? 400
+            : err === "tenant_not_found" || err === "org_mismatch"
+              ? 404
+              : 500;
+        return res.status(status).json({ ok: false, error: err });
+      }
+      return res.json({ ok: true, ...result });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err?.message || err) });
+    }
+  });
+
+  // ── Documents (staff-uploaded, tenant read) ───────────────────────────────
+
+  app.get("/api/tenant/documents", requireTenantAuth, async (req, res) => {
+    const sb = getSupabase();
+    if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+    try {
+      const result = await listTenantDocuments(sb, req.tenantCtx);
+      if (!result.ok) {
+        return res.status(400).json({ ok: false, error: result.error });
+      }
+      return res.json({ ok: true, documents: result.documents });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err?.message || err) });
+    }
+  });
+
+  app.get("/api/tenant/documents/:id/url", requireTenantAuth, async (req, res) => {
+    const sb = getSupabase();
+    if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+    try {
+      const result = await getTenantDocumentDownloadUrl(sb, req.tenantCtx, req.params.id);
+      if (!result.ok) {
+        const status = result.error === "not_found" ? 404 : 400;
+        return res.status(status).json({ ok: false, error: result.error });
+      }
+      return res.json({ ok: true, url: result.url, name: result.name, mimeType: result.mimeType, expiresInSec: result.expiresInSec });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err?.message || err) });
+    }
+  });
+
   // ── Maintenance ──────────────────────────────────────────────────────────
 
   app.get("/api/tenant/maintenance", requireTenantAuth, async (req, res) => {
@@ -267,6 +335,9 @@ function registerTenantRoutes(app) {
     } catch (err) {
       if (err.code === "VALIDATION_ERROR" || err.code === "SESSION_ERROR") {
         return res.status(400).json({ ok: false, error: err.message });
+      }
+      if (err.code === "TRANSLATION_ERROR") {
+        return res.status(503).json({ ok: false, error: "translation_unavailable" });
       }
       return res.status(500).json({ ok: false, error: String(err.message || err) });
     }
@@ -472,6 +543,55 @@ function registerTenantRoutes(app) {
       }
     }
   );
+
+  // ── Tenant push notifications ────────────────────────────────────────────
+
+  app.get("/api/tenant/push/vapid-public-key", async (_req, res) => {
+    if (!portalPushEnabled()) {
+      return res.status(404).json({ ok: false, error: "push_disabled" });
+    }
+    const key = vapidPublicKey();
+    if (!key) return res.status(503).json({ ok: false, error: "vapid_not_configured" });
+    return res.json({ ok: true, publicKey: key });
+  });
+
+  app.post("/api/tenant/push/subscribe", requireTenantAuth, async (req, res) => {
+    if (!portalPushEnabled()) {
+      return res.status(404).json({ ok: false, error: "push_disabled" });
+    }
+    try {
+      const ctx = req.tenantCtx;
+      const result = await upsertTenantPushSubscription({
+        tenantId: ctx.tenantId,
+        orgId: ctx.orgId,
+        propertyCode: ctx.propertyCode,
+        body: req.body,
+      });
+      if (!result.ok) {
+        return res.status(400).json({ ok: false, error: result.error });
+      }
+      return res.json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err?.message || err) });
+    }
+  });
+
+  app.post("/api/tenant/push/unsubscribe", requireTenantAuth, async (req, res) => {
+    try {
+      const ctx = req.tenantCtx;
+      const result = await deactivateTenantPushSubscription({
+        tenantId: ctx.tenantId,
+        endpoint: req.body?.endpoint,
+        body: req.body,
+      });
+      if (!result.ok) {
+        return res.status(400).json({ ok: false, error: result.error });
+      }
+      return res.json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err?.message || err) });
+    }
+  });
 }
 
 module.exports = { registerTenantRoutes };

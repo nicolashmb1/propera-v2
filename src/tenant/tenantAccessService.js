@@ -75,6 +75,18 @@ async function listTenantAccessLocations(tenantCtx) {
 }
 
 /**
+ * Whether the tenant portal should show amenity reservation UI for this building.
+ * True when at least one active access location has a bookable policy (same as
+ * locations returned by {@link listTenantAccessLocations}).
+ * @param {{ propertyCode: string }} tenantCtx
+ */
+async function tenantAmenitiesVisible(tenantCtx) {
+  if (!accessEngineEnabled()) return false;
+  const locations = await listTenantAccessLocations(tenantCtx);
+  return locations.length > 0;
+}
+
+/**
  * @param {{ propertyCode: string }} tenantCtx
  * @param {string} slug
  */
@@ -316,6 +328,7 @@ async function listDayReservationsForTenantLocation(tenantCtx, locationId, day) 
 }
 
 module.exports = {
+  tenantAmenitiesVisible,
   listTenantAccessLocations,
   getPublicAccessLocation,
   getTenantAccessLocationBySlug,

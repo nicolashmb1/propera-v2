@@ -3,7 +3,7 @@
  */
 const crypto = require("crypto");
 const { getSupabase } = require("../db/supabase");
-const { normalizePhoneE164 } = require("../utils/phone");
+const { normalizePhoneE164, rosterPhoneLookupCandidates } = require("../utils/phone");
 const { sendTwilioMessage } = require("../outbound/twilioSendMessage");
 const {
   tenantOtpTtlMinutes,
@@ -19,6 +19,7 @@ const {
   loadTenantSessionBrand,
   buildOtpMessage,
 } = require("./tenantBrandResolve");
+const { isVerifyEnabled, sendVerifyOtp, checkVerifyOtp } = require("./twilioVerify");
 
 /** @type {Map<string, { count: number, resetAt: number }>} */
 const otpRateByPhone = new Map();
@@ -69,7 +70,7 @@ function normalizeUnitLabel(label) {
  * @param {string} propertyCode
  * @param {string} orgId
  */
-async function findRosterForOrgByUnitAndPhone(sb, phone, unitLabel, propertyCode, orgId) {
+async function findRosterForOrgByUnitAndPhone(sb, phoneRaw, unitLabel, propertyCode, orgId) {
   const pc = String(propertyCode || "").trim().toUpperCase();
   const unitNorm = normalizeUnitLabel(unitLabel);
   if (!pc || !unitNorm) return null;
@@ -83,12 +84,15 @@ async function findRosterForOrgByUnitAndPhone(sb, phone, unitLabel, propertyCode
     return null;
   }
 
+  const phoneCandidates = rosterPhoneLookupCandidates(phoneRaw);
+  if (!phoneCandidates.length) return null;
+
   const { data: rows, error } = await sb
     .from("tenant_roster")
     .select(
       "id, property_code, unit_label, phone_e164, resident_name, active, portal_enabled"
     )
-    .eq("phone_e164", phone)
+    .in("phone_e164", phoneCandidates)
     .eq("property_code", pc)
     .eq("active", true);
   if (error || !rows?.length) return null;
@@ -108,13 +112,16 @@ async function findRosterForOrgByUnitAndPhone(sb, phone, unitLabel, propertyCode
  * @param {string} phone
  * @param {string} orgId
  */
-async function findRosterForOrg(sb, phone, orgId) {
+async function findRosterForOrg(sb, phoneRaw, orgId) {
+  const phoneCandidates = rosterPhoneLookupCandidates(phoneRaw);
+  if (!phoneCandidates.length) return null;
+
   const { data: rows, error } = await sb
     .from("tenant_roster")
     .select(
       "id, property_code, unit_label, phone_e164, resident_name, active, portal_enabled"
     )
-    .eq("phone_e164", phone)
+    .in("phone_e164", phoneCandidates)
     .eq("active", true);
   if (error || !rows?.length) return null;
 
@@ -179,8 +186,9 @@ async function issueTokenFromRosterMatch(sb, match, org, phone) {
  * @param {string} phoneRaw
  * @param {string} orgId
  * @param {string} [traceId]
+ * @param {string} [cancelVerificationSid] — Twilio VE… to cancel before resend
  */
-async function requestOtp(phoneRaw, orgId, traceId) {
+async function requestOtp(phoneRaw, orgId, traceId, cancelVerificationSid) {
   const sb = getSupabase();
   if (!sb) {
     const err = new Error("no_db");
@@ -232,6 +240,23 @@ async function requestOtp(phoneRaw, orgId, traceId) {
       brandPreview,
       devBypass: true,
       devCode,
+    };
+  }
+
+  if (isVerifyEnabled()) {
+    const sent = await sendVerifyOtp(phone, {
+      cancelVerificationSid: String(cancelVerificationSid || "").trim() || undefined,
+    });
+    if (!sent.ok) {
+      const err = new Error(sent.error || "sms_failed");
+      err.code = sent.errorCode || "SMS_FAILED";
+      throw err;
+    }
+    return {
+      success: true,
+      brandPreview,
+      via: "verify",
+      verificationSid: sent.verificationSid || undefined,
     };
   }
 
@@ -289,8 +314,9 @@ async function requestOtp(phoneRaw, orgId, traceId) {
  * @param {string} phoneRaw
  * @param {string} codeRaw
  * @param {string} orgId
+ * @param {string} [verificationSid] — Twilio VE… from request-otp (Verify path)
  */
-async function verifyOtp(phoneRaw, codeRaw, orgId) {
+async function verifyOtp(phoneRaw, codeRaw, orgId, verificationSid) {
   const sb = getSupabase();
   if (!sb) {
     const err = new Error("no_db");
@@ -314,6 +340,32 @@ async function verifyOtp(phoneRaw, codeRaw, orgId) {
   }
 
   if (tenantDevOtpBypass() && code === tenantDevOtpCode()) {
+    const match = await findRosterForOrg(sb, phone, org);
+    if (!match) {
+      const err = new Error("tenant_not_found");
+      err.code = "TENANT_NOT_FOUND";
+      throw err;
+    }
+    return issueTokenFromRosterMatch(sb, match, org, phone);
+  }
+
+  if (isVerifyEnabled()) {
+    const check = await checkVerifyOtp(phone, code, verificationSid);
+    if (!check.ok) {
+      const err = new Error(check.error || "otp_check_failed");
+      err.code = "OTP_CHECK_FAILED";
+      throw err;
+    }
+    if (!check.approved) {
+      const errMap = {
+        otp_expired: "OTP_EXPIRED",
+        otp_max_attempts: "OTP_MAX_ATTEMPTS",
+        otp_invalid: "OTP_INVALID",
+      };
+      const err = new Error(check.error || "otp_invalid");
+      err.code = errMap[check.error] || "OTP_INVALID";
+      throw err;
+    }
     const match = await findRosterForOrg(sb, phone, org);
     if (!match) {
       const err = new Error("tenant_not_found");

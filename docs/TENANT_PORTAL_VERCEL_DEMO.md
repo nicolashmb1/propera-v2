@@ -12,12 +12,16 @@ In the Vercel project → **Settings → Environment Variables** (Production + P
 | `PROPERA_V2_API_URL` | `https://YOUR-NGROK-HOST/api/portal/gas-compat` |
 | `PROPERA_V2_WEBHOOK_URL` | `https://YOUR-NGROK-HOST/webhooks/portal` |
 | `PROPERA_PORTAL_TOKEN` | Same as `propera-v2` `.env` |
-| `NEXT_PUBLIC_TENANT_DEV_OTP_BYPASS` | `1` |
+| `NEXT_PUBLIC_TENANT_DEV_OTP_BYPASS` | `0` (use `1` only for demo without SMS) |
 | `SUPABASE_*` | Already set on your project |
 
 Redeploy after saving vars.
 
 `*.vercel.app` hosts use `DEV_ORG_SUBDOMAIN` (same as localhost).
+
+**PWA install on Vercel:** `/tenant/*` pages link a tenant-branded manifest at `/api/tenant/pwa-manifest` (name, icon, `start_url: /tenant/login`). Set `DEV_ORG_SUBDOMAIN=thegrand` so that manifest resolves. For production, add a custom domain (e.g. `thegrand.usepropera.com`) so install is not confused with the staff app.
+
+**Push:** Enable `PROPERA_PORTAL_PUSH_ENABLED=1` + VAPID keys on V2 and `NEXT_PUBLIC_PROPERA_VAPID_PUBLIC_KEY` on the app. Run migration `083_tenant_push_subscriptions.sql`. Tenants opt in via the in-app prompt after login.
 
 ## 2. propera-v2 — must be reachable from the internet
 
@@ -36,8 +40,10 @@ Put the ngrok HTTPS origin in `PROPERA_V2_API_URL` / `PROPERA_V2_WEBHOOK_URL` on
 
 ```
 TENANT_JWT_SECRET=propera-tenant-dev-secret-min-32-characters-local
-TENANT_DEV_OTP_BYPASS=1
-TENANT_DEV_OTP_CODE=000000
+TENANT_DEV_OTP_BYPASS=0
+TWILIO_ACCOUNT_SID=AC...
+TWILIO_AUTH_TOKEN=...
+TWILIO_VERIFY_SERVICE_SID=VA...
 DEV_ORG_SUBDOMAIN=thegrand
 ```
 

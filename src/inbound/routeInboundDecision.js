@@ -4,6 +4,10 @@
  */
 
 const { decideLane } = require("../brain/router/decideLane");
+const {
+  isTenantPortalStructuredCreate,
+  portalPayloadChannel,
+} = require("../brain/core/handleInboundCoreScheduleHints");
 
 /**
  * TCPA-style compliance applies only on SMS transport (`transportCompliance.complianceSmsOnly`).
@@ -21,9 +25,10 @@ function getEffectiveCompliance(smsCompliance, precursor) {
  * @param {object} inbound — normalized inbound event
  * @param {{ isStaff?: boolean }} [staffContext] — DB staff row match (not transport format)
  * @param {{ isVendor?: boolean, vendor?: object | null }} [actorIdentity] — from preloadActorIdentity
+ * @param {Record<string, string> | null | undefined} [routerParameter]
  * @returns {{ lane: string, reason: string, mode: string, trace: string }}
  */
-function buildLaneDecision(precursor, inbound, staffContext, actorIdentity) {
+function buildLaneDecision(precursor, inbound, staffContext, actorIdentity, routerParameter) {
   if (precursor.outcome === "STAFF_CAPTURE_HASH") {
     return {
       lane: "staffCapture",
@@ -53,6 +58,13 @@ function buildLaneDecision(precursor, inbound, staffContext, actorIdentity) {
     staffContext.isStaff &&
     precursor.outcome === "PRECURSOR_EVALUATED"
   ) {
+    const p = routerParameter || {};
+    if (
+      isTenantPortalStructuredCreate(p) &&
+      portalPayloadChannel(p) === "voice"
+    ) {
+      return decideLane(inbound, actorIdentity);
+    }
     return {
       lane: "managerLane",
       reason: "staff_identity",

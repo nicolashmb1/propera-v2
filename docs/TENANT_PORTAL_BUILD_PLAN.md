@@ -6,7 +6,7 @@
 
 **Status:** **Phase D live** — migration **056**, V2 `/api/tenant` auth + brand + maintenance CRUD + notices read endpoints, propera-app login + shell + dashboard + maintenance list/new/detail + notices list.
 
-**Related:** [AGENTS.md](../AGENTS.md) · [TENANT_ROSTER_PORTAL.md](./TENANT_ROSTER_PORTAL.md) (staff roster — **not** resident portal) · [COMMUNICATION_ENGINE.md](./COMMUNICATION_ENGINE.md) · [TICKET_TIMELINE.md](./TICKET_TIMELINE.md) · [PROPERA_FINANCE_ROADMAP.md](./PROPERA_FINANCE_ROADMAP.md) · [PROPERA_GUARDRAILS.md](../../propera-gas-reference/PROPERA_GUARDRAILS.md) · [PARITY_LEDGER.md](./PARITY_LEDGER.md) · [OUTSIDE_CURSOR.md](./OUTSIDE_CURSOR.md)
+**Related:** [AGENTS.md](../AGENTS.md) · [TENANT_PORTAL_I18N.md](./TENANT_PORTAL_I18N.md) (bilingual en/es — **spec locked, not started**) · [TENANT_ROSTER_PORTAL.md](./TENANT_ROSTER_PORTAL.md) (staff roster — **not** resident portal) · [COMMUNICATION_ENGINE.md](./COMMUNICATION_ENGINE.md) · [TICKET_TIMELINE.md](./TICKET_TIMELINE.md) · [PROPERA_FINANCE_ROADMAP.md](./PROPERA_FINANCE_ROADMAP.md) · [PROPERA_GUARDRAILS.md](../../propera-gas-reference/PROPERA_GUARDRAILS.md) · [PARITY_LEDGER.md](./PARITY_LEDGER.md) · [OUTSIDE_CURSOR.md](./OUTSIDE_CURSOR.md)
 
 **North compass:** Tenant portal is a **new HTTP adapter** (JWT), not a second brain. Maintenance **creates** use structured portal `create_ticket` with **`channel: tenant_portal`** / **`actor_type: TENANT`** — same `buildStructuredPortalCreateDraft` path as PM portal (not synthetic `# prop apt …` NL parse). **Never** insert `tickets` / `work_items` directly from tenant routes.
 

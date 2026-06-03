@@ -9,6 +9,7 @@ const {
   getAudiencePreview,
 } = require("./audienceResolver");
 const { getBrandContext } = require("./brandContextService");
+const { notifyTenantBuildingNotice } = require("../tenant/tenantPushNotifications");
 
 const COMM_TYPES = new Set([
   "BUILDING_UPDATE",
@@ -737,6 +738,48 @@ async function prepareCampaign(id, opts) {
   };
 }
 
+/**
+ * Push to tenants subscribed on properties that received this campaign in the portal.
+ * Non-fatal — never blocks campaign send.
+ * @param {import("@supabase/supabase-js").SupabaseClient} sb
+ * @param {object} campaignRow
+ */
+async function dispatchCampaignPortalPush(sb, campaignRow) {
+  try {
+    const campaignId = String(campaignRow.id || "").trim();
+    const title = String(campaignRow.title || "New building notice").trim();
+    const messageBody = String(campaignRow.message_body || "").trim();
+    const body = messageBody.slice(0, 120) + (messageBody.length > 120 ? "…" : "");
+
+    const { data: recipients } = await sb
+      .from("communication_recipients")
+      .select("property_code")
+      .eq("campaign_id", campaignId)
+      .in("status", ["SENT", "DELIVERED"]);
+
+    if (!recipients?.length) return;
+
+    const propertyCodes = [
+      ...new Set(
+        recipients
+          .map((r) => String(r.property_code || "").trim().toUpperCase())
+          .filter(Boolean)
+      ),
+    ];
+
+    for (const propertyCode of propertyCodes) {
+      await notifyTenantBuildingNotice({
+        propertyCode,
+        title,
+        body: body || "A new building notice is available in your portal.",
+        noticeId: campaignId,
+      }).catch(() => {});
+    }
+  } catch (_) {
+    /* push must not break send */
+  }
+}
+
 async function sendCampaignNow(id, opts) {
   const sb = getSupabase();
   if (!sb) return { ok: false, error: "no_db" };
@@ -754,6 +797,7 @@ async function sendCampaignNow(id, opts) {
     row = campaignOut.row;
     status = String(row.status || "").trim().toUpperCase();
     if (status === "SENT") {
+      void dispatchCampaignPortalPush(sb, row);
       return {
         ok: true,
         campaign: mapCampaignRow(row),
@@ -771,6 +815,8 @@ async function sendCampaignNow(id, opts) {
 
   campaignOut = await fetchCampaignRow(sb, id);
   if (!campaignOut.ok) return campaignOut;
+
+  void dispatchCampaignPortalPush(sb, campaignOut.row);
 
   return {
     ok: true,

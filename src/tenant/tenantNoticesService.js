@@ -1,6 +1,7 @@
 /**
  * Tenant portal — communication campaign notices (resident-safe read model).
  */
+const { applyDisplayToTenantNotice, applyDisplayToTenantNotices } = require("./tenantDisplayI18n");
 
 function tenantCtxScope(tenantCtx) {
   return {
@@ -55,10 +56,11 @@ async function listTenantNotices(sb, tenantCtx, opts = {}) {
 
   if (error) throw Object.assign(new Error(error.message), { code: "DB_ERROR" });
 
-  return (data || [])
+  const mapped = (data || [])
     .filter((row) => row?.communication_campaigns)
     .filter((row) => isTenantPortalNoticeEnabled(row.communication_campaigns.audience_filter))
     .map(mapNoticeRow);
+  return applyDisplayToTenantNotices(mapped, tenantCtx.preferredLanguage);
 }
 
 async function getTenantNotice(sb, tenantCtx, recipientId) {
@@ -91,7 +93,8 @@ async function getTenantNotice(sb, tenantCtx, recipientId) {
     if (!upErr) data.opened_at = nowIso;
   }
 
-  return mapNoticeRow(data);
+  const notice = mapNoticeRow(data);
+  return applyDisplayToTenantNotice(notice, tenantCtx.preferredLanguage);
 }
 
 module.exports = {

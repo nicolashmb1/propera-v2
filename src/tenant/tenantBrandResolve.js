@@ -3,6 +3,8 @@
  */
 const { getSupabase } = require("../db/supabase");
 const { commMainNumberDisplay } = require("../config/env");
+const { tenantAmenitiesVisible } = require("./tenantAccessService");
+const { normalizeTenantUiLocale } = require("./tenantI18nLocale");
 
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} sb
@@ -92,13 +94,15 @@ async function loadTenantSessionBrand(sb, rosterId, orgId) {
     floor = String(unit.floor || "").trim();
   }
 
+  const amenitiesVisible = await tenantAmenitiesVisible({ propertyCode });
+
   return {
     tenant: {
       id: String(row.id),
       name: String(row.resident_name || "").trim(),
       email: String(row.email || "").trim(),
       phone: String(row.phone_e164 || "").trim(),
-      preferredLanguage: String(row.preferred_language || "en").trim(),
+      preferredLanguage: normalizeTenantUiLocale(row.preferred_language),
     },
     unit: { id: unitId, label: unitLabel, floor },
     property: {
@@ -112,6 +116,7 @@ async function loadTenantSessionBrand(sb, rosterId, orgId) {
       showProperaAttribution: org?.show_propera_attribution !== false,
     },
     contact: { mainNumberE164: commMainNumberDisplay() },
+    features: { amenitiesVisible },
   };
 }
 

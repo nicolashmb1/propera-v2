@@ -38,6 +38,7 @@ const { registerCommunicationRoutes } = require("./communication/registerCommuni
 const { registerCommunicationsWebhooks } = require("./webhooks/communicationsSms");
 const { registerMeterRunRoutes } = require("./meterRuns/registerMeterRunRoutes");
 const { registerTenantRoutes } = require("./tenant/registerTenantRoutes");
+const { registerVoiceRoutes } = require("./voice/registerVoiceRoutes");
 const { registerAccessRoutes } = require("./portal/registerAccessRoutes");
 const { registerConflictMediationRoutes } = require("./conflictMediation/registerConflictMediationRoutes");
 const {
@@ -510,6 +511,7 @@ app.get("/health", async (req, res) => {
 
 const server = app.listen(port, () => {
   boot("listen", { port, nodeEnv });
+  registerVoiceRoutes(app, server);
 });
 
 server.on("error", (err) => {
