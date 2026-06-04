@@ -76,6 +76,29 @@ function jarvisVoiceEnabled() {
   return envFlagTrue("JARVIS_VOICE_ENABLED", false);
 }
 
+/** Comma-separated portal login emails allowed to manage per-staff Jarvis toggles. */
+function jarvisSettingsAdminEmails() {
+  const raw = String(env("PROPERA_JARVIS_SETTINGS_ADMIN_EMAILS", "")).trim();
+  if (!raw) return new Set();
+  return new Set(
+    raw
+      .split(",")
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+/**
+ * @param {{ source?: string, emailLower?: string }} org — from portalOrgFromReq
+ */
+function canManageJarvisStaffSettings(org) {
+  if (!org || org.source !== "jwt") return false;
+  const allowed = jarvisSettingsAdminEmails();
+  if (!allowed.size) return false;
+  const email = String(org.emailLower || "").trim().toLowerCase();
+  return !!email && allowed.has(email);
+}
+
 function voiceModel() {
   return String(env("PROPERA_VOICE_MODEL", "gpt-realtime-2")).trim();
 }
@@ -258,6 +281,20 @@ function expenseScanModel() {
   return expenseScanProvider() === "anthropic" ? "claude-haiku-4-5-20251001" : "gpt-4o-mini";
 }
 
+/** Vision provider for unit asset nameplate scan — defaults to expense scan provider. */
+function unitAssetScanProvider() {
+  const explicit = String(env("PROPERA_UNIT_ASSET_SCAN_PROVIDER", "")).trim().toLowerCase();
+  if (explicit === "anthropic" || explicit === "openai") return explicit;
+  return expenseScanProvider();
+}
+
+/** Model override for unit asset nameplate scan — defaults to expense scan model. */
+function unitAssetScanModel() {
+  const explicit = String(env("PROPERA_UNIT_ASSET_SCAN_MODEL", "")).trim();
+  if (explicit) return explicit;
+  return expenseScanModel();
+}
+
 /**
  * Vision model for batch utility-meter photo extraction only (`meterRuns/extractMeterReading`).
  * When unset, uses {@link openaiModelVision} (intake default). Set e.g. `gpt-4o` for higher digit/OCR accuracy vs cost.
@@ -331,6 +368,16 @@ function openDeckDayChartEnabled() {
 /** Turnover Engine `/api/portal/turnovers*` — opt-in until GA (`PROPERA_TURNOVER_ENGINE_ENABLED=1`). */
 function turnoverEngineEnabled() {
   return env("PROPERA_TURNOVER_ENGINE_ENABLED", "") === "1";
+}
+
+/** Unit lifecycle (occupancies V1+) — `/api/portal/occupancies*` (`PROPERA_UNIT_LIFECYCLE_ENABLED=1`). */
+function unitLifecycleEnabled() {
+  return env("PROPERA_UNIT_LIFECYCLE_ENABLED", "") === "1";
+}
+
+/** Leasing Engine `/api/portal/leasing/*` — opt-in (`PROPERA_LEASING_ENGINE_ENABLED=1`). */
+function leasingEngineEnabled() {
+  return env("PROPERA_LEASING_ENGINE_ENABLED", "") === "1";
 }
 
 /** Access Engine `/api/portal/access/*` — amenity reservations (`PROPERA_ACCESS_ENGINE_ENABLED=1`). */
@@ -485,6 +532,11 @@ function commMainNumberDisplay() {
   return twilioSmsFrom();
 }
 
+/** Broadcast SMS footer only — explicit COMM_MAIN_NUMBER_DISPLAY; no TWILIO_SMS_FROM fallback. */
+function commBroadcastFooterMainNumber() {
+  return String(env("COMM_MAIN_NUMBER_DISPLAY", "")).trim();
+}
+
 function devOrgSubdomain() {
   return String(env("DEV_ORG_SUBDOMAIN", "")).trim().toLowerCase();
 }
@@ -575,6 +627,18 @@ function jarvisPlanEnabled() {
   return envFlagTrue("JARVIS_PLAN_ENABLED", false);
 }
 
+/** Jarvis tenant broadcast — allow audience_scope=portfolio (all properties). Default off. */
+function jarvisCommPortfolioEnabled() {
+  return envFlagTrue("PROPERA_JARVIS_COMM_PORTFOLIO_ENABLED", false);
+}
+
+/** Jarvis / agent-initiated comm default: sms_only | sms_and_portal | portal_only */
+function jarvisCommDefaultDeliveryMode() {
+  const raw = String(env("PROPERA_JARVIS_COMM_DELIVERY_MODE", "sms_only")).trim().toLowerCase();
+  if (raw === "portal_only" || raw === "sms_and_portal") return raw;
+  return "sms_only";
+}
+
 /** Jarvis operator thread state (`jarvis_operator_threads`). */
 function jarvisThreadEnabled() {
   return envFlagTrue("JARVIS_THREAD_ENABLED", false);
@@ -615,6 +679,8 @@ module.exports = {
   twilioOutboundEnabled,
   voiceEnabled,
   jarvisVoiceEnabled,
+  jarvisSettingsAdminEmails,
+  canManageJarvisStaffSettings,
   voiceModel,
   voiceAgentVoice,
   voiceVadEagerness,
@@ -641,6 +707,8 @@ module.exports = {
   jarvisAskLlmEnabled,
   jarvisAskLlmModel,
   jarvisPlanEnabled,
+  jarvisCommPortfolioEnabled,
+  jarvisCommDefaultDeliveryMode,
   jarvisThreadEnabled,
   intakeMediaSignalEnabled,
   intakeMediaVisionEnabled,
@@ -654,6 +722,8 @@ module.exports = {
   portalApiToken,
   openDeckDayChartEnabled,
   turnoverEngineEnabled,
+  unitLifecycleEnabled,
+  leasingEngineEnabled,
   accessEngineEnabled,
   tenantI18nEnabled,
   tenantTranslateModel,
@@ -687,6 +757,8 @@ module.exports = {
   anthropicApiKey,
   expenseScanProvider,
   expenseScanModel,
+  unitAssetScanProvider,
+  unitAssetScanModel,
   tenantJwtSecret,
   tenantOtpTtlMinutes,
   tenantOtpMaxAttempts,
@@ -694,6 +766,7 @@ module.exports = {
   tenantSessionDays,
   tenantDocsBucket,
   commMainNumberDisplay,
+  commBroadcastFooterMainNumber,
   devOrgSubdomain,
   orgSignupEnabled,
   orgSignupSecret,

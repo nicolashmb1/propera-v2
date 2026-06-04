@@ -468,7 +468,7 @@ When a phase ships, update:
 | C — Compose + send | In progress — `messageComposer`, footer enforcement in `commOutgate`, and `POST /api/communications/draft` + `POST /api/communications/campaigns/:id/send` landed |
 | D — Replies + delivery | In progress — `/webhooks/communications/sms` + `/webhooks/communications/status` are live; deterministic reply classification and delivery rollups landed; maintenance handoff seam exists but is still stubbed |
 | E — Portal UI | In progress — `propera-app` communications is live behind `NEXT_PUBLIC_PROPERA_COMMUNICATIONS_ENABLED=1` with thin `/api/communications/*` proxies, `/communications` as the monitoring home, `/communications/new` as the hybrid setup route, `/communications/[id]` as the campaign detail route, AI draft generation, manual draft save/edit, final SMS footer preview + segment estimate, audience preview, send, exact portfolio/property/floor/unit/tenant targeting controls, recipient/reply tabs, and draft delete; richer editing and fuller delivery drill-down still pending |
-| F — Agent adapter | Not started |
+| F — Agent adapter | In progress — Jarvis `send_communication_campaign` op (voice + portal Plan); reuses `/api/communications/*` via `campaignService`; confirm before send; `agent_initiated=true`; abandoned drafts remain in `/communications` |
 
 ---
 

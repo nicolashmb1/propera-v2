@@ -250,3 +250,16 @@ These items **do not** change GAS behavioral parity; they help operators and age
 | **Phase 3 — automation vs PM lock** | **SHIPPED** | See **`docs/PM_ASSIGNMENT_OVERRIDE.md`** Phase 3 + `tests/ticketAssignmentGuard.test.js`. Staff reassignment policy documented for future work. |
 | **Assignment timeline event** | **SHIPPED** | PM reassign updates assignee columns → **`tickets_log_timeline`** emits **`assigned`** with **`actor_label`** / **`actor_*`** from resolved portal staff (not `PM_PORTAL` as the operator-facing label). |
 | **Phases 4–5** | **PARTIAL** | Phase 4 (dedicated Activity history rows for PM assign) still optional polish. Phase 5: **vendor** path **shipped**; team/PM-as-target not started. |
+
+---
+
+## 12. Portal Leasing Ops V1 — cockpit slice (2026-06-02)
+
+**Not GAS `23_LEASING_ENGINE.gs` parity.** Portal CRM for expiring leases + prospect pipeline only (no tours, occupancy SMS, or LeasingSession brain).
+
+| Item | Status | Notes |
+|------|--------|-------|
+| **Migration** | **SHIPPED** | `085_leasing_engine_v1.sql` — `unit_leases.renewal_*`; `leasing_prospects`. |
+| **V2 API** | **SHIPPED** | `/api/portal/leasing/*` + `src/dal/leasingProspects.js`; flag **`PROPERA_LEASING_ENGINE_ENABLED=1`**. Org-scoped (fail-closed). |
+| **propera-app** | **SHIPPED** | `/leasing` + `/api/leasing/*`; flag **`NEXT_PUBLIC_PROPERA_LEASING_ENABLED=1`**. |
+| **GAS leasing engine** | **NOT STARTED** | Tours, threads, occupancy state machine — still §5 “Other lanes”. |

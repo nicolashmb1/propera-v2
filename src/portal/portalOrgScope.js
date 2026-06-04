@@ -73,10 +73,49 @@ function filterRowsByOrgPropertyScope(rows, scope) {
   });
 }
 
+/**
+ * Fail-closed org property scope for portal DAL queries.
+ * Empty property list → no rows (never cross-org leak).
+ * @param {{ orgId?: string, propertyCodes?: string[] } | null | undefined} orgScope
+ * @returns {{ ok: true, orgId: string, propertyCodes: string[] } | { ok: false, error: string }}
+ */
+function resolveOrgPropertyScopeForQuery(orgScope) {
+  const orgId = normOrgId(orgScope && orgScope.orgId);
+  if (!orgId) {
+    return { ok: false, error: "org_context_required" };
+  }
+  const propertyCodes = Array.isArray(orgScope && orgScope.propertyCodes)
+    ? orgScope.propertyCodes.map(normPropCode).filter(Boolean)
+    : [];
+  if (!propertyCodes.length) {
+    return { ok: false, error: "org_has_no_properties" };
+  }
+  return { ok: true, orgId, propertyCodes };
+}
+
+/**
+ * @param {string | undefined | null} propertyCode
+ * @param {{ orgId?: string, propertyCodes?: string[] } | null | undefined} orgScope
+ */
+function assertPropertyInOrgScope(propertyCode, orgScope) {
+  const scope = resolveOrgPropertyScopeForQuery(orgScope);
+  if (!scope.ok) return scope;
+  const code = normPropCode(propertyCode);
+  if (!code) {
+    return { ok: false, error: "property_code_required" };
+  }
+  if (!scope.propertyCodes.includes(code)) {
+    return { ok: false, error: "property_code_not_in_org_scope" };
+  }
+  return { ok: true, orgId: scope.orgId, propertyCodes: scope.propertyCodes, propertyCode: code };
+}
+
 module.exports = {
   normOrgId,
   normPropCode,
   loadOrgPropertyScope,
   propertyCodeInOrgScope,
   filterRowsByOrgPropertyScope,
+  resolveOrgPropertyScopeForQuery,
+  assertPropertyInOrgScope,
 };

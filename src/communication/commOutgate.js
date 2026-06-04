@@ -1,7 +1,7 @@
 const { getSupabase } = require("../db/supabase");
 const {
   twilioBroadcastFrom,
-  commMainNumberDisplay,
+  commBroadcastFooterMainNumber,
 } = require("../config/env");
 const { sendTwilioMessage } = require("../outbound/twilioSendMessage");
 const { appendEventLog } = require("../dal/appendEventLog");
@@ -91,7 +91,7 @@ async function sendCampaign(input) {
       campaign.message_body || campaign.messageBody || "",
       brandContext,
       row.property_code,
-      commMainNumberDisplay(),
+      commBroadcastFooterMainNumber(),
       campaign.language,
       { isMultiProperty }
     );

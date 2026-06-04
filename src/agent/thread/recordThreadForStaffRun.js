@@ -86,10 +86,36 @@ async function recordThreadForStaffRun(opts) {
     "";
 
   if (committedOp && proposalId) {
+    const humanTicketId = String(staffRun.resolution?.human_ticket_id || "").trim();
     const receipt = {
       committed_op: committedOp,
       proposal_id: proposalId,
       reply_preview: String(staffRun.replyText || "").slice(0, 400),
+      human_ticket_id: humanTicketId || undefined,
+      property_code:
+        String(staffRun.resolution?.property_code || staffRun.resolution?.propertyCode || "")
+          .trim()
+          .toUpperCase() || undefined,
+      unit_label:
+        String(staffRun.resolution?.unit_label || staffRun.resolution?.unitLabel || "").trim() ||
+        undefined,
+      issue_text:
+        String(staffRun.resolution?.issue_text || staffRun.resolution?.issueText || "").trim() ||
+        undefined,
+      preferred_window:
+        String(
+          staffRun.resolution?.preferred_window || staffRun.resolution?.preferredWindow || ""
+        ).trim() || undefined,
+      schedule_label:
+        String(staffRun.resolution?.schedule_label || "").trim() || undefined,
+      schedule_partial: staffRun.resolution?.schedule_partial === true ? true : undefined,
+      note_text:
+        String(staffRun.resolution?.note_text || staffRun.resolution?.noteText || "").trim() ||
+        undefined,
+      note_preview:
+        String(staffRun.resolution?.note_text || staffRun.resolution?.noteText || "")
+          .trim()
+          .slice(0, 120) || undefined,
       at: new Date().toISOString(),
     };
 

@@ -21,9 +21,46 @@
  * @property {string} [pathname]
  * @property {string} [propertyCode]
  * @property {string} [unit]
+ * @property {string} [unitCatalogId]
+ * @property {string} [turnoverId]
  * @property {string} [ticketRowId]
  * @property {string} [humanTicketId]
  * @property {string} [ticketLabel]
+ */
+
+/**
+ * @typedef {object} OperationalScopeActiveOccupancy
+ * @property {string} occupancyId
+ * @property {string} [residentName]
+ * @property {string} [status]
+ * @property {string} [startedAt]
+ */
+
+/**
+ * @typedef {object} OperationalScopeActiveTurnover
+ * @property {string} turnoverId
+ * @property {string} [status]
+ * @property {string} [startedAt]
+ * @property {string} [targetReadyDate]
+ * @property {string} [unitLabel]
+ */
+
+/**
+ * @typedef {object} OperationalScopeUnitAssetSummary
+ * @property {string} assetId
+ * @property {string} [assetType]
+ * @property {string} [make]
+ * @property {string} [model]
+ * @property {string} [serialNumber]
+ */
+
+/**
+ * @typedef {object} OperationalScopeUnitLifecycle
+ * @property {string} unitCatalogId
+ * @property {OperationalScopeActiveOccupancy | null} activeOccupancy
+ * @property {OperationalScopeActiveTurnover | null} activeTurnover
+ * @property {string} turnoverBlocker
+ * @property {OperationalScopeUnitAssetSummary[]} unitAssets
  */
 
 /**
@@ -63,6 +100,7 @@
  * @property {OperationalScopeWorkItem[]} activeWork
  * @property {OperationalScopeOpenTicket[]} propertyOpenTickets
  * @property {OperationalScopeFocus | null} focus
+ * @property {OperationalScopeUnitLifecycle | null} [unitLifecycle]
  * @property {string} story — short deterministic narrative for LLM / templates
  */
 

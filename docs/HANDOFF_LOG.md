@@ -7,6 +7,53 @@
 
 ---
 
+## 2026-06-02 — Jarvis confirm loop hardening
+
+| Area | Change |
+|------|--------|
+| **Shared confirm spine** | `executeJarvisConfirm.js` — portal Plan + voice: token verify, thread claim (`executing`), in-process lock, idempotent replay, failure-safe (no false committed) |
+| **Dedupe** | `guardPendingProposal.js` blocks new propose while confirm pending; recent duplicate for schedule (ticket+window) and service note (ticket+text) |
+| **Receipts** | `jarvisConfirmReceipt.js`; create+schedule partial failure copy + `schedule_partial` on resolution |
+| **Tests** | `tests/agent/proposals/jarvisConfirmSpine.test.js` |
+
+**Continue:** WS reconnect (#12); access PIN regen / edit time on voice (#14).
+
+---
+
+## 2026-06-02 — Jarvis staff voice: multi-ticket, access ops, analytics reads
+
+| Area | Change |
+|------|--------|
+| **Spec** | **`docs/JARVIS_SPINE.md`** — code map, op registry, multi-intent rules, amenity ops, backlog refreshed |
+| **Multi-ticket** | Same unit, different issues → **one `propose_create_service_request` per issue** (sequential confirm). Issue-aware dedupe (`createIssueDedupe.js`, `findRecentDuplicateCreate`); reuse property/unit/`preferred_window` via thread receipt + session context |
+| **Access (voice + Plan)** | Ops: `book_amenity_reservation`, `set_amenity_schedule`, `cancel_amenity_reservation`, `update_amenity_policy`. Reads: `list_amenity_locations`, `lookup_amenity_booking` (PIN), `get_amenity_booking_rules`. Requires **`PROPERA_ACCESS_ENGINE_ENABLED=1`** + `JARVIS_PLAN_ENABLED=1` |
+| **Analytics read** | `src/agent/jarvisQuery/` — `query_service_history` (counts, distinct/repeat units). Voice + portal Ask |
+| **Open list** | Voice `list_open_service_tickets` — portfolio-wide open services (not just assigned work) |
+| **Confirm hardening** | Idempotent confirm, recent-duplicate block on create, portal/voice proposal field parity (`proposalPortalFields.js`, `jarvisProposalView.ts`) |
+| **Tests** | `tests/agent/proposals/amenityProposals.test.js`, `createIssueDedupe.test.js`, `jarvisOperatorThreads.test.js`, `serviceHistory.test.js` |
+
+**Enable (staff Jarvis voice):** `JARVIS_VOICE_ENABLED=1`, `JARVIS_PLAN_ENABLED=1`, `JARVIS_ASK_ENABLED=1`, `JARVIS_THREAD_ENABLED=1`, `PROPERA_ACCESS_ENGINE_ENABLED=1` (amenity), `NEXT_PUBLIC_PROPERA_JARVIS_VOICE_ENABLED=1` (app). Restart V2 after changes.
+
+**Continue:** WS reconnect; access PIN regen / edit time on voice; optional batch-create op.
+
+---
+
+## 2026-06-02 — Leasing Engine V1 (portal) + org-scoped preventive list
+
+| Area | Change |
+|------|--------|
+| **Migration** | **`085_leasing_engine_v1.sql`** — `unit_leases.renewal_status` / `renewal_notes`; `leasing_prospects` table (`org_id` text FK). |
+| **V2** | `src/dal/leasingProspects.js`; `/api/portal/leasing/*` behind **`PROPERA_LEASING_ENGINE_ENABLED=1`**. Fail-closed org scope via `resolveOrgPropertyScopeForQuery`. |
+| **App** | `/leasing` UI + `/api/leasing/*` proxy; **`NEXT_PUBLIC_PROPERA_LEASING_ENABLED=1`**. `fetchV2Portal` now forwards portal JWT + `x-propera-org-id`. |
+| **Org fix** | **`GET /api/portal/program-runs`** now filters by org property scope (preventive list was cross-org when no property filter). |
+| **Tests** | `tests/portalOrgScopeFailClosed.test.js`. |
+
+**Enable:** apply **085**, set both leasing flags, restart V2 + app.
+
+**Continue:** GAS leasing engine (`23_LEASING_ENGINE.gs`) remains **not ported** — tours/SMS pipeline is separate future work.
+
+---
+
 ## 2026-06-02 — Tenant portal bilingual (en / es) Phases 1–3 + push prompt
 
 | Area | Change |

@@ -6,13 +6,49 @@
 
 const { getSupabase } = require("../../db/supabase");
 const { resolveTicketTargetFromQuestion } = require("../jarvisAsk/resolveQuestionTargets");
-const { loadOpenTicketTargetForUnit } = require("../jarvisAsk/loadTicketByUnit");
-const { tokenizeForMatch, scoreTicketAgainstHints } = require("../../dal/findRelatedTenantTickets");
+const { loadOpenTicketTargetForUnit, loadOpenTicketTargetsForUnit } = require("../jarvisAsk/loadTicketByUnit");
+const { scoreTicketAgainstHints } = require("../../dal/findRelatedTenantTickets");
+
+const STRONG_ISSUE_SCORE = 4;
+const STRONG_ISSUE_GAP = 3;
+
+/**
+ * When multiple open tickets share a unit, auto-pick if issue hint clearly matches one.
+ * @param {object[]} rows
+ * @param {string} issueHint
+ */
+function tryAutoPickByIssueHint(rows, issueHint) {
+  const hint = String(issueHint || "").trim();
+  if (!hint || !Array.isArray(rows) || rows.length <= 1) return null;
+
+  const scored = rows
+    .map((row) => ({
+      row,
+      score: scoreTicketAgainstHints(
+        {
+          message_raw: row.summary || row.message_raw || row.issue || "",
+          service_notes: "",
+          category: row.category || "",
+          unit_label: row.unitLabel || row.unit_label || "",
+          property_code: row.propertyCode || row.property_code || "",
+        },
+        { issueText: hint }
+      ),
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  const top = scored[0];
+  const second = scored[1];
+  if (!top || top.score < STRONG_ISSUE_SCORE) return null;
+  if (second && top.score - second.score < STRONG_ISSUE_GAP) return null;
+  return top.row;
+}
 
 /**
  * @param {object} row
  */
 function openTicketRowToTarget(row) {
+  const summary = String(row.summary || row.message_raw || "").trim();
   return {
     ticketRowId: String(row.ticketRowId || row.ticket_row_id || "").trim(),
     humanTicketId: String(row.humanTicketId || row.ticket_id || "").trim(),
@@ -21,7 +57,10 @@ function openTicketRowToTarget(row) {
       .trim()
       .toUpperCase(),
     category: String(row.category || row.category_final || "").trim(),
-    summary: String(row.summary || row.message_raw || "").trim().slice(0, 120),
+    summary: summary.slice(0, 120),
+    issue: summary.slice(0, 120),
+    message_raw: summary,
+    created_at: row.created_at || row.createdAt || null,
   };
 }
 
@@ -141,7 +180,7 @@ async function resolveProposalTicketTarget(opts) {
       return {
         ok: false,
         error: "ambiguous_unit",
-        message: `Multiple open tickets for unit ${unitHint}. Say the ticket id or be more specific.`,
+        message: `Multiple open tickets for unit ${unitHint} — which issue is it?`,
         candidates: (fromQuestion.candidates || []).map(openTicketRowToTarget),
       };
     }
@@ -179,21 +218,39 @@ async function resolveProposalTicketTarget(opts) {
     return { ok: true, target: opens[0], reason: "SCOPE_SINGLE_OPEN" };
   }
   if (opens.length > 1) {
+    const auto = tryAutoPickByIssueHint(opens, issueHint);
+    if (auto) {
+      return { ok: true, target: auto, reason: "SCOPE_ISSUE_MATCH" };
+    }
     return {
       ok: false,
       error: "ambiguous_open",
-      message: "Multiple open tickets match — say the ticket id or narrow the issue (e.g. dishwasher).",
+      message: "Multiple open tickets — which issue is it?",
       candidates: opens.slice(0, 6),
     };
   }
 
   if (propertyCode && unitHint) {
-    const dbTarget = await loadOpenTicketTargetForUnit(propertyCode, unitHint);
-    if (dbTarget) {
+    const dbOpens = (await loadOpenTicketTargetsForUnit(propertyCode, unitHint)).map(
+      openTicketRowToTarget
+    );
+    if (dbOpens.length === 1) {
+      return { ok: true, target: dbOpens[0], reason: "DB_UNIT_SINGLE" };
+    }
+    if (dbOpens.length > 1) {
+      let list = dbOpens;
+      if (issueHint) {
+        list = rankOpenTicketsByIssueHint(dbOpens, issueHint);
+        const auto = tryAutoPickByIssueHint(list, issueHint);
+        if (auto) {
+          return { ok: true, target: auto, reason: "DB_ISSUE_MATCH" };
+        }
+      }
       return {
-        ok: true,
-        target: openTicketRowToTarget(dbTarget),
-        reason: dbTarget.reason,
+        ok: false,
+        error: "ambiguous_open",
+        message: `Multiple open tickets for unit ${unitHint} — which issue is it?`,
+        candidates: list.slice(0, 6),
       };
     }
   }
@@ -201,7 +258,7 @@ async function resolveProposalTicketTarget(opts) {
   return {
     ok: false,
     error: "no_open_ticket",
-    message: "No open ticket found — give property, unit, or ticket id.",
+    message: "No open ticket found — give property, unit, or describe the issue.",
     candidates: [],
   };
 }

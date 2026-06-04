@@ -43,6 +43,10 @@ function tableKey(tableName) {
     property_locations: "property_locations",
     turnovers: "turnovers",
     turnover_items: "turnover_items",
+    unit_occupancies: "unit_occupancies",
+    unit_assets: "unit_assets",
+    unit_leases: "unit_leases",
+    leasing_prospects: "leasing_prospects",
     tenant_outbound_day_mark: "tenant_outbound_day_mark",
     tenant_conversations: "tenant_conversations",
     tenant_roster: "tenant_roster",
@@ -73,6 +77,10 @@ function createScenarioMemorySupabase(seed) {
     property_locations: (seed.property_locations || []).map((r) => ({ ...r })),
     turnovers: (seed.turnovers || []).map((r) => ({ ...r })),
     turnover_items: (seed.turnover_items || []).map((r) => ({ ...r })),
+    unit_occupancies: (seed.unit_occupancies || []).map((r) => ({ ...r })),
+    unit_assets: (seed.unit_assets || []).map((r) => ({ ...r })),
+    unit_leases: (seed.unit_leases || []).map((r) => ({ ...r })),
+    leasing_prospects: (seed.leasing_prospects || []).map((r) => ({ ...r })),
     tenant_outbound_day_mark: (seed.tenant_outbound_day_mark || []).map((r) => ({ ...r })),
     tenant_conversations: (seed.tenant_conversations || []).map((r) => ({ ...r })),
     tenant_roster: (seed.tenant_roster || []).map((r) => ({ ...r })),
@@ -150,18 +158,38 @@ function createScenarioMemorySupabase(seed) {
 
   function updateThenable(tableName, patch) {
     const filters = [];
+    function applyUpdate() {
+      const rows = rowsFor(tableName);
+      if (!rows) return { data: null, error: { message: "unknown table" } };
+      const hit = filterRows(rows, filters);
+      const now = new Date().toISOString();
+      hit.forEach((row) => Object.assign(row, patch, { updated_at: patch.updated_at || now }));
+      return { data: hit, error: null };
+    }
     const chain = {
       eq(col, val) {
         filters.push({ op: "eq", col, val });
         return chain;
       },
+      select(_cols) {
+        return {
+          maybeSingle: async () => {
+            const { data, error } = applyUpdate();
+            if (error) return { data: null, error };
+            const hit = data || [];
+            if (!hit.length) return { data: null, error: null };
+            return { data: hit[0], error: null };
+          },
+          then(onFulfilled, onRejected) {
+            const { data, error } = applyUpdate();
+            if (error) return Promise.resolve({ data: null, error }).then(onFulfilled, onRejected);
+            return Promise.resolve({ data: data || [], error: null }).then(onFulfilled, onRejected);
+          },
+        };
+      },
       then(onFulfilled, onRejected) {
-        const rows = rowsFor(tableName);
-        if (!rows) return Promise.resolve({ data: null, error: { message: "unknown table" } });
-        const hit = filterRows(rows, filters);
-        const now = new Date().toISOString();
-        hit.forEach((row) => Object.assign(row, patch, { updated_at: patch.updated_at || now }));
-        return Promise.resolve({ data: hit, error: null }).then(onFulfilled, onRejected);
+        const { data, error } = applyUpdate();
+        return Promise.resolve({ data, error }).then(onFulfilled, onRejected);
       },
     };
     return chain;
@@ -198,6 +226,9 @@ function createScenarioMemorySupabase(seed) {
         (tableName === "tickets" ||
           tableName === "turnovers" ||
           tableName === "turnover_items" ||
+          tableName === "unit_occupancies" ||
+          tableName === "unit_assets" ||
+          tableName === "tenant_roster" ||
           tableName === "tenant_conversations")
       ) {
         copy.id = crypto.randomUUID();
@@ -220,18 +251,58 @@ function createScenarioMemorySupabase(seed) {
           maybeSingle: async () => {
             const arr = pushAll();
             const first = arr[0] || {};
-            return { data: { id: first.id }, error: null };
+            return { data: first, error: null };
           },
           single: async () => {
             const arr = pushAll();
             const first = arr[0] || {};
-            return { data: { id: first.id }, error: null };
+            return { data: first, error: null };
+          },
+          then(onFulfilled, onRejected) {
+            const arr = pushAll();
+            return Promise.resolve({ data: arr, error: null }).then(onFulfilled, onRejected);
           },
         };
       },
       then(onFulfilled, onRejected) {
         pushAll();
         return Promise.resolve({ data: null, error: null }).then(onFulfilled, onRejected);
+      },
+    };
+  }
+
+  function upsertThenable(tableName, row, options) {
+    const dest = rowsFor(tableName);
+    const conflictCol = options && options.onConflict ? String(options.onConflict) : "";
+    const sources = Array.isArray(row) ? row : [row];
+    const saved = [];
+
+    for (const src of sources) {
+      const copy = { ...src };
+      if (copy.id == null && tableName === "unit_leases") {
+        copy.id = crypto.randomUUID();
+      }
+      let existing = null;
+      if (dest && conflictCol) {
+        existing = dest.find((r) => String(r[conflictCol]) === String(copy[conflictCol]));
+      }
+      if (existing) {
+        Object.assign(existing, copy, { updated_at: new Date().toISOString() });
+        saved.push(existing);
+      } else if (dest) {
+        dest.push(copy);
+        saved.push(copy);
+      }
+    }
+
+    return {
+      select(_cols) {
+        return {
+          maybeSingle: async () => ({
+            data: saved[0] || null,
+            error: null,
+          }),
+        };
       },
     };
   }
@@ -252,25 +323,14 @@ function createScenarioMemorySupabase(seed) {
         insert(row) {
           return insertThenable(tableName, row);
         },
+        upsert(row, options) {
+          return upsertThenable(tableName, row, options);
+        },
         update(patch) {
           return updateThenable(tableName, patch);
         },
         delete() {
           return deleteThenable(tableName);
-        },
-        upsert(row, opts) {
-          const rows = rowsFor(tableName);
-          if (!rows) return Promise.resolve({ data: null, error: { message: "unknown table" } });
-          const onConflict = opts && opts.onConflict ? String(opts.onConflict) : "id";
-          const key = row[onConflict];
-          const idx = rows.findIndex((r) => String(r[onConflict]) === String(key));
-          const copy = { ...row };
-          if (idx >= 0) {
-            Object.assign(rows[idx], copy);
-          } else {
-            rows.push(copy);
-          }
-          return Promise.resolve({ data: copy, error: null });
         },
       };
     },
@@ -386,7 +446,46 @@ function scenarioTurnoverSeedPenn316() {
     ],
     turnovers: [],
     turnover_items: [],
+    unit_occupancies: [],
+    unit_leases: [],
   };
+}
+
+function scenarioOccupancySeedPenn316() {
+  const base = scenarioTurnoverSeedPenn316();
+  return {
+    ...base,
+    tenant_roster: [
+      {
+        id: "bbbbbbbb-cccc-4ddd-eeee-ffffffffffff",
+        property_code: "PENN",
+        unit_label: "316",
+        phone_e164: SCENARIO_TENANT_E164,
+        resident_name: "Alex Tenant",
+        active: true,
+        notes: "",
+      },
+    ],
+    unit_leases: [
+      {
+        id: "cccccccc-dddd-4eee-ffff-000000000001",
+        unit_catalog_id: "aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee",
+        property_code: "PENN",
+        rent_cents: 185000,
+        security_deposit_cents: 185000,
+        lease_start: "2026-01-01",
+        lease_end: "2026-12-31",
+        charge_lines: [],
+        notes: "",
+      },
+    ],
+    unit_occupancies: [],
+    unit_assets: [],
+  };
+}
+
+function scenarioAssetSeedPenn316() {
+  return scenarioOccupancySeedPenn316();
 }
 
 module.exports = {
@@ -394,6 +493,8 @@ module.exports = {
   scenarioMaintenanceSeedPenn,
   scenarioMaintenanceSeedPennWithStaffPhone,
   scenarioTurnoverSeedPenn316,
+  scenarioOccupancySeedPenn316,
+  scenarioAssetSeedPenn316,
   SCENARIO_TENANT_E164,
   SCENARIO_STAFF_E164,
 };

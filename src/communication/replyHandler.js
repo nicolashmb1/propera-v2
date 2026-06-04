@@ -20,29 +20,26 @@ function normalizeInboundFrom(raw) {
 }
 
 function buildAutoResponse(replyClass) {
-  const mainNumber = commMainNumberDisplay();
+  const mainNumber = String(commMainNumberDisplay() || "").trim();
+  const maintenanceHint = mainNumber
+    ? " For maintenance, call or text " + mainNumber + "."
+    : " For maintenance, contact your building office.";
   const klass = String(replyClass || "").trim().toUpperCase();
   if (klass === "OPT_OUT") {
     return (
-      "You have been opted out of broadcast notices from this number. " +
-      "For maintenance, call or text " +
-      mainNumber +
-      "."
+      "You have been opted out of broadcast notices from this number." + maintenanceHint
     );
   }
   if (klass === "MAINTENANCE_SIGNAL" || klass === "EMERGENCY_SIGNAL") {
     return (
-      "This number is only for broadcast notices. " +
-      "For maintenance or emergencies, call or text " +
-      mainNumber +
-      " now."
+      "This number is only for broadcast notices." +
+      (mainNumber
+        ? " For maintenance or emergencies, call or text " + mainNumber + " now."
+        : " For maintenance or emergencies, contact your building office now.")
     );
   }
   return (
-    "Thanks for your reply. This number is only for broadcast notices. " +
-    "For maintenance, call or text " +
-    mainNumber +
-    "."
+    "Thanks for your reply. This number is only for broadcast notices." + maintenanceHint
   );
 }
 

@@ -96,9 +96,23 @@ function countRecipientStatuses(rows) {
   return { totalRecipients, totalSendable, totalFailed };
 }
 
-function isPortalOnlyDelivery(audienceFilter) {
+function deliveryModeFromFilter(audienceFilter) {
   const f = audienceFilter && typeof audienceFilter === "object" ? audienceFilter : {};
-  return String(f.delivery_mode || "").trim().toLowerCase() === "portal_only";
+  const mode = String(f.delivery_mode || "").trim().toLowerCase();
+  if (mode === "portal_only" || mode === "sms_only") return mode;
+  return "sms_and_portal";
+}
+
+function isPortalOnlyDelivery(audienceFilter) {
+  return deliveryModeFromFilter(audienceFilter) === "portal_only";
+}
+
+function shouldPublishCampaignToTenantPortal(audienceFilter) {
+  const f = audienceFilter && typeof audienceFilter === "object" ? audienceFilter : {};
+  const mode = deliveryModeFromFilter(f);
+  if (mode === "sms_only") return false;
+  if (mode === "portal_only" || mode === "sms_and_portal") return true;
+  return f.include_tenant_portal !== false;
 }
 
 function mapCampaignRow(row) {
@@ -486,8 +500,7 @@ async function deleteCampaign(id, opts) {
 
   const row = campaignOut.row;
   const status = String(row.status || "").trim().toUpperCase();
-  const canDelete = status === "DRAFT" || status === "QUEUED" || status === "FAILED";
-  if (!canDelete) {
+  if (status === "SENDING") {
     return { ok: false, error: "campaign_not_deletable" };
   }
 
@@ -746,6 +759,8 @@ async function prepareCampaign(id, opts) {
  */
 async function dispatchCampaignPortalPush(sb, campaignRow) {
   try {
+    if (!shouldPublishCampaignToTenantPortal(campaignRow.audience_filter)) return;
+
     const campaignId = String(campaignRow.id || "").trim();
     const title = String(campaignRow.title || "New building notice").trim();
     const messageBody = String(campaignRow.message_body || "").trim();

@@ -4,6 +4,7 @@
 
 const { classifyJarvisIntent } = require("./classifyJarvisIntent");
 const { formatAgeBrief } = require("./timeBrief");
+const { formatServiceHistoryReply } = require("../jarvisQuery/formatServiceHistoryReply");
 
 /**
  * @param {string} cents
@@ -86,14 +87,21 @@ function formatJarvisAskReply(facts, question) {
   const lines = [];
   const resolution = facts.questionResolution || null;
 
+  if (facts.serviceHistory?.ok) {
+    return formatServiceHistoryReply(facts.serviceHistory);
+  }
+
   if (resolution && resolution.reason === "QUESTION_UNIT_AMBIGUOUS") {
+    const {
+      formatDisambiguationSpeak,
+      formatCandidateLine,
+    } = require("../../voice/ticketDisambiguationSpeak");
+    const candidates = resolution.candidates || [];
     lines.push(
-      `Unit ${resolution.unitLabel} has ${(resolution.candidates || []).length} open tickets — pick one:`
+      `Unit ${resolution.unitLabel} has ${candidates.length} open tickets — ${formatDisambiguationSpeak(candidates)}`
     );
-    for (const row of resolution.candidates || []) {
-      const id = row.humanTicketId || row.ticketRowId || "?";
-      const sum = row.summary ? ` — ${row.summary}` : "";
-      lines.push(`• ${id}${sum}`.slice(0, 160));
+    for (let i = 0; i < candidates.length; i++) {
+      lines.push(formatCandidateLine(candidates[i], i));
     }
     return lines.join("\n").trim();
   }
@@ -190,25 +198,32 @@ function formatJarvisAskReply(facts, question) {
 
   if (showOpenList && opens.length && !(t && resolvedFromQuestion)) {
     const sorted = sortOpenTicketsForDisplay(opens);
+    const listTitle = propertyCodeFromFacts(facts)
+      ? `Open tickets (${sorted.length}):`
+      : `Open service tickets — portfolio (${sorted.length}):`;
     lines.push("");
-    lines.push(`Open tickets (${sorted.length}):`);
+    lines.push(listTitle);
     for (const row of sorted.slice(0, 12)) {
       const id = row.humanTicketId || row.ticketRowId || "?";
+      const prop = row.propertyCode ? ` ${row.propertyCode}` : "";
       const unit = row.unitLabel ? ` unit ${row.unitLabel}` : "";
       const st = row.status ? ` — ${row.status}` : "";
       const sum = row.summary ? ` — ${row.summary}` : "";
-      lines.push(`• ${id}${unit}${st}${sum}`.slice(0, 180));
+      lines.push(`• ${id}${prop}${unit}${st}${sum}`.slice(0, 180));
     }
     if (sorted.length > 12) {
       lines.push(`…and ${sorted.length - 12} more.`);
     }
+  } else if (wantsOpenList && !opens.length && !propertyCodeFromFacts(facts)) {
+    lines.push("");
+    lines.push("No open service tickets in the portfolio right now.");
   } else if (wantsOpenList && !opens.length && sit) {
     lines.push("");
     lines.push("No open tickets at this property right now.");
   }
 
   const work = facts.activeWork || [];
-  if (work.length && (/my |work item|assigned to me/.test(ql) || wantsOpenList)) {
+  if (work.length && /my |work item|assigned to me|my work|what.?s mine/.test(ql)) {
     lines.push("");
     lines.push(`Your open work items (${work.length}):`);
     for (const w of work.slice(0, 8)) {

@@ -84,6 +84,58 @@ function buildSchedFromParsed(raw, d) {
   return sched;
 }
 
+/**
+ * When a time window lands in the past (e.g. "after 2pm" at 11pm), re-parse as tomorrow.
+ * @param {string} parseText
+ * @param {string} stageDay
+ * @param {object} opts
+ * @param {string} propCode
+ * @param {object} policySnapshot
+ * @param {object|null} d
+ * @param {object} sched
+ * @param {Date} when
+ */
+function retryScheduleWhenWindowInPast(
+  parseText,
+  stageDay,
+  opts,
+  propCode,
+  policySnapshot,
+  d,
+  sched,
+  when
+) {
+  if (
+    !(sched.date instanceof Date) ||
+    !isFinite(sched.date.getTime()) ||
+    sched.date.getTime() >= when.getTime()
+  ) {
+    return { d, sched, stageDay, bumped: false };
+  }
+  if (String(stageDay || "").trim() === "Tomorrow") {
+    return { d, sched, stageDay, bumped: false };
+  }
+
+  const nextStage = "Tomorrow";
+  let d2 = parseWithStageFallback(parseText, nextStage, opts);
+  let sched2 = buildSchedFromParsed(parseText, d2);
+  const flex2 = adjustFlexibleScheduleForPolicy(
+    d2,
+    sched2,
+    parseText,
+    nextStage,
+    opts,
+    propCode,
+    policySnapshot
+  );
+  return {
+    d: flex2.parsed,
+    sched: flex2.sched,
+    stageDay: nextStage,
+    bumped: true,
+  };
+}
+
 function parseWithStageFallback(raw, stageDay, opts) {
   let d = null;
   try {
@@ -174,6 +226,22 @@ async function checkPreferredWindowForProperty(propertyCode, preferredWindow, o)
   sched = flexAdjust.sched;
 
   const when = new Date();
+  const pastRetry = retryScheduleWhenWindowInPast(
+    parseText,
+    stageDay,
+    parseOpts,
+    propCode,
+    policySnapshot,
+    d,
+    sched,
+    when
+  );
+  if (pastRetry.bumped) {
+    d = pastRetry.d;
+    sched = pastRetry.sched;
+    stageDay = pastRetry.stageDay;
+  }
+
   let verdict = { ok: true };
   try {
     verdict = validateSchedPolicy_(propCode, sched, when, policySnapshot);
@@ -273,6 +341,22 @@ async function applyPreferredWindowByTicketKey(o) {
   );
   d = flexAdjust.parsed;
   sched = flexAdjust.sched;
+
+  const pastRetry = retryScheduleWhenWindowInPast(
+    parseText,
+    stageDay,
+    opts,
+    propCode,
+    policySnapshot,
+    d,
+    sched,
+    when
+  );
+  if (pastRetry.bumped) {
+    d = pastRetry.d;
+    sched = pastRetry.sched;
+    stageDay = pastRetry.stageDay;
+  }
 
   const parsedPayload = {
     ticket_key: key,

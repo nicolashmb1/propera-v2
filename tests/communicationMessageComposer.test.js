@@ -51,6 +51,22 @@ describe("communication messageComposer", () => {
     assert.match(full, /Reply STOP to opt out\./);
   });
 
+  test("appendFooter omits maintenance redirect when COMM_MAIN_NUMBER_DISPLAY unset", () => {
+    const full = appendFooter(
+      "Parking spots must be cleared by Friday.",
+      BRAND_CONTEXT,
+      "PENN",
+      "",
+      "en",
+      { isMultiProperty: false }
+    );
+
+    assert.match(full, /Parking spots must be cleared by Friday\./);
+    assert.match(full, /Management at The Grand at Penn/);
+    assert.match(full, /Reply STOP to opt out\./);
+    assert.doesNotMatch(full, /For maintenance, call or text/);
+  });
+
   test("appendFooter uses translated lines for spanish", () => {
     const full = appendFooter(
       "La oficina estara cerrada manana.",

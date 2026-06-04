@@ -189,13 +189,18 @@ Grow by **adding rows**, not new handlers.
 | `attach_ticket_cost` | Finance | ticket cost entries | 2–3 |
 | `schedule_ticket` | Lifecycle | maintenance lifecycle | 2 |
 | `close_ticket` | Lifecycle | maintenance lifecycle | 2 |
-| `add_ticket_note` | Lifecycle | ticket mutation / timeline | 1–2 |
+| `append_service_note` | Lifecycle | ticket timeline / notes | 1–2 |
 | `coordinate_schedule_with_tenant` | Lifecycle + comms | coordination loop | 2–3 |
 | `propose_outbound_message` | Communications | [COMMUNICATION_ENGINE.md](./COMMUNICATION_ENGINE.md) | 2–3 |
 | `send_communication_campaign` | Communications | comms engine | 3 |
 | `create_program_run` | PM program | [PM_PROGRAM_ENGINE_V1.md](./PM_PROGRAM_ENGINE_V1.md) | 2–3 |
 | `query_program_history` | PM program | read only → Ask | 0 |
-| `propose_vendor_request` | Vendor lane | [VENDOR_LANE.md](./VENDOR_LANE.md) (planned) | 2–3 |
+| `propose_vendor_request` | Vendor lane | [VENDOR_LANE.md](./VENDOR_LANE.md) | 2–3 |
+| `create_service_request` | Lifecycle / intake | `finalizeMaintenanceDraft` | 2 |
+| `book_amenity_reservation` | Access Engine | `createReservationForPortal` (staff override) | 2 |
+| `set_amenity_schedule` | Access Engine | `replaceSchedulesForLocation` | 2 |
+| `cancel_amenity_reservation` | Access Engine | `cancelReservation` | 2 |
+| `update_amenity_policy` | Access Engine | `upsertAccessPolicyForLocation` (merge patch) | 2–3 |
 | `propose_purchase` | Finance / vendor | planned | 3 |
 | `set_tracking_watch` | Ops metadata | planned (reminder + external ref) | 1–2 |
 | `report_policy_violation` | Conflict mediation | [CONFLICT_MEDIATION_ENGINE.md](./CONFLICT_MEDIATION_ENGINE.md) | 2–4 |
@@ -257,9 +262,9 @@ Jarvis Ask earns its keep here — **not** by repeating open ticket lists.
 
 Intent classification (agent or deterministic) → `QuerySpec` → SQL / read-model → **FactPack** → formatter or grounded LLM.
 
-**Code today:** `src/agent/jarvisAsk/` — narrow fact pack + templates; no `QuerySpec` layer.
+**Code today:** `src/agent/jarvisAsk/` — portal Ask + voice `ask_propera`; `src/agent/jarvisQuery/` — **slice 1** service-history analytics (`query_service_history` voice tool + Ask intent). No full `QuerySpec` layer yet.
 
-**Build toward:** `src/agent/jarvisQuery/` — shared by Ask and Plan (Plan may need reads to draft proposals).
+**Build toward:** generalized `QuerySpec` → SQL/read-model → FactPack; shared by Ask, voice reads, and Plan drafts.
 
 ---
 
@@ -397,11 +402,13 @@ Patch Law: spine changes stay in **agent/compiler** and **proposal routers**; do
 |-------|----------|--------|
 | Operational Scope | `src/agent/operationalScope/` | **v0 live** |
 | Thread state | `src/agent/thread/`, `src/dal/jarvisOperatorThreads.js`, migration `070` | **v0** — pending + receipt on propose/commit |
-| Operation contract | `src/agent/proposals/` | **Slice 1** — `attach_ticket_cost` + confirm token |
-| Jarvis Ask | `src/agent/jarvisAsk/` | **Portal read-only** behind `JARVIS_ASK_ENABLED` |
-| Jarvis Plan | `src/agent/jarvisPlan/` | **Slice 1** — `jarvis_plan` mode, cost propose → confirm card |
-| Query / analytics | — | **Not started** |
-| Tool gateway | — | **Not started** |
+| Operation contract | `src/agent/proposals/` | **Live** — cost, note, vendor, create, schedule, access amenity ops (see § Proposal payload map) |
+| Jarvis Ask | `src/agent/jarvisAsk/` | **Portal + voice** behind `JARVIS_ASK_ENABLED` |
+| Jarvis Plan | `src/agent/jarvisPlan/` | **Live** — propose → confirm card; portal + voice share spine |
+| Staff live voice | `src/voice/jarvisVoice*.js`, `propera-app` co-pilot | **Slice 3** — full-screen overlay, structured confirm card, multi-ticket create, access ops |
+| Query / analytics | `src/agent/jarvisQuery/` | **Slice 1** — service history counts + unit breakdown (`query_service_history`) |
+| Access reads (voice) | `src/agent/access/` | **Live** — `list_amenity_locations`, `lookup_amenity_booking`, `get_amenity_booking_rules` (requires `PROPERA_ACCESS_ENGINE_ENABLED=1`) |
+| Tool gateway | — | **Not started** (external parts/tracking APIs) |
 | Coordination loops | lifecycle + comms partial | **Partial** (not Jarvis-wired) |
 | Portal ingress | `runInboundPipeline.js`, `portal_chat_mode` | **Live** |
 
@@ -433,12 +440,133 @@ If the answer to (2) is “workflow handler,” redesign.
 
 ---
 
+## Proposal payload map (portal + voice confirm cards)
+
+**Doctrine:** A **rich package** is structured fields routed to the correct `op` — not a long service note. Service notes stay **lean** (field facts only: *needs replacement*, *replaced gasket*). Unit, property, issue, schedule, and status belong on the ticket or their own ops.
+
+**Confirm UI:** `propera-app` `JarvisProposalCard` renders labeled rows via `buildProposalDisplayFields()` — one renderer for all ops. Add a row by extending the map below + display builder; do not ship op-specific card components.
+
+**Multi-intent rules (voice):**
+
+| Staff says | Jarvis does |
+|------------|-------------|
+| One issue + visit window in same breath | Single `create_service_request` with `preferred_window` — **one confirm** creates and schedules |
+| **Two+ separate issues, same unit** (e.g. fridge **and** AC at 505 PENN) | **`propose_create_service_request` once per issue** — never merge into one ticket; brain does **not** split. Reuse `property_code`, `unit_label`, `preferred_window` from first unless staff changes them. Flow: propose #1 → confirm → propose #2 → confirm. Only one pending create at a time |
+| Existing ticket + new window | `schedule_ticket` alone — not a service note |
+| Same issue accidentally twice within ~5 min | Blocked by issue-aware dedupe (`createIssueDedupe.js` + `findRecentDuplicateCreate`) — different issues same unit **allowed** |
+
+Do not put schedule/access window in a service note.
+
+### Shipped ops
+
+| `op` | Voice tool | Commit path | Payload fields (confirm card) | Service note? |
+|------|------------|-------------|--------------------------------|---------------|
+| `append_service_note` | `propose_append_service_note` | `appendServiceNote.js` → ticket timeline | Ticket, **Note** (lean) | Yes — append only |
+| `attach_ticket_cost` | `propose_attach_ticket_cost` | `attachTicketCost.js` | Ticket, Amount, Type, Vendor | No |
+| `propose_vendor_request` | `propose_vendor_request` | `proposeVendorRequest.js` → `assignVendorToTicket` | Ticket, Vendor, Dispatch (SMS yes/no) | No |
+| `create_service_request` | `propose_create_service_request` | `createServiceRequest.js` → `finalizeMaintenanceDraft` (+ optional schedule) | Property, Unit, Issue; optional category/urgency/window | No |
+| `schedule_ticket` | `propose_schedule_ticket` | `scheduleTicket.js` → `applyPreferredWindowByTicketKey` + lifecycle | Ticket, Window, Status scheduled | No |
+| `book_amenity_reservation` | `propose_book_amenity` | `bookAmenityReservation.js` → `createReservationForPortal` (staff override) | Property, Unit, Amenity, When, Tenant | No |
+| `set_amenity_schedule` | `propose_set_amenity_hours` | `setAmenitySchedule.js` → `replaceSchedulesForLocation` | Property, Amenity, Hours summary | No |
+| `cancel_amenity_reservation` | `propose_cancel_amenity_booking` | `cancelAmenityReservation.js` → `cancelReservation` | Property, Unit, Amenity, When | No |
+| `update_amenity_policy` | `propose_update_amenity_policy` | `updateAmenityPolicy.js` → `upsertAccessPolicyForLocation` (merged patch) | Property, Amenity, Rules (max block, etc.) | No |
+
+**Voice read tools (no confirm):** `list_open_service_tickets`, `query_service_history`, `list_amenity_locations`, `lookup_amenity_booking` (PIN), `get_amenity_booking_rules`, `ask_propera`, `resolve_open_ticket`.
+
+**Portal field decode:** `src/agent/proposals/proposalPortalFields.js` — shared by pending-proposal API and voice bridge when restoring thread state. App renderer: `propera-app/src/lib/jarvisProposalView.ts` → `JarvisProposalCard`.
+
+### Ticket lifecycle ops (voice, 2026-06)
+
+| `op` | Brain commit | Voice tool |
+|------|--------------|------------|
+| `set_ticket_status` | `portalTicketMutations` via `ticketLifecycleOps.js` | `propose_set_ticket_status` |
+| `set_ticket_category` | same | `propose_set_ticket_category` |
+| `update_ticket_issue` | same | `propose_update_ticket_issue` |
+| `close_ticket` | same (status Completed) | `propose_close_ticket` |
+| `cancel_ticket` | same (soft delete) | `propose_cancel_ticket` |
+
+Each new op: `PROPOSAL_OPS` row → `commitProposal` case → voice tool → `proposalPortalFields` + `jarvisProposalView` → test in `ticketLifecycleOps.test.js`.
+
+---
+
+## Staff Live Voice & Call Co-pilot
+
+**Status:** Slice 3 — operator flows on voice + portal (2026-06). Expression layer only; all writes via proposal spine.
+
+Jarvis on portal is **not** the tenant phone agent (**Max**). Staff live voice is a separate expression layer: hands-free operator while moving through the portal (overview, property, tickets — ticket pin optional).
+
+### What works today
+
+| Piece | Location | Notes |
+|-------|----------|-------|
+| Live voice WS bridge | `propera-v2/src/voice/jarvisVoiceWebSocketBridge.js` | Portal browser ↔ OpenAI Realtime GA at `WS /voice/jarvis` |
+| Staff session context | `jarvisStaffSessionContext.js` | Operational scope + thread hints compiled before session |
+| Voice tools | `jarvisVoiceTools.js`, `jarvisVoiceProposals.js` | **Read:** `ask_propera`, `resolve_open_ticket`, `list_open_service_tickets`, `query_service_history`, amenity lookups. **Write:** note, cost, vendor, create, schedule, status/category/issue/complete/cancel, amenity book/hours/cancel/policy, confirm. **Session:** `end_voice_session` |
+| Proposal spine | `src/agent/proposals/` | Maintenance + access ops in `types.js` → `commitProposal.js`; dedupe: `createIssueDedupe.js`, `findRecentDuplicateCreate` |
+| Multi-ticket create | `jarvisVoiceProposals.js`, `jarvisStaffSessionContext.js` | Sequential propose per issue; receipt carries property/unit/window for reuse; thread `last_receipt` |
+| Portal field decode | `proposalPortalFields.js` | Pending proposal restores note/cost/vendor/dispatch on reconnect |
+| Thread persistence | `jarvis_operator_threads`, `handleJarvisPendingProposal.js` | Pending confirm survives hang-up |
+| Portal UI | `JarvisVoiceOverlay.tsx`, `JarvisCallCopilot.tsx`, `JarvisProposalCard.tsx` | Full-screen call UI; structured confirm rows |
+| Staff pref | `jarvis-settings` page, `jarvisStaffPrefs.ts` | Per-staff toggle hides headset when off |
+
+### Interaction model
+
+```
+Staff speaks → Realtime + tools → copilot.* WS events → Full-screen co-pilot
+Writes: resolve ticket (if needed) → propose → voice "yes" OR tap Confirm → commitProposal
+End: End call button OR end_voice_session tool → overlay closes
+```
+
+**Global context:** Staff may be on property overview with no ticket pinned. They name a ticket id or unit; `resolve_open_ticket` finds it — page anchor is a hint, not required.
+
+**Service note rule:** Lean field text only — never repeat unit/property/issue/schedule in the note.
+
+**Greeting rule:** One casual hello by first name. **Do not** recite capabilities at session start.
+
+### Env flags
+
+| Flag | Repo | Purpose |
+|------|------|---------|
+| `JARVIS_VOICE_ENABLED=1` | propera-v2 | WS route + bridge |
+| `JARVIS_PLAN_ENABLED=1` | propera-v2 | Write propose/confirm |
+| `JARVIS_ASK_ENABLED=1` | propera-v2 | `ask_propera` read tool |
+| `JARVIS_THREAD_ENABLED=1` | propera-v2 | Thread + pending persistence |
+| `PROPERA_ACCESS_ENGINE_ENABLED=1` | propera-v2 | Amenity voice tools + commit paths |
+| `NEXT_PUBLIC_PROPERA_JARVIS_VOICE_ENABLED=1` | propera-app | Headset + overlay UI |
+
+### Polish backlog (next passes)
+
+1. ~~**Agent tone** — shorter confirm readbacks; disambiguation~~ **Done**
+2. ~~**Co-pilot UI** — errors, candidates, receipt~~ **Done**
+3. ~~**Voice cost + vendor propose**~~ **Done**
+4. ~~**Full-screen overlay + end call + staff toggle**~~ **Done**
+5. ~~**Structured confirm card**~~ **Done**
+6. ~~**Create + schedule on voice**~~ **Done**
+7. ~~**Multi-ticket same unit (sequential propose)**~~ **Done (2026-06)**
+8. ~~**Access Engine on voice** (book, hours, cancel, policy, PIN lookup)~~ **Done (2026-06)** — requires access flag
+9. ~~**Service history analytics read**~~ **Done (slice 1)**
+10. ~~**Portfolio open list** (`list_open_service_tickets`)~~ **Done**
+11. ~~**Confirm loop hardening** — idempotent confirm, portal/voice dedupe, partial schedule success receipts~~ **Done (2026-06)**
+12. **Reconnect** — if WS drops mid-call, graceful recovery
+13. ~~**Phase 3 ticket lifecycle** (status, category, issue, complete, cancel)~~ **Done (2026-06)**
+14. **Access follow-ups** — regenerate PIN, edit booking time, blackouts (portal today; voice later)
+15. **Batch create op** (optional) — one confirm for N tickets if operators want it; today = sequential only
+
+### Boundaries (do not break)
+
+- AI is expression layer; brain commits via proposal spine
+- No workflow-specific Jarvis handlers — extend `op` registry instead
+- Rich package = structured ops; service notes stay lean
+
+---
+
 ## Document status
 
 | Field | Value |
 |-------|--------|
 | **Created** | 2026-05-27 |
-| **Status** | Draft foundation spec — authoritative for spine build order |
+| **Updated** | 2026-06-02 — multi-ticket create, access amenity ops, service history reads, code map refresh |
+| **Status** | Living spec — authoritative for spine build order |
 | **Supersedes** | Ad-hoc “build parts ordering” or “improve Ask tab list” plans |
 
-When the first `Proposal` type lands in code, link its module path in § Code map and update [HANDOFF_LOG.md](./HANDOFF_LOG.md).
+When adding a new `op`, update § Proposal payload map, § Code map, and [HANDOFF_LOG.md](./HANDOFF_LOG.md).

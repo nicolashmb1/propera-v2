@@ -7,6 +7,9 @@ const {
   loadJarvisThread,
 } = require("../dal/jarvisOperatorThreads");
 const { jarvisThreadEnabled, jarvisPlanEnabled } = require("../config/env");
+const { verifyProposalConfirmToken } = require("../agent/proposals/proposalToken");
+const { refreshCommCampaignProposalHit } = require("../agent/proposals/commCampaignProposalGuard");
+const { extractProposalPortalFields } = require("../agent/proposals/proposalPortalFields");
 
 function ticketFromScopeSnapshot(scopeSnapshot) {
   const anchor = scopeSnapshot?.anchor;
@@ -42,7 +45,10 @@ async function handleJarvisPendingProposal(req, res) {
     return res.status(503).json({ ok: false, error: "database_unavailable" });
   }
 
-  const hit = await findAwaitingProposalForActor(sb, actorPhone, "portal");
+  const hit = await refreshCommCampaignProposalHit(
+    sb,
+    await findAwaitingProposalForActor(sb, actorPhone, "portal")
+  );
   if (!hit?.proposal) {
     return res.json({ ok: true, pending: null });
   }
@@ -63,15 +69,55 @@ async function handleJarvisPendingProposal(req, res) {
     ticket = ticketFromScopeSnapshot(thread?.scopeSnapshot);
   }
 
+  const confirmToken = String(p.confirm_token || "").trim();
+  const verified = confirmToken ? verifyProposalConfirmToken(confirmToken) : null;
+  const payload = verified?.payload && typeof verified.payload === "object" ? verified.payload : {};
+  const op = String(p.op || verified?.op || "").trim();
+  const fields = extractProposalPortalFields(op, payload);
+
+  if (!ticket?.humanTicketId && fields.humanTicketId) {
+    ticket = {
+      humanTicketId: fields.humanTicketId,
+      unitLabel: fields.unitLabel,
+      propertyCode: fields.propertyCode,
+    };
+  }
+
   return res.json({
     ok: true,
     pending: {
-      op: String(p.op || "").trim(),
+      op,
       summary: String(p.summary_human || "").trim(),
-      confirmToken: String(p.confirm_token || "").trim(),
+      confirmToken,
       proposalId: String(p.proposal_id || "").trim(),
       expiresAt: p.expires_at || null,
       ticket,
+      amountCents: fields.amountCents,
+      entryType: fields.entryType,
+      vendorName: fields.vendorName,
+      noteText: fields.noteText,
+      dispatch: fields.dispatch,
+      propertyCode: fields.propertyCode,
+      unitLabel: fields.unitLabel,
+      issue: fields.issue,
+      preferredWindow: fields.preferredWindow,
+      statusTo: fields.statusTo,
+      category: fields.category,
+      amenityName: fields.amenityName,
+      bookingLabel: fields.bookingLabel,
+      tenantName: fields.tenantName,
+      scheduleSummary: fields.scheduleSummary,
+      policySummary: fields.policySummary,
+      maxDurationMin: fields.maxDurationMin,
+      audienceLabel: fields.audienceLabel,
+      willSend: fields.willSend,
+      skippedNoPhone: fields.skippedNoPhone,
+      skippedOptOut: fields.skippedOptOut,
+      messageBody: fields.messageBody,
+      finalMessagePreview: fields.finalMessagePreview,
+      smsSegments: fields.smsSegments,
+      campaignId: fields.campaignId,
+      commType: fields.commType,
     },
   });
 }

@@ -46,9 +46,15 @@ function normalizeAudienceFilter(filter) {
     tenantIds.push(id);
   }
 
-  const includeTenantPortal = src.include_tenant_portal !== false;
   const deliveryModeRaw = String(src.delivery_mode || "").trim().toLowerCase();
-  const deliveryMode = deliveryModeRaw === "portal_only" ? "portal_only" : "sms_and_portal";
+  let deliveryMode = "sms_and_portal";
+  if (deliveryModeRaw === "portal_only") deliveryMode = "portal_only";
+  else if (deliveryModeRaw === "sms_only") deliveryMode = "sms_only";
+
+  let includeTenantPortal = deliveryMode !== "sms_only";
+  if (Object.prototype.hasOwnProperty.call(src, "include_tenant_portal")) {
+    includeTenantPortal = src.include_tenant_portal !== false;
+  }
 
   return {
     property_codes: propertyCodes,

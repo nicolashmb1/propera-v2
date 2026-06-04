@@ -43,6 +43,73 @@ test("filterWorkItemsByAnchor returns all when anchor empty", () => {
   assert.equal(filterWorkItemsByAnchor(all, {}).length, 1);
 });
 
+test("buildStoryLine includes unit lifecycle occupancy turnover assets", () => {
+  const story = buildStoryLine({
+    anchor: { propertyCode: "MORRIS", unit: "505" },
+    activeWork: [],
+    propertyOpenTickets: [],
+    focus: null,
+    unitLifecycle: {
+      unitCatalogId: "uid-505",
+      activeOccupancy: {
+        occupancyId: "occ-1",
+        residentName: "Alex Tenant",
+        status: "current",
+        startedAt: "2026-01-01T00:00:00Z",
+      },
+      activeTurnover: {
+        turnoverId: "to-1",
+        status: "IN_PROGRESS",
+        startedAt: "2026-06-01",
+        targetReadyDate: "2026-06-15",
+        unitLabel: "505",
+      },
+      turnoverBlocker: "Paint / touch-up",
+      unitAssets: [
+        { assetId: "a1", assetType: "dishwasher", make: "Whirlpool", model: "WRS571", serialNumber: "X1" },
+      ],
+    },
+  });
+  assert.match(story, /Current resident Alex Tenant/);
+  assert.match(story, /Active turnover IN_PROGRESS/);
+  assert.match(story, /blocker: Paint/);
+  assert.match(story, /installed asset/);
+  assert.match(story, /dishwasher \(WRS571\)/);
+});
+
+test("buildStoryLine notes vacant unit when lifecycle pack has no occupancy", () => {
+  const story = buildStoryLine({
+    anchor: { propertyCode: "MORRIS", unit: "505" },
+    activeWork: [],
+    propertyOpenTickets: [],
+    focus: null,
+    unitLifecycle: {
+      unitCatalogId: "uid-505",
+      activeOccupancy: null,
+      activeTurnover: null,
+      turnoverBlocker: "",
+      unitAssets: [],
+    },
+  });
+  assert.match(story, /vacant/i);
+});
+
+test("readPortalPageContext carries unit_catalog_id and turnover_id", () => {
+  const { readPortalPageContext } = require("../src/agent/contextEnvelope");
+  const ctx = readPortalPageContext({
+    _portalPageContextJson: JSON.stringify({
+      surface: "properties",
+      property_code: "MORRIS",
+      unit: "505",
+      unit_catalog_id: "5001a301-9f00-47a0-988a-518bcfb62982",
+      turnover_id: "to-uuid-1",
+    }),
+  });
+  assert.ok(ctx);
+  assert.equal(ctx.unitCatalogId, "5001a301-9f00-47a0-988a-518bcfb62982");
+  assert.equal(ctx.turnoverId, "to-uuid-1");
+});
+
 test("isPortalChatInbound matches portal portal_chat only", () => {
   assert.equal(
     isPortalChatInbound("portal", { _portalAction: "portal_chat" }),

@@ -362,6 +362,15 @@ async function finalizeMaintenanceDraft(o) {
     ticketAudit = o.mode === "TENANT" ? tenantSmsActor() : telegramStaffCaptureActor();
   }
 
+  const { resolveTicketEpisodeStamp } = require("../lifecycle/ticketEpisodeStamp");
+  const episodeStamp = o.unitCatalogId
+    ? await resolveTicketEpisodeStamp({
+        unitCatalogId: o.unitCatalogId,
+        tenantPhoneE164: tenantPhone,
+        traceId: o.traceId,
+      })
+    : {};
+
   /** Full Sheet1 parity (requires supabase/migrations/006_tickets_sheet1_columns.sql). */
   const ticketRow = {
     ticket_id: humanTicketId,
@@ -410,6 +419,8 @@ async function finalizeMaintenanceDraft(o) {
     location_id: o.locationId || null,
     location_label_snapshot: String(o.locationLabelSnapshot || "").trim(),
     unit_catalog_id: o.unitCatalogId || null,
+    unit_occupancy_id: episodeStamp.unit_occupancy_id || null,
+    tenant_roster_id_at_open: episodeStamp.tenant_roster_id_at_open || null,
     location_type: locationType,
     work_type: "MAINTENANCE",
     resident_id: "",

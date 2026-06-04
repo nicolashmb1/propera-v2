@@ -9,6 +9,11 @@ const {
   findLatestJarvisThreadForActor,
   latestAwaitingProposal,
 } = require("../dal/jarvisOperatorThreads");
+const { listPropertiesForMenu } = require("../dal/intakeSession");
+const { listAllOpenServiceTickets } = require("../agent/operationalScope/compileOperationalScope");
+const {
+  formatPropertyCatalogForJarvis,
+} = require("../agent/proposals/resolvePropertyFromDatabaseText");
 const { jarvisThreadEnabled } = require("../config/env");
 
 /**
@@ -58,8 +63,9 @@ async function loadStaffRoleHints(sb, staffId, propertyCode) {
  * @param {object[]} roleHints
  * @param {object | null} thread
  * @param {object | null} [pageContext]
+ * @param {string} [propertyCatalogLine]
  */
-function formatJarvisStaffContextBlock(scope, roleHints, thread, pageContext) {
+function formatJarvisStaffContextBlock(scope, roleHints, thread, pageContext, propertyCatalogLine, portfolioOpenCount) {
   const lines = ["## Staff Jarvis context (system — authoritative for this session)"];
 
   const actor = scope?.actor || {};
@@ -90,6 +96,9 @@ function formatJarvisStaffContextBlock(scope, roleHints, thread, pageContext) {
 
   if (scope?.story) lines.push(`Situation: ${scope.story}`);
 
+  const catalog = String(propertyCatalogLine || "").trim();
+  if (catalog) lines.push(catalog);
+
   const work = scope?.activeWork || [];
   if (work.length) {
     lines.push(`Your open work items (${work.length}):`);
@@ -99,6 +108,12 @@ function formatJarvisStaffContextBlock(scope, roleHints, thread, pageContext) {
         `${i + 1}. ${w.propertyId || "?"}/${w.unitId || "?"}${tid} — ${w.state || "open"}`
       );
     });
+  }
+
+  if (portfolioOpenCount != null && portfolioOpenCount > 0 && !anchor.propertyCode) {
+    lines.push(
+      `Portfolio: ${portfolioOpenCount} open service ticket${portfolioOpenCount === 1 ? "" : "s"} — use list_open_service_tickets for the full list.`
+    );
   }
 
   const opens = scope?.propertyOpenTickets || [];
@@ -121,15 +136,30 @@ function formatJarvisStaffContextBlock(scope, roleHints, thread, pageContext) {
       lines.push(`Pending confirm: ${pending.summary_human}`);
     }
     const receipt = thread.lastReceipt;
-    if (receipt && typeof receipt === "object" && receipt.summary) {
-      lines.push(`Last action: ${String(receipt.summary).slice(0, 160)}`);
+    if (receipt && typeof receipt === "object") {
+      const preview = receipt.reply_preview || receipt.summary;
+      if (preview) lines.push(`Last action: ${String(preview).slice(0, 160)}`);
+      if (receipt.human_ticket_id) {
+        lines.push(`Last ticket: ${String(receipt.human_ticket_id).trim()}`);
+      }
+      if (
+        String(receipt.committed_op || "") === "create_service_request" &&
+        receipt.property_code &&
+        receipt.unit_label
+      ) {
+        const win = String(receipt.preferred_window || "").trim();
+        lines.push(
+          `Multi-ticket context: ${receipt.property_code} unit ${receipt.unit_label}` +
+            (win ? `, access window ${win}` : "") +
+            " — reuse for next issue same unit unless staff changes it."
+        );
+      }
     }
   }
 
   lines.push(
-    "Use ask_propera for operational questions (open tickets, summaries, unit status). " +
-      "Do not invent ticket ids, costs, or schedules — only facts from tools or this block. " +
-      "Greet the staff member by first name once at session start if known."
+    "Do not invent ticket ids, costs, or schedules — only facts from tools or this block. " +
+      "At session start: brief hello by first name if known — never recite capabilities or open-work lists unless staff asks."
   );
 
   return lines.join("\n");
@@ -209,8 +239,38 @@ async function loadJarvisStaffSessionContext(opts) {
     }
   }
 
+  let propertyCatalogLine = "";
+  let portfolioOpenCount = null;
+  try {
+    const props = await listPropertiesForMenu();
+    propertyCatalogLine = formatPropertyCatalogForJarvis(props);
+  } catch (_) {
+    propertyCatalogLine = "";
+  }
+
+  const pinnedProp =
+    pageContext?.propertyCode ||
+    pageContext?.property_code ||
+    scope?.anchor?.propertyCode ||
+    "";
+  if (sb && !String(pinnedProp || "").trim()) {
+    try {
+      const allOpen = await listAllOpenServiceTickets({ limit: 80 });
+      portfolioOpenCount = allOpen.length;
+    } catch (_) {
+      portfolioOpenCount = null;
+    }
+  }
+
   const promptBlock = scope
-    ? formatJarvisStaffContextBlock(scope, roleHints, thread, pageContext)
+    ? formatJarvisStaffContextBlock(
+        scope,
+        roleHints,
+        thread,
+        pageContext,
+        propertyCatalogLine,
+        portfolioOpenCount
+      )
     : "";
 
   emit({

@@ -49,6 +49,12 @@ Run SQL files in **numeric order** in the Supabase SQL Editor (same project as `
 | **076_org_channel_config.sql** | **`org_channel_configs`** — per-org channel phone/Telegram metadata + setup status | **`portalOrgChannels.js`**, Settings → Channels (MO-3); run after **055** |
 | **077_policy_change_log.sql** | **`policy_change_log`** — append-only audit for Settings policy edits | **`portalOrgPolicies.js`**, Settings → Policies (MO-2c); run after **001** |
 | **078_org_onboarding.sql** | **`organizations.onboarding_completed_at`**, **`created_via`** | MO-4 wizard (`portalOrgOnboarding.js`); run after **055** |
+| **085_leasing_engine_v1.sql** | `unit_leases.renewal_*`; **`leasing_prospects`** | **`leasingProspects.js`**, portal `/api/portal/leasing/*`; flags **`PROPERA_LEASING_ENGINE_ENABLED`** + **`NEXT_PUBLIC_PROPERA_LEASING_ENABLED`**; run after **049** |
+| **086_staff_jarvis_voice_enabled.sql** | **`staff.jarvis_voice_enabled`** | Settings → Jarvis per-staff toggle; **`jarvisStaffSettings.js`**, **`portalMeFromSupabase`** |
+| **087_unit_occupancies_v1.sql** | **`unit_occupancies`**, **`portal_unit_occupancies_v1`**; backfill from active roster + lease | **`unitOccupancies.js`**, portal **`/api/portal/occupancies*`**; flag **`PROPERA_UNIT_LIFECYCLE_ENABLED=1`**; see **`docs/UNIT_LIFECYCLE_BUILD_PLAN.md`** |
+| **088_unit_assets_v1.sql** | **`unit_assets`**, **`portal_unit_assets_v1`**; one active row per asset type per unit | **`unitAssets.js`**, portal **`/api/portal/unit-assets*`**; same lifecycle flag; see **`docs/UNIT_LIFECYCLE_BUILD_PLAN.md`** Phase 3 |
+| **089_unit_asset_nameplates_storage.sql** | Private Supabase bucket **`unit-asset-nameplates`** for nameplate photos | App upload **`/api/unit-assets/nameplate/upload`**; OCR via **`assetNameplateVision.js`** |
+| **090_ticket_episode_stamp.sql** | `tickets.unit_occupancy_id`, `tickets.tenant_roster_id_at_open` | **`ticketEpisodeStamp.js`** at create; History API **`unitEpisodeTicketHistory.js`**; run after **087** |
 
 ### Minimum paths
 

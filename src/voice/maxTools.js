@@ -137,8 +137,8 @@ function createTicketRejection(missingFields, message, extra = {}) {
 
 async function loadPropertyMenu(sb) {
   if (!sb) return { known: new Set(), list: [] };
-  const { data } = await sb.from("properties").select("code, display_name, ticket_prefix, short_name, aliases");
-  const list = Array.isArray(data) ? data : [];
+  const { listPropertiesForMenu } = require("../dal/intakeSession");
+  const list = await listPropertiesForMenu();
   const known = new Set(
     list.map((p) => String(p.code || "").trim().toUpperCase()).filter(Boolean)
   );

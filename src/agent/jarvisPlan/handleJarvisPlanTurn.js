@@ -9,19 +9,21 @@ const { findAwaitingProposalForActor } = require("../../dal/jarvisOperatorThread
 const { jarvisPlanEnabled, financeCostCaptureChatEnabled } = require("../../config/env");
 const {
   tryStaffExpenseCapture,
-  clearExpenseConfirmPending,
   isExpenseCaptureMessage,
 } = require("../../dal/staffExpenseCapture");
 const { compileOperationalScope } = require("../operationalScope/compileOperationalScope");
 const {
-  verifyProposalConfirmToken,
-  commitProposal,
+  executeJarvisConfirm,
   enrichStaffRunWithProposal,
 } = require("../proposals");
 const { readProposalConfirmTokenFromPortal } = require("./readPortalProposalContext");
 const { recordThreadForStaffRun } = require("../thread/recordThreadForStaffRun");
 const { parseProposeVendorRequest } = require("./parseProposeVendorRequest");
+const { parseProposeAppendServiceNote } = require("./parseProposeAppendServiceNote");
+const { parseProposeCommunicationCampaign } = require("./parseProposeCommunicationCampaign");
 const { resolveProposeVendorRequestDraft } = require("./resolveProposeVendorRequestDraft");
+const { resolveProposeAppendServiceNoteDraft } = require("./resolveProposeAppendServiceNoteDraft");
+const { resolveProposeCommunicationCampaignDraft } = require("./resolveProposeCommunicationCampaignDraft");
 const {
   buildProposeVendorRequestProposal,
   normalizeProposalForPortal,
@@ -60,15 +62,6 @@ async function handleJarvisPlanTurn(opts) {
     };
   }
 
-  if (!financeCostCaptureChatEnabled()) {
-    return {
-      ok: true,
-      brain: "jarvis_plan",
-      replyText:
-        "Cost proposals need finance cost capture. Set PROPERA_FINANCE_COST_CAPTURE_CHAT=1 on propera-v2.",
-    };
-  }
-
   const staffActorKey =
     staffContext.staff && staffContext.staffActorKey
       ? String(staffContext.staffActorKey || "").trim()
@@ -89,55 +82,38 @@ async function handleJarvisPlanTurn(opts) {
     }
   }
   if (confirmToken) {
-    const verified = verifyProposalConfirmToken(confirmToken);
-    if (!verified) {
+    const result = await executeJarvisConfirm({
+      confirmToken,
+      traceId,
+      staffActorKey,
+      routerParameter,
+      staffContext,
+      confirmedFromThread,
+    });
+
+    if (!result.ok) {
       return {
         ok: true,
         brain: "jarvis_plan",
-        replyText: "That proposal expired — draft the action again.",
+        replyText: result.replyText,
+        resolution: {
+          error: result.error,
+          proposal_id: result.proposal_id,
+        },
       };
     }
-    const sb = getSupabase();
-    if (sb && staffActorKey) {
-      await clearExpenseConfirmPending(sb, staffActorKey);
-    }
-    const run = await commitProposal(verified, {
-      traceId,
-      channel: "portal",
-      messageId: String(routerParameter.MessageSid || "").trim(),
-      actorLabel: actorLabelFromPortal(routerParameter),
-    });
+
     const committed = {
-      ...run,
+      ok: true,
       brain: "jarvis_plan",
-      replyText: run.replyText,
+      replyText: result.replyText,
       resolution: {
-        ...(run.resolution || {}),
-        committed_op: verified.op,
-        proposal_id: verified.proposal_id,
+        ...(result.resolution || {}),
+        idempotent: result.idempotent === true ? true : undefined,
       },
     };
-    const thread = await recordThreadForStaffRun({
-      traceId,
-      actorKey: staffActorKey,
-      transportChannel: "portal",
-      routerParameter,
-      staffRun: committed,
-    });
-    await appendEventLog({
-      traceId,
-      log_kind: "agent",
-      event: "JARVIS_PLAN_COMMITTED",
-      payload: {
-        op: verified.op,
-        proposal_id: verified.proposal_id,
-        brain: run.brain,
-        thread_id: thread?.thread_id,
-        confirmed_from_thread: confirmedFromThread,
-      },
-    });
-    if (thread) {
-      committed.resolution = { ...(committed.resolution || {}), thread };
+    if (result.resolution?.thread) {
+      committed.resolution = { ...committed.resolution, thread: result.resolution.thread };
     }
     return committed;
   }
@@ -158,10 +134,119 @@ async function handleJarvisPlanTurn(opts) {
       brain: "jarvis_plan",
       replyText:
         "Plan mode: propose an action, then confirm.\n" +
-        "• Vendor: schedule plumber for unit 303 PENN (or pin ticket / include ticket id).\n" +
-        "• Cost: $$amount vendor (e.g. $$42.00 homedepot parts).\n" +
-        "Confirm card applies to both.",
+        "• Note: note: need to order part (with ticket id or pinned unit)\n" +
+        "• Vendor: schedule plumber for unit 303 PENN\n" +
+        "• Broadcast: send message to all tenants at PENN about …\n" +
+        "• Cost: $$42.00 homedepot parts",
     };
+  }
+
+  const noteParsed = parseProposeAppendServiceNote(bodyTrim, routerParameter);
+  if (noteParsed) {
+    const draft = await resolveProposeAppendServiceNoteDraft(noteParsed, {
+      routerParameter,
+      actorLabel: actorLabelFromPortal(routerParameter),
+      staffActorKey,
+      staffId:
+        staffContext.staff && staffContext.staff.staff_id
+          ? String(staffContext.staff.staff_id).trim()
+          : "",
+    });
+    if (!draft.ok) {
+      return {
+        ok: true,
+        brain: "jarvis_plan",
+        replyText: draft.message || "Could not draft service note.",
+      };
+    }
+    const run = {
+      ok: true,
+      brain: "jarvis_plan",
+      replyText: `${draft.summary}\nReply Confirm on the card (or type yes).`,
+      resolution: {
+        needsConfirm: true,
+        confirmToken: draft.confirmToken,
+        confirmSummary: draft.summary,
+        proposal: normalizeProposalForPortal(draft.proposal),
+      },
+    };
+    const thread = await recordThreadForStaffRun({
+      traceId,
+      actorKey: staffActorKey,
+      transportChannel: "portal",
+      routerParameter,
+      staffRun: run,
+      scopeSnapshot: draft.scopeSnapshot,
+    });
+    if (thread) {
+      run.resolution = { ...run.resolution, thread };
+    }
+    await appendEventLog({
+      traceId,
+      log_kind: "agent",
+      event: "JARVIS_PLAN_PROPOSED",
+      payload: {
+        op: draft.proposal.op,
+        proposal_id: draft.proposal.proposal_id,
+        needs_confirm: true,
+        thread_id: thread?.thread_id,
+      },
+    });
+    return run;
+  }
+
+  const commParsed = parseProposeCommunicationCampaign(bodyTrim, routerParameter);
+  if (commParsed) {
+    const draft = await resolveProposeCommunicationCampaignDraft(commParsed, {
+      traceId,
+      routerParameter,
+      staffActorKey,
+      staffId:
+        staffContext.staff && staffContext.staff.staff_id
+          ? String(staffContext.staff.staff_id).trim()
+          : "",
+    });
+    if (!draft.ok) {
+      return {
+        ok: true,
+        brain: "jarvis_plan",
+        replyText: draft.message || "Could not draft tenant broadcast.",
+      };
+    }
+    const run = {
+      ok: true,
+      brain: "jarvis_plan",
+      replyText: `${draft.summary}\nReply Confirm on the card (or type yes).`,
+      resolution: {
+        needsConfirm: true,
+        confirmToken: draft.confirmToken,
+        confirmSummary: draft.summary,
+        proposal: normalizeProposalForPortal(draft.proposal),
+      },
+    };
+    const thread = await recordThreadForStaffRun({
+      traceId,
+      actorKey: staffActorKey,
+      transportChannel: "portal",
+      routerParameter,
+      staffRun: run,
+      scopeSnapshot: draft.scopeSnapshot,
+    });
+    if (thread) {
+      run.resolution = { ...run.resolution, thread };
+    }
+    await appendEventLog({
+      traceId,
+      log_kind: "agent",
+      event: "JARVIS_PLAN_PROPOSED",
+      payload: {
+        op: draft.proposal.op,
+        proposal_id: draft.proposal.proposal_id,
+        needs_confirm: true,
+        thread_id: thread?.thread_id,
+      },
+    });
+    return run;
   }
 
   const vendorParsed = parseProposeVendorRequest(bodyTrim, routerParameter);
@@ -217,6 +302,16 @@ async function handleJarvisPlanTurn(opts) {
     ...routerParameter,
     _portalChatMode: "cost",
   };
+
+  if (!financeCostCaptureChatEnabled()) {
+    return {
+      ok: true,
+      brain: "jarvis_plan",
+      replyText:
+        "Cost proposals need finance cost capture. Set PROPERA_FINANCE_COST_CAPTURE_CHAT=1 on propera-v2.\n" +
+        "For notes use: note: your text here",
+    };
+  }
 
   let run = await tryStaffExpenseCapture({
     traceId,

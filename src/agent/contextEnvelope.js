@@ -49,14 +49,18 @@ function normalizePortalPageContext(raw) {
   const surface = String(o.surface ?? "").trim().toLowerCase();
   const pathname = String(o.pathname ?? "").trim();
   const ticketLabel = String(o.ticket_label ?? o.ticketLabel ?? "").trim();
+  const unitCatalogId = String(o.unit_catalog_id ?? o.unitCatalogId ?? "").trim();
+  const turnoverId = String(o.turnover_id ?? o.turnoverId ?? "").trim();
 
-  if (!propertyCode && !ticketRowId && !humanTicketId && !unit) return null;
+  if (!propertyCode && !ticketRowId && !humanTicketId && !unit && !unitCatalogId) return null;
 
   return {
     surface,
     pathname,
     propertyCode,
     unit,
+    unitCatalogId,
+    turnoverId,
     ticketRowId,
     humanTicketId,
     ticketLabel,

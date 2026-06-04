@@ -6,14 +6,16 @@
 
 const { getSupabase } = require("../../db/supabase");
 const { readPortalPageContext } = require("../contextEnvelope");
+const { loadUnitLifecycleScope } = require("./loadUnitLifecycleScope");
 const {
   listOpenWorkItemsForOwner,
   getTicketHumanIdByTicketKeys,
 } = require("../../dal/workItems");
 const { resolveWorkItemFromPageContext } = require("../resolvePageContextTarget");
 
-const SCOPE_VERSION = "1";
+const SCOPE_VERSION = "2";
 const PROPERTY_OPEN_TICKET_LIMIT = 30;
+const PORTFOLIO_OPEN_TICKET_LIMIT = 50;
 
 const CLOSED_STATUSES = new Set([
   "completed",
@@ -178,6 +180,47 @@ async function listOpenTicketsForProperty(propertyCode) {
 }
 
 /**
+ * All open service tickets across the portfolio (staff overview / voice list).
+ * @param {{ limit?: number }} [opts]
+ * @returns {Promise<import("./types").OperationalScopeOpenTicket[]>}
+ */
+async function listAllOpenServiceTickets(opts = {}) {
+  const limit = Math.min(
+    Math.max(Number(opts.limit) || PORTFOLIO_OPEN_TICKET_LIMIT, 1),
+    80
+  );
+  const sb = getSupabase();
+  if (!sb) return [];
+
+  const { data, error } = await sb
+    .from("portal_tickets_v1")
+    .select(
+      "ticket_row_id, ticket_id, property_code, unit_label, status, message_raw, category_final, category, priority, updated_at"
+    )
+    .order("updated_at", { ascending: false })
+    .limit(limit * 4);
+
+  if (error || !data) return [];
+
+  return data
+    .filter((row) => isOpenTicketStatus(row.status))
+    .slice(0, limit)
+    .map((row) => ({
+      ticketRowId: String(row.ticket_row_id || row.id || "").trim(),
+      humanTicketId: String(row.ticket_id || "").trim(),
+      propertyCode: normProp(row.property_code),
+      unitLabel: String(row.unit_label || "").trim(),
+      status: String(row.status || "").trim(),
+      summary: String(
+        row.category_final || row.category || row.message_raw || ""
+      )
+        .trim()
+        .slice(0, 200),
+    }))
+    .filter((t) => t.ticketRowId && t.humanTicketId);
+}
+
+/**
  * @param {string} staffId
  * @returns {Promise<import("./types").OperationalScopeWorkItem[]>}
  */
@@ -228,6 +271,42 @@ function buildStoryLine(scope) {
     parts.push("Focus " + f.workItemId);
   }
 
+  const ul = scope.unitLifecycle;
+  if (ul) {
+    if (ul.activeOccupancy && ul.activeOccupancy.residentName) {
+      parts.push(
+        "Current resident " +
+          ul.activeOccupancy.residentName +
+          (ul.activeOccupancy.startedAt
+            ? " since " + String(ul.activeOccupancy.startedAt).slice(0, 10)
+            : "")
+      );
+    } else if (ul.unitCatalogId) {
+      parts.push("Unit vacant (no current occupancy recorded)");
+    }
+    if (ul.activeTurnover && ul.activeTurnover.turnoverId) {
+      let tLine = "Active turnover " + (ul.activeTurnover.status || "OPEN");
+      if (ul.turnoverBlocker) tLine += " — blocker: " + ul.turnoverBlocker;
+      parts.push(tLine);
+    }
+    if (Array.isArray(ul.unitAssets) && ul.unitAssets.length > 0) {
+      const labels = ul.unitAssets
+        .slice(0, 6)
+        .map((a) => {
+          const type = String(a.assetType || "asset").replace(/_/g, " ");
+          const model = String(a.model || "").trim();
+          return model ? type + " (" + model + ")" : type;
+        })
+        .join(", ");
+      parts.push(
+        ul.unitAssets.length +
+          " installed asset(s): " +
+          labels +
+          (ul.unitAssets.length > 6 ? ", …" : "")
+      );
+    }
+  }
+
   if (!parts.length) return "No property or ticket anchor; general portfolio context.";
   return parts.join(". ") + ".";
 }
@@ -258,11 +337,23 @@ async function compileOperationalScope(opts) {
         pathname: pageContext.pathname || "",
         propertyCode: pageContext.propertyCode || "",
         unit: pageContext.unit || "",
+        unitCatalogId: pageContext.unitCatalogId || "",
+        turnoverId: pageContext.turnoverId || "",
         ticketRowId: pageContext.ticketRowId || "",
         humanTicketId: pageContext.humanTicketId || "",
         ticketLabel: pageContext.ticketLabel || "",
       }
     : {};
+
+  let unitLifecycle = null;
+  if (anchor.propertyCode && (anchor.unitCatalogId || anchor.unit)) {
+    unitLifecycle = await loadUnitLifecycleScope({
+      propertyCode: anchor.propertyCode,
+      unitLabel: anchor.unit,
+      unitCatalogId: anchor.unitCatalogId,
+      turnoverId: anchor.turnoverId,
+    });
+  }
 
   const staffId = String(o.staffId || "").trim();
   let activeWork = [];
@@ -315,6 +406,7 @@ async function compileOperationalScope(opts) {
     activeWork,
     propertyOpenTickets,
     focus,
+    unitLifecycle,
     story: "",
   };
 
@@ -327,6 +419,7 @@ module.exports = {
   buildStoryLine,
   filterWorkItemsByAnchor,
   listOpenTicketsForProperty,
+  listAllOpenServiceTickets,
   loadStaffActiveWork,
   SCOPE_VERSION,
 };

@@ -596,11 +596,17 @@ async function previewProgramRunExpansion(o) {
  * @param {string} [filters.propertyCode]
  * @param {string} [filters.status] — OPEN | IN_PROGRESS | COMPLETE
  * @param {boolean} [filters.inProgress] — when true, exclude COMPLETE runs
+ * @param {{ orgId?: string, propertyCodes?: string[] }} [filters.orgScope]
  * @returns {Promise<object[]>}
  */
 async function listProgramRuns(filters) {
   const sb = getSupabase();
   if (!sb) return [];
+
+  const { resolveOrgPropertyScopeForQuery, assertPropertyInOrgScope } = require("../portal/portalOrgScope");
+  const orgScope = filters?.orgScope;
+  const scope = resolveOrgPropertyScopeForQuery(orgScope);
+  if (!scope.ok) return [];
 
   const propertyCode = String(filters?.propertyCode || "")
     .trim()
@@ -618,10 +624,13 @@ async function listProgramRuns(filters) {
     .select(
       "id, property_code, template_key, saved_program_id, title, status, created_by, created_at, updated_at"
     )
+    .in("property_code", scope.propertyCodes)
     .order("created_at", { ascending: false });
 
   if (propertyCode) {
-    q = q.eq("property_code", propertyCode);
+    const prop = assertPropertyInOrgScope(propertyCode, orgScope);
+    if (!prop.ok) return [];
+    q = q.eq("property_code", prop.propertyCode);
   }
   if (statusFilter && ["OPEN", "IN_PROGRESS", "COMPLETE"].includes(statusFilter)) {
     q = q.eq("status", statusFilter);

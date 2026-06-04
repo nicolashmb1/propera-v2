@@ -9,11 +9,15 @@ const {
   financeTicketCostsEnabled,
   financeCoreEnabled,
 } = require("../../config/env");
-const { listOpenTicketsForProperty } = require("../operationalScope/compileOperationalScope");
+const { listOpenTicketsForProperty, listAllOpenServiceTickets } = require("../operationalScope/compileOperationalScope");
 const { resolveTicketTargetFromQuestion } = require("./resolveQuestionTargets");
 const { loadOpenTicketTargetForUnit } = require("./loadTicketByUnit");
 const { pickRecentTimeline } = require("./timeBrief");
-const { classifyJarvisIntent } = require("./classifyJarvisIntent");
+const { classifyJarvisIntent, isPortfolioOpenListQuestion } = require("./classifyJarvisIntent");
+const {
+  parseServiceHistoryQuestion,
+  queryServiceHistory,
+} = require("../jarvisQuery");
 
 /**
  * @param {{ ticketRowId?: string, humanTicketId?: string }} o
@@ -142,6 +146,8 @@ async function gatherJarvisFacts(scope, question) {
   let openTicketsAtProperty = scope.propertyOpenTickets || [];
   if (propertyCode) {
     openTicketsAtProperty = await listOpenTicketsForProperty(propertyCode);
+  } else if (isPortfolioOpenListQuestion(q) || (intents.has("OPEN_LIST") && !propertyCode)) {
+    openTicketsAtProperty = await listAllOpenServiceTickets();
   }
 
   const scopeForResolve = { ...scope, propertyOpenTickets: openTicketsAtProperty };
@@ -201,6 +207,20 @@ async function gatherJarvisFacts(scope, question) {
     ? await loadPropertyMaintenanceSpend(propCode)
     : null;
 
+  let serviceHistory = null;
+  if (intents.has("SERVICE_HISTORY")) {
+    const parsed = parseServiceHistoryQuestion(q, { propertyCode });
+    if (parsed?.keywords?.length) {
+      serviceHistory = await queryServiceHistory({
+        issueKeywords: parsed.keywords,
+        daysBack: parsed.daysBack,
+        propertyCode: parsed.propertyCode || propertyCode || undefined,
+        issueLabel: parsed.issueLabel,
+        analysisMode: parsed.analysisMode || parseServiceHistoryAnalysis(q),
+      });
+    }
+  }
+
   return {
     scopeStory: scope.story || "",
     anchor,
@@ -208,12 +228,14 @@ async function gatherJarvisFacts(scope, question) {
     focusTicket,
     openTicketsAtProperty,
     activeWork: scope.activeWork || [],
+    unitLifecycle: scope.unitLifecycle || null,
     costSummary,
     propertySituation,
     propertyMaintenanceSpend: propertySituation,
     resolvedFromQuestion,
     questionResolution,
     intents: Array.from(intents),
+    serviceHistory,
   };
 }
 

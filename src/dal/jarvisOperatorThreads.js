@@ -16,6 +16,7 @@ const THREAD_STATUSES = new Set([
 const PROPOSAL_STATES = new Set([
   "draft",
   "awaiting_confirm",
+  "executing",
   "approved",
   "rejected",
   "committed",
@@ -302,6 +303,241 @@ function threadSummaryForPortal(thread) {
   };
 }
 
+/**
+ * @param {object | null | undefined} thread
+ * @param {string} proposalId
+ */
+function findProposalStateOnThread(thread, proposalId) {
+  const id = String(proposalId || "").trim();
+  if (!thread || !id) return null;
+  const hit = (thread.pendingProposals || []).find(
+    (p) => String(p.proposal_id || "") === id
+  );
+  return hit ? String(hit.state || "").trim() || null : null;
+}
+
+const { issuesAreDuplicate } = require("../agent/proposals/createIssueDedupe");
+
+async function findThreadWithProposalForActor(sb, actorKey, transportChannel, proposalId) {
+  const actor = String(actorKey || "").trim();
+  const channel = String(transportChannel || "portal").trim() || "portal";
+  const id = String(proposalId || "").trim();
+  if (!actor || !id) return null;
+
+  const { data, error } = await sb
+    .from("jarvis_operator_threads")
+    .select("thread_id")
+    .eq("actor_key", actor)
+    .eq("transport_channel", channel)
+    .order("updated_at", { ascending: false })
+    .limit(20);
+  if (error || !Array.isArray(data)) return null;
+
+  for (const row of data) {
+    const threadId = String(row.thread_id || "").trim();
+    if (!threadId) continue;
+    const thread = await loadJarvisThread(sb, { threadId });
+    if (findProposalStateOnThread(thread, id)) {
+      return { thread, threadId };
+    }
+  }
+  return null;
+}
+
+/**
+ * @param {import("@supabase/supabase-js").SupabaseClient} sb
+ * @param {{ threadId: string, proposalId: string }} o
+ */
+async function tryClaimProposalForCommit(sb, o) {
+  const threadId = String(o.threadId || "").trim();
+  const proposalId = String(o.proposalId || "").trim();
+  if (!threadId || !proposalId) return { kind: "not_found" };
+
+  const thread = await loadJarvisThread(sb, { threadId });
+  if (!thread) return { kind: "not_found" };
+
+  const state = findProposalStateOnThread(thread, proposalId);
+  if (state === "committed") {
+    return { kind: "already_committed", thread, receipt: thread.lastReceipt || null };
+  }
+  if (state === "executing") {
+    return { kind: "in_flight", thread };
+  }
+  if (state !== "awaiting_confirm") {
+    return { kind: "not_awaiting", thread, state: state || null };
+  }
+
+  const updated = await markProposalOnThread(sb, {
+    threadId,
+    proposalId,
+    state: "executing",
+  });
+  return { kind: "claimed", thread: updated || thread };
+}
+
+/**
+ * @param {import("@supabase/supabase-js").SupabaseClient} sb
+ * @param {{ threadId: string, proposalId: string, timeoutMs?: number, pollMs?: number }} o
+ */
+async function waitForProposalOutcome(sb, o) {
+  const threadId = String(o.threadId || "").trim();
+  const proposalId = String(o.proposalId || "").trim();
+  const timeoutMs = Math.max(500, Number(o.timeoutMs) || 3000);
+  const pollMs = Math.max(50, Number(o.pollMs) || 150);
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const thread = await loadJarvisThread(sb, { threadId });
+    const state = findProposalStateOnThread(thread, proposalId);
+    if (state === "committed" || state === "failed") {
+      return { state, thread };
+    }
+    if (state !== "executing") {
+      return { state: state || null, thread };
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+
+  const thread = await loadJarvisThread(sb, { threadId });
+  return {
+    state: findProposalStateOnThread(thread, proposalId) || "executing",
+    thread,
+  };
+}
+
+/**
+ * @param {object | null | undefined} thread
+ * @param {{ op: string, proposal_id: string }} verified
+ */
+function idempotentConfirmFromThread(thread, verified) {
+  const preview = String(thread?.lastReceipt?.reply_preview || "").trim();
+  const humanId = String(thread?.lastReceipt?.human_ticket_id || "").trim() || undefined;
+  const op = String(verified?.op || "").trim();
+  if (preview) {
+    return { reply: preview, human_ticket_id: humanId };
+  }
+  return {
+    reply: op ? `Already done (${op.replace(/_/g, " ")}).` : "Already done.",
+    human_ticket_id: humanId,
+  };
+}
+
+/**
+ * @param {object | null | undefined} thread
+ * @param {string} op
+ * @param {{ propertyCode?: string, unitLabel?: string, humanTicketId?: string, preferredWindow?: string, noteText?: string }} [target]
+ * @param {number} [withinMs]
+ */
+function findRecentCommittedOp(thread, op, target, withinMs = 5 * 60 * 1000) {
+  const committedOp = String(op || "").trim();
+  const receipt = thread?.lastReceipt;
+  if (!receipt || String(receipt.committed_op || "") !== committedOp) return null;
+
+  const at = new Date(String(receipt.at || "")).getTime();
+  if (!at || Date.now() - at > withinMs) return null;
+
+  const targetObj = target && typeof target === "object" ? target : {};
+  const pc = String(targetObj.propertyCode || "")
+    .trim()
+    .toUpperCase();
+  const ul = String(targetObj.unitLabel || "").trim();
+  const anchor = thread.scopeSnapshot?.anchor || {};
+  if (pc && anchor.propertyCode && String(anchor.propertyCode).toUpperCase() !== pc) {
+    return null;
+  }
+  if (ul && anchor.unit && String(anchor.unit) !== ul) return null;
+
+  const humanId = String(
+    targetObj.humanTicketId || targetObj.human_ticket_id || ""
+  )
+    .trim()
+    .toUpperCase();
+  if (humanId) {
+    const receiptId = String(receipt.human_ticket_id || "")
+      .trim()
+      .toUpperCase();
+    if (receiptId && receiptId !== humanId) return null;
+  }
+
+  const window = String(targetObj.preferredWindow || targetObj.preferred_window || "").trim();
+  if (window) {
+    const receiptWindow = String(receipt.preferred_window || "").trim();
+    if (receiptWindow && receiptWindow.toLowerCase() !== window.toLowerCase()) return null;
+  }
+
+  const noteText = String(targetObj.noteText || targetObj.note_text || "").trim();
+  if (noteText) {
+    const receiptNote = String(receipt.note_text || receipt.note_preview || "").trim();
+    if (receiptNote && receiptNote.toLowerCase() !== noteText.toLowerCase()) return null;
+  }
+
+  return receipt;
+}
+
+/**
+ * @param {object | null | undefined} thread
+ * @param {{ humanTicketId?: string, preferredWindow?: string }} target
+ * @param {number} [withinMs]
+ */
+function findRecentDuplicateSchedule(thread, target, withinMs = 5 * 60 * 1000) {
+  const window = String(target?.preferredWindow || target?.preferred_window || "").trim();
+  if (!window) return null;
+  return findRecentCommittedOp(
+    thread,
+    "schedule_ticket",
+    {
+      humanTicketId: target?.humanTicketId || target?.human_ticket_id,
+      preferredWindow: window,
+    },
+    withinMs
+  );
+}
+
+/**
+ * @param {object | null | undefined} thread
+ * @param {{ humanTicketId?: string, noteText?: string }} target
+ * @param {number} [withinMs]
+ */
+function findRecentDuplicateAppendNote(thread, target, withinMs = 5 * 60 * 1000) {
+  const noteText = String(target?.noteText || target?.note_text || "").trim();
+  if (!noteText) return null;
+  return findRecentCommittedOp(
+    thread,
+    "append_service_note",
+    {
+      humanTicketId: target?.humanTicketId || target?.human_ticket_id,
+      noteText,
+    },
+    withinMs
+  );
+}
+
+/**
+ * @param {object | null | undefined} thread
+ * @param {{ propertyCode?: string, unitLabel?: string, issueText?: string }} target
+ * @param {number} [withinMs]
+ */
+function findRecentDuplicateCreate(thread, target, withinMs = 5 * 60 * 1000) {
+  const issueText = String(target?.issueText || "").trim();
+  if (!issueText) return null;
+
+  const receipt = findRecentCommittedOp(
+    thread,
+    "create_service_request",
+    {
+      propertyCode: target?.propertyCode,
+      unitLabel: target?.unitLabel,
+    },
+    withinMs
+  );
+  if (!receipt) return null;
+
+  const priorIssue = String(receipt.issue_text || receipt.issueText || "").trim();
+  if (!priorIssue) return null;
+  if (!issuesAreDuplicate(issueText, priorIssue)) return null;
+  return receipt;
+}
+
 module.exports = {
   loadJarvisThread,
   upsertJarvisThread,
@@ -312,4 +548,13 @@ module.exports = {
   threadSummaryForPortal,
   latestAwaitingProposal,
   pruneExpiredPending,
+  findProposalStateOnThread,
+  findThreadWithProposalForActor,
+  tryClaimProposalForCommit,
+  waitForProposalOutcome,
+  idempotentConfirmFromThread,
+  findRecentCommittedOp,
+  findRecentDuplicateCreate,
+  findRecentDuplicateSchedule,
+  findRecentDuplicateAppendNote,
 };

@@ -11,6 +11,9 @@ const { jarvisVoiceToolSchemas, runJarvisVoiceTool } = require("./jarvisVoiceToo
 const { buildTurnDetection } = require("./voiceWebSocketBridge");
 const { emit } = require("../logging/structuredLog");
 const { latestAwaitingProposal } = require("../dal/jarvisOperatorThreads");
+const { verifyProposalConfirmToken } = require("../agent/proposals/proposalToken");
+const { extractProposalPortalFields } = require("../agent/proposals/proposalPortalFields");
+const { openTicketsFromScope } = require("./jarvisCopilotTicketEnrich");
 const {
   openaiApiKey,
   voiceModel,
@@ -98,8 +101,43 @@ function ticketToCopilotPayload(target, pageContext) {
   };
 }
 
+function candidateToCopilotPayload(c) {
+  if (!c || typeof c !== "object") return null;
+  const humanTicketId = String(c.humanTicketId || c.human_ticket_id || "").trim();
+  if (!humanTicketId) return null;
+  const issue = String(c.issue || c.summary || c.message_raw || "").trim();
+  const { formatTicketChoiceLabel, ticketAgeSpeak } = require("./ticketDisambiguationSpeak");
+  return {
+    humanTicketId,
+    unitLabel: String(c.unitLabel || c.unit_label || "").trim() || undefined,
+    propertyCode: String(c.propertyCode || c.property_code || "").trim() || undefined,
+    category: String(c.category || "").trim() || undefined,
+    issue: issue || undefined,
+    label: formatTicketChoiceLabel(c) || undefined,
+    ageLabel: ticketAgeSpeak(c) || undefined,
+  };
+}
+
 function emitCopilotFromToolResult(clientWs, toolName, toolResult) {
   if (!toolResult || typeof toolResult !== "object") return;
+
+  if (toolResult.error && !toolResult.needs_confirm && !toolResult.committed) {
+    safeSend(clientWs, {
+      type: "copilot.error",
+      error: {
+        code: String(toolResult.error || "error"),
+        message: String(toolResult.message || toolResult.error || "Something went wrong.").trim(),
+      },
+    });
+  }
+
+  const candidates = Array.isArray(toolResult.candidates) ? toolResult.candidates : [];
+  if (candidates.length) {
+    safeSend(clientWs, {
+      type: "copilot.candidates",
+      candidates: candidates.map(candidateToCopilotPayload).filter(Boolean),
+    });
+  }
 
   let ticketPayload = ticketToCopilotPayload(toolResult.target, null);
   if (!ticketPayload && toolResult.human_ticket_id) {
@@ -122,22 +160,98 @@ function emitCopilotFromToolResult(clientWs, toolName, toolResult) {
         humanTicketId: String(toolResult.human_ticket_id || ticketPayload?.humanTicketId || "").trim(),
         needsConfirm: true,
         confirmToken: String(toolResult.confirm_token || "").trim() || undefined,
+        amountCents: Number(toolResult.amount_cents) || undefined,
+        entryType: String(toolResult.entry_type || "").trim() || undefined,
+        vendorName: String(toolResult.vendor_name || "").trim() || undefined,
+        noteText: String(toolResult.note_text || toolResult.noteText || "").trim() || undefined,
+        dispatch: toolResult.dispatch === false ? false : toolResult.dispatch === true ? true : undefined,
+        propertyCode: String(toolResult.property_code || "").trim() || undefined,
+        unitLabel: String(toolResult.unit_label || "").trim() || undefined,
+        issue: String(toolResult.issue_text || toolResult.issue || "").trim() || undefined,
+        preferredWindow: String(toolResult.preferred_window || "").trim() || undefined,
+        statusTo: String(toolResult.status_to || "").trim() || undefined,
+        category: String(toolResult.category || "").trim() || undefined,
       },
     });
   }
 
   if (toolResult.committed) {
     safeSend(clientWs, {
-      type: "copilot.proposal",
-      proposal: {
+      type: "copilot.receipt",
+      receipt: {
         op: String(toolResult.op || "proposal"),
-        summary: String(toolResult.reply || "Confirmed.").trim(),
-        humanTicketId: String(toolResult.human_ticket_id || "").trim(),
-        needsConfirm: false,
-        committed: true,
+        message: String(toolResult.reply || "Confirmed.").trim(),
+        humanTicketId: String(toolResult.human_ticket_id || "").trim() || undefined,
       },
     });
   }
+}
+
+function emitCopilotScopeSummary(clientWs, scope) {
+  if (!scope) return;
+  const tickets = openTicketsFromScope(scope);
+  const propertyCode = String(scope.anchor?.propertyCode || tickets[0]?.propertyCode || "")
+    .trim()
+    .toUpperCase();
+  if (!tickets.length && !propertyCode) return;
+  safeSend(clientWs, {
+    type: "copilot.summary",
+    summary: {
+      kind: "property_open_tickets",
+      propertyCode: propertyCode || undefined,
+      story: String(scope.story || "").trim() || undefined,
+      tickets,
+    },
+  });
+}
+
+function proposalFieldsFromPending(pending, anchor) {
+  const op = String(pending?.op || "").trim();
+  const confirmToken = String(pending?.confirm_token || "").trim();
+  const verified = confirmToken ? verifyProposalConfirmToken(confirmToken) : null;
+  const payload =
+    verified?.payload && typeof verified.payload === "object"
+      ? verified.payload
+      : pending?.payload && typeof pending.payload === "object"
+        ? pending.payload
+        : {};
+  const fields = extractProposalPortalFields(op, payload);
+  const humanTicketId =
+    String(anchor?.humanTicketId || fields.humanTicketId || "").trim() || undefined;
+
+  return {
+    op,
+    summary: String(pending?.summary_human || "").trim(),
+    humanTicketId,
+    needsConfirm: true,
+    confirmToken: confirmToken || undefined,
+    amountCents: fields.amountCents,
+    entryType: fields.entryType,
+    vendorName: fields.vendorName,
+    noteText: fields.noteText,
+    dispatch: fields.dispatch,
+    propertyCode: fields.propertyCode,
+    unitLabel: fields.unitLabel,
+    issue: fields.issue,
+    preferredWindow: fields.preferredWindow,
+    statusTo: fields.statusTo,
+    category: fields.category,
+    amenityName: fields.amenityName,
+    bookingLabel: fields.bookingLabel,
+    tenantName: fields.tenantName,
+    scheduleSummary: fields.scheduleSummary,
+    policySummary: fields.policySummary,
+    maxDurationMin: fields.maxDurationMin,
+    audienceLabel: fields.audienceLabel,
+    willSend: fields.willSend,
+    skippedNoPhone: fields.skippedNoPhone,
+    skippedOptOut: fields.skippedOptOut,
+    messageBody: fields.messageBody,
+    finalMessagePreview: fields.finalMessagePreview,
+    smsSegments: fields.smsSegments,
+    campaignId: fields.campaignId,
+    commType: fields.commType,
+  };
 }
 
 function emitCopilotPageAnchor(clientWs, pageContext) {
@@ -169,15 +283,7 @@ function emitCopilotFromThreadState(clientWs, thread, scope) {
       const anchor = thread.scopeSnapshot?.anchor || scope?.anchor;
       safeSend(clientWs, {
         type: "copilot.proposal",
-        proposal: {
-          op: String(pending.op || "proposal"),
-          summary: String(pending.summary_human || "").trim(),
-          humanTicketId: anchor?.humanTicketId
-            ? String(anchor.humanTicketId).trim()
-            : undefined,
-          needsConfirm: true,
-          confirmToken: String(pending.confirm_token || "").trim() || undefined,
-        },
+        proposal: proposalFieldsFromPending(pending, anchor),
       });
     }
   }
@@ -262,6 +368,7 @@ async function handleJarvisPortalStream(clientWs) {
   }
 
   let pendingConfirmToken = "";
+  let pendingSessionEnd = false;
 
   function toolCtx() {
     return {
@@ -273,6 +380,9 @@ async function handleJarvisPortalStream(clientWs) {
       pendingConfirmToken,
       onPendingConfirm: (token) => {
         pendingConfirmToken = String(token || "").trim();
+      },
+      onSessionEndRequested: () => {
+        pendingSessionEnd = true;
       },
     };
   }
@@ -324,6 +434,20 @@ async function handleJarvisPortalStream(clientWs) {
     }
   }
 
+  function maybeEndSessionAfterResponse() {
+    if (!pendingSessionEnd) return;
+    pendingSessionEnd = false;
+    safeSend(clientWs, { type: "copilot.session_end" });
+    setTimeout(() => {
+      try {
+        if (clientWs.readyState === WebSocket.OPEN) clientWs.close();
+      } catch (_) {}
+      try {
+        if (openaiWs && openaiWs.readyState === WebSocket.OPEN) openaiWs.close();
+      } catch (_) {}
+    }, 800);
+  }
+
   async function configureOpenAiSession() {
     if (sessionConfigured) return;
     sessionConfigured = true;
@@ -349,6 +473,7 @@ async function handleJarvisPortalStream(clientWs) {
     });
     voiceScope = loaded.scope;
     emitCopilotFromThreadState(clientWs, loaded.thread, loaded.scope);
+    emitCopilotScopeSummary(clientWs, loaded.scope);
 
     const systemPrompt = buildJarvisSystemPrompt({
       staffDisplayName: loaded.staffDisplayName,
@@ -400,10 +525,11 @@ async function handleJarvisPortalStream(clientWs) {
 
       if (msg.type === "session.created" || msg.type === "session.updated") {
         markSessionReady();
-        if (msg.type === "session.created") {
-          greetingFallbackTimer = setTimeout(() => startGreetingOnce(), GREETING_FALLBACK_MS);
-        }
         if (msg.type === "session.updated") {
+          if (greetingFallbackTimer) {
+            clearTimeout(greetingFallbackTimer);
+            greetingFallbackTimer = null;
+          }
           startGreetingOnce();
         }
         return;
@@ -416,6 +542,7 @@ async function handleJarvisPortalStream(clientWs) {
       if (msg.type === "response.done") {
         responseInProgress = false;
         flushPendingResponse();
+        maybeEndSessionAfterResponse();
       }
 
       if (msg.type === "response.function_call_arguments.done") {

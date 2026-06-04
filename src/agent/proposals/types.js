@@ -10,6 +10,18 @@ const PROPOSAL_OPS = Object.freeze({
   ATTACH_TICKET_COST: "attach_ticket_cost",
   PROPOSE_VENDOR_REQUEST: "propose_vendor_request",
   APPEND_SERVICE_NOTE: "append_service_note",
+  CREATE_SERVICE_REQUEST: "create_service_request",
+  SCHEDULE_TICKET: "schedule_ticket",
+  BOOK_AMENITY_RESERVATION: "book_amenity_reservation",
+  SET_AMENITY_SCHEDULE: "set_amenity_schedule",
+  CANCEL_AMENITY_RESERVATION: "cancel_amenity_reservation",
+  UPDATE_AMENITY_POLICY: "update_amenity_policy",
+  SET_TICKET_STATUS: "set_ticket_status",
+  SET_TICKET_CATEGORY: "set_ticket_category",
+  UPDATE_TICKET_ISSUE: "update_ticket_issue",
+  CLOSE_TICKET: "close_ticket",
+  CANCEL_TICKET: "cancel_ticket",
+  SEND_COMMUNICATION_CAMPAIGN: "send_communication_campaign",
 });
 
 /**

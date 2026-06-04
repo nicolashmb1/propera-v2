@@ -61,7 +61,7 @@ async function handleJarvisAskTurn(opts) {
   let replyText = formatJarvisAskReply(facts, question);
   let usedLlm = false;
 
-  if (jarvisAskLlmEnabled() && question) {
+  if (!facts.serviceHistory?.ok && jarvisAskLlmEnabled() && question) {
     const llm = await maybeJarvisAskLlmReply({
       question,
       facts,
@@ -85,6 +85,7 @@ async function handleJarvisAskTurn(opts) {
       question_resolution: facts.questionResolution?.reason || "",
       open_property_ticket_count: (facts.openTicketsAtProperty || []).length,
       active_work_count: (facts.activeWork || []).length,
+      service_history_count: facts.serviceHistory?.ok ? facts.serviceHistory.count : null,
       story: scope.story || "",
     },
   });

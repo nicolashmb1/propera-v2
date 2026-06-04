@@ -27,7 +27,7 @@ describe("formatJarvisStaffContextBlock", () => {
     assert.match(block, /PENN/);
     assert.match(block, /303/);
     assert.match(block, /Building lead/);
-    assert.match(block, /ask_propera/i);
+    assert.match(block, /never recite capabilities/i);
   });
 
   it("shows pending proposal from thread", () => {

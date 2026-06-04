@@ -2,6 +2,7 @@ const {
   openaiApiKey,
   openaiCommDraftModel,
   commMainNumberDisplay,
+  commBroadcastFooterMainNumber,
 } = require("../config/env");
 const { openaiChatCompletionsWithRetry } = require("../integrations/openaiTransport");
 
@@ -262,20 +263,32 @@ function appendFooter(messageBody, brandContext, propertyCode, mainNumberDisplay
       : propertyCtx && propertyCtx.displayName
         ? "Management at " + propertyCtx.displayName
         : String(ctx.orgBrandShort || ctx.orgBrandName || "Management").trim());
-  const mainLine = String(mainNumberDisplay || "").trim() || commMainNumberDisplay();
+  const mainLine =
+    String(mainNumberDisplay || "").trim() || commBroadcastFooterMainNumber();
   const lang = normalizeLanguage(language);
 
-  let redirectLine = "For maintenance, call or text " + mainLine + ".";
+  let redirectLine = "";
+  if (mainLine) {
+    redirectLine = "For maintenance, call or text " + mainLine + ".";
+    if (lang === "es") {
+      redirectLine = "Para mantenimiento, llame o envie un texto al " + mainLine + ".";
+    } else if (lang === "pt") {
+      redirectLine = "Para manutencao, ligue ou envie mensagem para " + mainLine + ".";
+    }
+  }
+
   let stopLine = "Reply STOP to opt out.";
   if (lang === "es") {
-    redirectLine = "Para mantenimiento, llame o envie un texto al " + mainLine + ".";
     stopLine = "Responda STOP para dejar de recibir mensajes.";
   } else if (lang === "pt") {
-    redirectLine = "Para manutencao, ligue ou envie mensagem para " + mainLine + ".";
     stopLine = "Responda STOP para sair.";
   }
 
-  return normalizeBody(body + "\n\n- " + label + "\n" + redirectLine + "\n" + stopLine);
+  const footerParts = ["- " + label];
+  if (redirectLine) footerParts.push(redirectLine);
+  footerParts.push(stopLine);
+
+  return normalizeBody(body + "\n\n" + footerParts.join("\n"));
 }
 
 module.exports = {

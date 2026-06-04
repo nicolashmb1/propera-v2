@@ -42,12 +42,39 @@ const {
   createTicketFromTurnoverItem,
   markTurnoverReady,
 } = require("../dal/turnovers");
+const {
+  listUnitOccupancies,
+  getUnitOccupancyById,
+  getCurrentUnitOccupancy,
+  closeUnitOccupancy,
+  patchUnitOccupancy,
+} = require("../dal/unitOccupancies");
+const {
+  listUnitAssets,
+  getUnitAssetById,
+  addUnitAsset,
+  updateUnitAsset,
+  markUnitAssetInactive,
+  replaceUnitAsset,
+} = require("../dal/unitAssets");
+const {
+  syncAfterTenantDeactivated,
+  syncAfterLeaseMarkedVacating,
+  closeOccupancyWithOptions,
+  syncAfterProspectSigned,
+  openOccupancyWithSync,
+  syncLeaseSnapshotToCurrentOccupancy,
+} = require("../lifecycle/unitLifecycleOrchestrator");
+const { listUnitEpisodeTicketHistory } = require("../dal/unitEpisodeTicketHistory");
 const { getSupabase } = require("../db/supabase");
 const { verifyPortalRequest } = require("./portalAuth");
 const {
   turnoverEngineEnabled,
+  unitLifecycleEnabled,
+  leasingEngineEnabled,
   financeTicketCostsEnabled,
   openDeckDayChartEnabled,
+  canManageJarvisStaffSettings,
 } = require("../config/env");
 const { fetchTicketDayCurve, defaultCurveDate } = require("./ticketDayCurve");
 const {
@@ -74,6 +101,10 @@ const {
 } = require("./pushNotifications");
 const { portalPushEnabled } = require("../config/env");
 const { handleJarvisPendingProposal } = require("./handleJarvisPendingProposal");
+const {
+  listStaffJarvisSettingsForOrg,
+  patchStaffJarvisSettingForOrg,
+} = require("../dal/jarvisStaffSettings");
 const { attachPortalOrgContextMiddleware } = require("./resolvePortalOrgContext");
 const {
   canManageOrgSettings,
@@ -115,6 +146,14 @@ const {
   copyPropertyCoverageToAll,
 } = require("../dal/portalOrgResponsibility");
 const { patchAssignmentRulesForOrg } = require("../dal/portalOrgAssignmentRules");
+const {
+  listExpiringLeasesForPortal,
+  patchLeaseRenewalStatus,
+  listProspectsForPortal,
+  createProspectForPortal,
+  patchProspectForPortal,
+  deleteProspectForPortal,
+} = require("../dal/leasingProspects");
 
 function portalOrgFromReq(req) {
   return (
@@ -196,11 +235,42 @@ function registerPortalReadRoutes(app) {
     });
   }
 
+  /** Jarvis per-staff toggles — allowlisted portal login emails only (`PROPERA_JARVIS_SETTINGS_ADMIN_EMAILS`). */
+  function gateJarvisStaffSettings(handler) {
+    return gate(async (req, res, next) => {
+      const org = portalOrgFromReq(req);
+      if (!canManageJarvisStaffSettings(org)) {
+        return res.status(403).json({ ok: false, error: "jarvis_settings_forbidden" });
+      }
+      return handler(req, res, next);
+    });
+  }
+
   /** Portal token + opt-in turnover flag (`PROPERA_TURNOVER_ENGINE_ENABLED=1`). */
   function gateTurnover(handler) {
     return gate(async (req, res, next) => {
       if (!turnoverEngineEnabled()) {
         return res.status(404).json({ ok: false, error: "turnover_engine_disabled" });
+      }
+      return handler(req, res, next);
+    });
+  }
+
+  /** Portal token + unit lifecycle flag (`PROPERA_UNIT_LIFECYCLE_ENABLED=1`). */
+  function gateUnitLifecycle(handler) {
+    return gate(async (req, res, next) => {
+      if (!unitLifecycleEnabled()) {
+        return res.status(404).json({ ok: false, error: "unit_lifecycle_disabled" });
+      }
+      return handler(req, res, next);
+    });
+  }
+
+  /** Portal token + opt-in leasing flag (`PROPERA_LEASING_ENGINE_ENABLED=1`). */
+  function gateLeasing(handler) {
+    return gate(async (req, res, next) => {
+      if (!leasingEngineEnabled()) {
+        return res.status(404).json({ ok: false, error: "leasing_engine_disabled" });
       }
       return handler(req, res, next);
     });
@@ -656,7 +726,11 @@ function registerPortalReadRoutes(app) {
         const code = out.error === "not_found" ? 404 : 400;
         return res.status(code).json({ ok: false, error: out.error || "delete_failed" });
       }
-      return res.status(200).json({ ok: true });
+      const sync = await syncAfterTenantDeactivated(req.params.id, { traceId: req.traceId });
+      return res.status(200).json({
+        ok: true,
+        lifecycle_sync: sync.ok ? sync : { ok: false, error: sync.error },
+      });
     } catch (err) {
       return res.status(500).json({
         ok: false,
@@ -974,6 +1048,381 @@ function registerPortalReadRoutes(app) {
     }
   }));
 
+  /** Unit occupancies V1 — residency episodes (see docs/UNIT_LIFECYCLE_BUILD_PLAN.md) */
+  app.get("/api/portal/occupancies", gateUnitLifecycle(async (req, res) => {
+    try {
+      const property_code = req.query.property_code != null ? String(req.query.property_code) : "";
+      const unit_catalog_id =
+        req.query.unit_catalog_id != null ? String(req.query.unit_catalog_id) : "";
+      const status = req.query.status != null ? String(req.query.status) : "";
+      const out = await listUnitOccupancies({ property_code, unit_catalog_id, status });
+      if (!out.ok) {
+        return res.status(500).json({ ok: false, error: out.error || "list_failed" });
+      }
+      return res.status(200).json({ ok: true, occupancies: out.occupancies });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.get("/api/portal/occupancies/current", gateUnitLifecycle(async (req, res) => {
+    try {
+      const unit_catalog_id =
+        req.query.unit_catalog_id != null
+          ? String(req.query.unit_catalog_id)
+          : req.query.unitCatalogId != null
+            ? String(req.query.unitCatalogId)
+            : "";
+      if (!unit_catalog_id.trim()) {
+        return res.status(400).json({ ok: false, error: "missing_unit_catalog_id" });
+      }
+      const out = await getCurrentUnitOccupancy(unit_catalog_id);
+      if (!out.ok) {
+        return res.status(500).json({ ok: false, error: out.error || "get_failed" });
+      }
+      return res.status(200).json({ ok: true, occupancy: out.occupancy });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.get("/api/portal/occupancies/:id", gateUnitLifecycle(async (req, res) => {
+    try {
+      const out = await getUnitOccupancyById(req.params.id);
+      if (!out.ok) {
+        const code = out.error === "not_found" ? 404 : 500;
+        return res.status(code).json({ ok: false, error: out.error || "get_failed" });
+      }
+      return res.status(200).json({ ok: true, occupancy: out.occupancy });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.post("/api/portal/occupancies/open", gateUnitLifecycle(async (req, res) => {
+    try {
+      const body = req.body || {};
+      const out = await openOccupancyWithSync({
+        property_code: body.property_code ?? body.propertyCode,
+        unit_catalog_id: body.unit_catalog_id ?? body.unitCatalogId,
+        tenant_roster_id: body.tenant_roster_id ?? body.tenantRosterId,
+        started_at: body.started_at ?? body.startedAt,
+        lease_snapshot_json: body.lease_snapshot_json ?? body.leaseSnapshotJson,
+        created_by: body.created_by ?? body.createdBy ?? "",
+        traceId: req.traceId,
+      });
+      if (!out.ok) {
+        const code =
+          out.error === "active_occupancy_exists"
+            ? 409
+            : out.error === "unit_property_mismatch" ||
+                out.error === "unknown_unit" ||
+                out.error === "tenant_property_mismatch" ||
+                out.error === "tenant_unit_mismatch" ||
+                out.error === "unknown_tenant"
+              ? 400
+              : 500;
+        return res.status(code).json({
+          ok: false,
+          error: out.error || "open_failed",
+          existing_occupancy_id: out.existing_occupancy_id,
+        });
+      }
+      return res.status(201).json({
+        ok: true,
+        occupancy_id: out.occupancy_id,
+        occupancy: out.occupancy,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.post("/api/portal/occupancies/:id/close", gateUnitLifecycle(async (req, res) => {
+    try {
+      const body = req.body || {};
+      const out = await closeOccupancyWithOptions(req.params.id, {
+        ended_at: body.ended_at ?? body.endedAt,
+        move_out_turnover_id: body.move_out_turnover_id ?? body.moveOutTurnoverId,
+        start_turnover: body.start_turnover === true || body.startTurnover === true,
+        traceId: req.traceId,
+      });
+      if (!out.ok) {
+        const code =
+          out.error === "not_found"
+            ? 404
+            : out.error === "occupancy_not_current" || out.error === "ended_before_started"
+              ? 409
+              : 400;
+        return res.status(code).json({ ok: false, error: out.error || "close_failed" });
+      }
+      return res.status(200).json({
+        ok: true,
+        occupancy: out.occupancy,
+        turnover_id: out.turnover_id || null,
+        turnover_started: !!out.turnover_started,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.get(
+    "/api/portal/units/:unitCatalogId/episode-ticket-history",
+    gateUnitLifecycle(async (req, res) => {
+      try {
+        const propertyCode = req.query.property_code ?? req.query.propertyCode;
+        const out = await listUnitEpisodeTicketHistory({
+          property_code: propertyCode,
+          unit_catalog_id: req.params.unitCatalogId,
+        });
+        if (!out.ok) {
+          return res.status(400).json({ ok: false, error: out.error || "history_failed" });
+        }
+        return res.status(200).json({ ok: true, episodes: out.episodes });
+      } catch (err) {
+        return res.status(500).json({
+          ok: false,
+          error: String(err && err.message ? err.message : err),
+        });
+      }
+    })
+  );
+
+  app.post(
+    "/api/portal/units/:unitCatalogId/sync-lease-occupancy",
+    gateUnitLifecycle(async (req, res) => {
+      try {
+        const out = await syncLeaseSnapshotToCurrentOccupancy(req.params.unitCatalogId, {
+          traceId: req.traceId,
+        });
+        if (!out.ok) {
+          return res.status(400).json({ ok: false, error: out.error || "sync_failed" });
+        }
+        return res.status(200).json({ ok: true, lifecycle_sync: out });
+      } catch (err) {
+        return res.status(500).json({
+          ok: false,
+          error: String(err && err.message ? err.message : err),
+        });
+      }
+    })
+  );
+
+  app.patch("/api/portal/occupancies/:id", gateUnitLifecycle(async (req, res) => {
+    try {
+      const out = await patchUnitOccupancy(req.params.id, req.body || {}, { traceId: req.traceId });
+      if (!out.ok) {
+        const code =
+          out.error === "not_found"
+            ? 404
+            : out.error === "occupancy_is_past"
+              ? 409
+              : 400;
+        return res.status(code).json({ ok: false, error: out.error || "patch_failed" });
+      }
+      return res.status(200).json({ ok: true, occupancy: out.occupancy });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  /** Unit assets V1 — installed equipment (see docs/UNIT_LIFECYCLE_BUILD_PLAN.md Phase 3) */
+  app.get("/api/portal/unit-assets", gateUnitLifecycle(async (req, res) => {
+    try {
+      const property_code = req.query.property_code != null ? String(req.query.property_code) : "";
+      const unit_catalog_id =
+        req.query.unit_catalog_id != null ? String(req.query.unit_catalog_id) : "";
+      const status = req.query.status != null ? String(req.query.status) : "";
+      const out = await listUnitAssets({ property_code, unit_catalog_id, status });
+      if (!out.ok) {
+        return res.status(500).json({ ok: false, error: out.error || "list_failed" });
+      }
+      return res.status(200).json({ ok: true, assets: out.assets });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.get("/api/portal/unit-assets/:id", gateUnitLifecycle(async (req, res) => {
+    try {
+      const out = await getUnitAssetById(req.params.id);
+      if (!out.ok) {
+        const code = out.error === "not_found" ? 404 : 500;
+        return res.status(code).json({ ok: false, error: out.error || "get_failed" });
+      }
+      return res.status(200).json({ ok: true, asset: out.asset });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.post("/api/portal/unit-assets", gateUnitLifecycle(async (req, res) => {
+    try {
+      const body = req.body || {};
+      const out = await addUnitAsset({
+        property_code: body.property_code ?? body.propertyCode,
+        unit_catalog_id: body.unit_catalog_id ?? body.unitCatalogId,
+        category: body.category,
+        asset_type: body.asset_type ?? body.assetType,
+        make: body.make,
+        model: body.model,
+        serial_number: body.serial_number ?? body.serialNumber,
+        installed_at: body.installed_at ?? body.installedAt,
+        installed_by: body.installed_by ?? body.installedBy,
+        warranty_start: body.warranty_start ?? body.warrantyStart,
+        warranty_end: body.warranty_end ?? body.warrantyEnd,
+        nameplate_photo_url: body.nameplate_photo_url ?? body.nameplatePhotoUrl,
+        source_ticket_id: body.source_ticket_id ?? body.sourceTicketId,
+        source_turnover_id: body.source_turnover_id ?? body.sourceTurnoverId,
+        metadata_json: body.metadata_json ?? body.metadataJson,
+        created_by: body.created_by ?? body.createdBy ?? "",
+        traceId: req.traceId,
+      });
+      if (!out.ok) {
+        const code =
+          out.error === "active_asset_type_exists"
+            ? 409
+            : out.error === "unit_property_mismatch" ||
+                out.error === "unknown_unit" ||
+                out.error === "missing_property_unit_or_type"
+              ? 400
+              : 500;
+        return res.status(code).json({
+          ok: false,
+          error: out.error || "add_failed",
+          existing_asset_id: out.existing_asset_id,
+        });
+      }
+      return res.status(201).json({ ok: true, asset: out.asset });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.patch("/api/portal/unit-assets/:id", gateUnitLifecycle(async (req, res) => {
+    try {
+      const out = await updateUnitAsset(req.params.id, req.body || {}, { traceId: req.traceId });
+      if (!out.ok) {
+        const code =
+          out.error === "not_found"
+            ? 404
+            : out.error === "asset_not_active" || out.error === "active_asset_type_exists"
+              ? 409
+              : 400;
+        return res.status(code).json({
+          ok: false,
+          error: out.error || "patch_failed",
+          existing_asset_id: out.existing_asset_id,
+        });
+      }
+      return res.status(200).json({ ok: true, asset: out.asset });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.post("/api/portal/unit-assets/:id/remove", gateUnitLifecycle(async (req, res) => {
+    try {
+      const out = await markUnitAssetInactive(req.params.id, "removed", { traceId: req.traceId });
+      if (!out.ok) {
+        const code =
+          out.error === "not_found"
+            ? 404
+            : out.error === "asset_not_active"
+              ? 409
+              : 400;
+        return res.status(code).json({ ok: false, error: out.error || "remove_failed" });
+      }
+      return res.status(200).json({ ok: true, asset: out.asset });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  app.post("/api/portal/unit-assets/:id/replace", gateUnitLifecycle(async (req, res) => {
+    try {
+      const body = req.body || {};
+      const out = await replaceUnitAsset(req.params.id, body, { traceId: req.traceId });
+      if (!out.ok) {
+        const code =
+          out.error === "not_found"
+            ? 404
+            : out.error === "asset_not_active" || out.error === "active_asset_type_exists"
+              ? 409
+              : 400;
+        return res.status(code).json({
+          ok: false,
+          error: out.error || "replace_failed",
+          existing_asset_id: out.existing_asset_id,
+        });
+      }
+      return res.status(200).json({
+        ok: true,
+        asset: out.asset,
+        replaced_asset_id: out.replaced_asset_id,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }));
+
+  /** Unit asset nameplate OCR — draft fields for staff confirm (Phase 4 lifecycle). */
+  app.post("/api/portal/scan-unit-asset-nameplate", gateUnitLifecycle(async (req, res) => {
+    const { scanUnitAssetNameplate } = require("../brain/shared/assetNameplateVision");
+    const base64 = String(req.body && req.body.base64 ? req.body.base64 : "").trim();
+    const mimeType = String(req.body && req.body.mimeType ? req.body.mimeType : "image/jpeg").trim();
+
+    if (!base64) return res.status(400).json({ ok: false, error: "base64_required" });
+
+    try {
+      const result = await scanUnitAssetNameplate(base64, mimeType);
+      return res.status(200).json({ ok: true, draft: result });
+    } catch (err) {
+      const msg = String(err && err.message ? err.message : err);
+      if (msg.includes("api_key_missing")) {
+        return res.status(503).json({ ok: false, error: "scan_not_configured" });
+      }
+      return res.status(500).json({ ok: false, error: msg.slice(0, 200) });
+    }
+  }));
+
   /** PM/Task V1 — propera-app Preventive tab (see docs/PM_PROGRAM_ENGINE_V1.md) */
   app.get("/api/portal/program-templates", gate(async (_req, res) => {
     try {
@@ -997,8 +1446,10 @@ function registerPortalReadRoutes(app) {
 
   app.get("/api/portal/program-runs", gate(async (req, res) => {
     try {
+      const org = portalOrgFromReq(req);
       const q = req.query || {};
       const rows = await listProgramRuns({
+        orgScope: org,
         propertyCode: q.propertyCode || q.property_code,
         status: q.status,
         inProgress: q.inProgress || q.in_progress,
@@ -1443,6 +1894,40 @@ function registerPortalReadRoutes(app) {
       const org = portalOrgFromReq(req);
       const out = await listStaffForOrg(sb, org.orgId);
       if (!out.ok) return res.status(500).json({ ok: false, error: out.error || "list_failed" });
+      return res.status(200).json({ ok: true, staff: out.staff });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.get("/api/portal/settings/jarvis/staff", gateJarvisStaffSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const out = await listStaffJarvisSettingsForOrg(sb, org.orgId);
+      if (!out.ok) {
+        const status = out.error === "migration_required" ? 503 : 500;
+        return res.status(status).json({ ok: false, error: out.error || "list_failed", staff: [] });
+      }
+      return res.status(200).json({ ok: true, staff: out.staff });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.patch("/api/portal/settings/jarvis/staff/:staffId", gateJarvisStaffSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await patchStaffJarvisSettingForOrg(sb, org.orgId, req.params.staffId, body);
+      if (!out.ok) {
+        const status =
+          typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "patch_failed" });
+      }
       return res.status(200).json({ ok: true, staff: out.staff });
     } catch (err) {
       return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
@@ -2034,6 +2519,127 @@ function registerPortalReadRoutes(app) {
 
   app.get("/api/portal/jarvis/pending-proposal", gate(async (req, res) => {
     return handleJarvisPendingProposal(req, res);
+  }));
+
+  // ─── Leasing Engine V1 ──────────────────────────────────────────────────────
+
+  app.get("/api/portal/leasing/expiring-leases", gateLeasing(async (req, res) => {
+    try {
+      const org = portalOrgFromReq(req);
+      const rows = await listExpiringLeasesForPortal({
+        orgScope: org,
+        propertyCode: req.query.propertyCode || undefined,
+        renewalStatus: req.query.renewalStatus || undefined,
+        days: req.query.days ? parseInt(req.query.days, 10) : 90,
+      });
+      return res.status(200).json(rows);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err?.message || err) });
+    }
+  }));
+
+  app.patch("/api/portal/leasing/expiring-leases/:leaseId", gateLeasing(async (req, res) => {
+    try {
+      const org = portalOrgFromReq(req);
+      const data = await patchLeaseRenewalStatus({
+        leaseId: req.params.leaseId,
+        renewalStatus: req.body?.renewal_status,
+        renewalNotes: req.body?.renewal_notes,
+        propertyCode: req.body?.property_code || undefined,
+        orgScope: org,
+      });
+      if (!data) {
+        return res.status(404).json({ ok: false, error: "lease_not_found" });
+      }
+      let lifecycleSync = { ok: true, skipped: "not_vacating" };
+      if (String(data.renewal_status || "").trim().toLowerCase() === "vacating") {
+        lifecycleSync = await syncAfterLeaseMarkedVacating(data, { traceId: req.traceId });
+      }
+      return res.status(200).json({
+        ok: true,
+        lease: data,
+        lifecycle_sync: lifecycleSync,
+      });
+    } catch (err) {
+      const msg = String(err?.message || err);
+      const code = msg.includes("org_") || msg.includes("property_code") ? 403 : 400;
+      return res.status(code).json({ ok: false, error: msg });
+    }
+  }));
+
+  app.get("/api/portal/leasing/prospects", gateLeasing(async (req, res) => {
+    try {
+      const org = portalOrgFromReq(req);
+      const rows = await listProspectsForPortal({
+        orgScope: org,
+        propertyCode: req.query.propertyCode || undefined,
+        status: req.query.status || undefined,
+        unitId: req.query.unitId || undefined,
+      });
+      return res.status(200).json(rows);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err?.message || err) });
+    }
+  }));
+
+  app.post("/api/portal/leasing/prospects", gateLeasing(async (req, res) => {
+    try {
+      const org = portalOrgFromReq(req);
+      const data = await createProspectForPortal({ orgScope: org, body: req.body || {} });
+      return res.status(201).json({ ok: true, prospect: data });
+    } catch (err) {
+      const msg = String(err?.message || err);
+      const code = msg.includes("org_") || msg.includes("property_code") || msg.includes("unit_") ? 403 : 400;
+      return res.status(code).json({ ok: false, error: msg });
+    }
+  }));
+
+  app.patch("/api/portal/leasing/prospects/:prospectId", gateLeasing(async (req, res) => {
+    try {
+      const org = portalOrgFromReq(req);
+      const body = req.body || {};
+      const patched = await patchProspectForPortal({
+        prospectId: req.params.prospectId,
+        orgScope: org,
+        body,
+      });
+      if (!patched) {
+        return res.status(404).json({ ok: false, error: "prospect_not_found" });
+      }
+      const { prospect, previous_status: previousStatus } = patched;
+      let lifecycleSync = { ok: true, skipped: "not_signed_transition" };
+      const nowSigned = String(prospect.status || "").trim().toLowerCase() === "signed";
+      if (nowSigned && previousStatus !== "signed") {
+        lifecycleSync = await syncAfterProspectSigned(prospect, {
+          traceId: req.traceId,
+          sync_lease: body.sync_lease ?? body.syncLease,
+        });
+      }
+      return res.status(200).json({
+        ok: true,
+        prospect,
+        lifecycle_sync: lifecycleSync,
+      });
+    } catch (err) {
+      const msg = String(err?.message || err);
+      const code = msg.includes("org_") || msg.includes("unit_") ? 403 : 400;
+      return res.status(code).json({ ok: false, error: msg });
+    }
+  }));
+
+  app.delete("/api/portal/leasing/prospects/:prospectId", gateLeasing(async (req, res) => {
+    try {
+      const org = portalOrgFromReq(req);
+      const out = await deleteProspectForPortal({ prospectId: req.params.prospectId, orgScope: org });
+      if (!out) {
+        return res.status(404).json({ ok: false, error: "prospect_not_found" });
+      }
+      return res.status(200).json({ ok: true });
+    } catch (err) {
+      const msg = String(err?.message || err);
+      const code = msg.includes("org_") ? 403 : 400;
+      return res.status(code).json({ ok: false, error: msg });
+    }
   }));
 
   // ── Expense bill scan ──────────────────────────────────────────────────────

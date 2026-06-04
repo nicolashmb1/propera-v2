@@ -43,6 +43,15 @@ function classifyJarvisIntent(question) {
   }
 
   if (
+    /all (open )?(service|ticket|work)|every open|full list|whole portfolio|across (all |the )?propert|org.?wide|company.?wide|every service/.test(
+      q
+    )
+  ) {
+    intents.add("PORTFOLIO_OPEN_LIST");
+    intents.add("OPEN_LIST");
+  }
+
+  if (
     /ticket|unit|apt|#|about|status|issue|assign|who|tenant|resident|timeline|history|last update|going on/.test(
       q
     ) ||
@@ -52,8 +61,35 @@ function classifyJarvisIntent(question) {
     intents.add("TICKET_DETAIL");
   }
 
+  if (
+    /how many|how much|count|number of/.test(q) &&
+    (/last\s+\d+\s+days?|past\s+\d+\s+days?|last\s+month|this\s+month/.test(q) ||
+      /issue|ticket|service|problem|refrigerator|fridge|dishwasher|hvac|heat|leak|plumb|electrical/.test(
+        q
+      ))
+  ) {
+    intents.add("SERVICE_HISTORY");
+  }
+
+  if (
+    /different units|distinct units|unique units|repeat.*unit|multiple.*unit|units with|unit breakdown|per unit/.test(
+      q
+    ) &&
+    /issue|ticket|service|refrigerator|fridge|dishwasher|heat|last\s+\d+\s+days?/.test(q)
+  ) {
+    intents.add("SERVICE_HISTORY");
+  }
+
   if (!intents.size) intents.add("PROPERTY_SITUATION");
   return intents;
 }
 
-module.exports = { classifyJarvisIntent };
+/**
+ * @param {string} question
+ */
+function isPortfolioOpenListQuestion(question) {
+  const intents = classifyJarvisIntent(question);
+  return intents.has("PORTFOLIO_OPEN_LIST");
+}
+
+module.exports = { classifyJarvisIntent, isPortfolioOpenListQuestion };
