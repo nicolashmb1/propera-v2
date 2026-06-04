@@ -27,16 +27,25 @@ function ticketSearchText(row) {
 }
 
 /**
+ * @param {string} text
+ * @param {string} kw
+ */
+function keywordMatchesText(text, kw) {
+  const k = String(kw || "").trim().toLowerCase();
+  if (k.length < 2) return false;
+  if (/\s/.test(k)) return text.includes(k);
+  const escaped = k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}\\b`).test(text);
+}
+
+/**
  * @param {object} row
  * @param {string[]} keywords
  */
 function ticketMatchesKeywords(row, keywords) {
   const text = ticketSearchText(row);
   if (!text || !keywords.length) return false;
-  return keywords.some((kw) => {
-    const k = String(kw || "").trim().toLowerCase();
-    return k.length >= 2 && text.includes(k);
-  });
+  return keywords.some((kw) => keywordMatchesText(text, kw));
 }
 
 /**
@@ -135,5 +144,6 @@ module.exports = {
   queryServiceHistory,
   ticketSearchText,
   ticketMatchesKeywords,
+  keywordMatchesText,
   mapHistoryRow,
 };

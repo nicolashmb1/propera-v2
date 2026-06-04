@@ -73,7 +73,8 @@ const JARVIS_VOICE_READ_TOOLS = [
     name: "query_service_history",
     description:
       "Count/search past service tickets by issue type and time window (read-only analytics). " +
-      "Use for: how many refrigerator issues last 30 days, dishwasher tickets this month, heat problems at PENN, etc. " +
+      "Use for: how many refrigerator issues last 30 days, icemaker problems at PENN, dishwasher tickets this month, etc. " +
+      "For icemaker use issue_keywords [\"icemaker\"] — do not pass generic words like \"ice\" or \"maker\" alone. " +
       "Searches category + issue text in the database — not just open tickets.",
     parameters: {
       type: "object",
@@ -378,7 +379,7 @@ const JARVIS_VOICE_WRITE_TOOLS = [
     type: "function",
     name: "confirm_pending_proposal",
     description:
-      "Commit the last pending proposal after staff says yes/confirm. Only call when they clearly confirm.",
+      "Commit the pending proposal from THIS call only after you read it back and staff clearly says yes/confirm in a later utterance. Never call with the propose tool in the same turn.",
     parameters: { type: "object", properties: {}, required: [] },
   },
 ];
@@ -644,12 +645,65 @@ function jarvisVoiceToolSchemas() {
  * @param {object} args
  * @param {object} ctx
  */
+function voiceStaffTurnCount(ctx) {
+  const n = Number(ctx.staffTurnCount);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+}
+
+function voiceConfirmIssuedTurn(ctx) {
+  const n = Number(ctx.confirmTokenIssuedAtTurn);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+}
+
+function voiceToolGate(tool, ctx) {
+  const turns = voiceStaffTurnCount(ctx);
+  if (tool === "end_voice_session") return null;
+  if (turns < 1) {
+    return {
+      error: "awaiting_staff_speech",
+      message: "Wait until staff speaks before using tools.",
+      speak: "I'm listening — tell me what you need.",
+    };
+  }
+  if (tool === "confirm_pending_proposal") {
+    const token = String(ctx.pendingConfirmToken || "").trim();
+    if (!token) {
+      return {
+        error: "no_session_proposal",
+        message: "Propose an action in this call before confirming.",
+        speak: "I haven't proposed anything to confirm yet.",
+      };
+    }
+    if (turns <= voiceConfirmIssuedTurn(ctx)) {
+      return {
+        error: "confirm_after_readback",
+        message: "Read back the proposal and wait for staff to say yes in a new utterance.",
+        speak: "Say yes after I read back what I'll do — I can't commit until then.",
+      };
+    }
+    return null;
+  }
+  return null;
+}
+
 async function runJarvisVoiceTool(name, args, ctx) {
   const tool = String(name || "").trim();
   const a = args && typeof args === "object" ? args : {};
 
   if (!ctx.staffContext?.isStaff) {
     return { error: "not_staff", message: "Only authenticated staff can use Jarvis tools." };
+  }
+
+  const gate = voiceToolGate(tool, ctx);
+  if (gate) {
+    emit({
+      level: "info",
+      trace_id: ctx.traceId || null,
+      log_kind: "jarvis_voice_tool",
+      event: "tool_gated",
+      data: { tool, error: gate.error, staff_turn_count: voiceStaffTurnCount(ctx) },
+    });
+    return gate;
   }
 
   if (tool === "query_service_history") {
@@ -666,6 +720,11 @@ async function runJarvisVoiceTool(name, args, ctx) {
         analysis: result.analysis || null,
         distinct_units: result.distinct_unit_count ?? null,
         repeat_units: result.repeat_unit_count ?? null,
+        issue_keywords: Array.isArray(a.issue_keywords)
+          ? a.issue_keywords
+          : a.issue_keywords
+            ? [String(a.issue_keywords)]
+            : [],
       },
     });
     return result;

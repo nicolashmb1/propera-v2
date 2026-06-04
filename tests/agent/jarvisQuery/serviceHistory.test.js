@@ -111,6 +111,24 @@ describe("ticketMatchesKeywords", () => {
     const kws = expandIssueKeywords("refrigerator");
     assert.ok(kws.includes("fridge"));
   });
+
+  it("expandIssueKeywords keeps icemaker phrases tight", () => {
+    assert.deepEqual(expandIssueKeywords("icemaker"), ["icemaker", "ice maker"]);
+    assert.deepEqual(expandIssueKeywords("ice maker"), ["icemaker", "ice maker"]);
+    assert.equal(expandIssueKeywords("ice maker").includes("maker"), false);
+    assert.equal(expandIssueKeywords("ice maker").includes("ice"), false);
+  });
+
+  it("matches icemaker ticket text without matching unrelated maker noise", () => {
+    const row = {
+      category_final: "Appliance",
+      category: "General",
+      message_raw: "Icemaker not dispensing",
+      service_notes: "",
+    };
+    assert.equal(ticketMatchesKeywords(row, expandIssueKeywords("icemaker")), true);
+    assert.equal(ticketMatchesKeywords(row, ["maker"]), false);
+  });
 });
 
 describe("formatServiceHistoryReply", () => {

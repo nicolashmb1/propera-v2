@@ -24,8 +24,11 @@ const {
 const OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime";
 const GREETING_FALLBACK_MS = 1200;
 
-function buildJarvisGaSessionUpdate(systemPrompt, model) {
+function buildJarvisGaSessionUpdate(systemPrompt, model, options = {}) {
+  const vadCreateResponse =
+    options.vadCreateResponse !== undefined ? Boolean(options.vadCreateResponse) : true;
   const voice = voiceAgentVoice() || "alloy";
+  const turnDetection = { ...buildTurnDetection(), create_response: vadCreateResponse };
   return {
     type: "session.update",
     session: {
@@ -38,7 +41,7 @@ function buildJarvisGaSessionUpdate(systemPrompt, model) {
       audio: {
         input: {
           format: { type: "audio/pcm", rate: 24000 },
-          turn_detection: buildTurnDetection(),
+          turn_detection: turnDetection,
         },
         output: {
           format: { type: "audio/pcm", rate: 24000 },
@@ -185,6 +188,19 @@ function emitCopilotFromToolResult(clientWs, toolName, toolResult) {
       },
     });
   }
+
+  if (toolResult.read_only && toolName === "query_service_history") {
+    const message = String(toolResult.text || toolResult.speak || "").trim();
+    if (message) {
+      safeSend(clientWs, {
+        type: "copilot.receipt",
+        receipt: {
+          op: "service_history",
+          message,
+        },
+      });
+    }
+  }
 }
 
 function emitCopilotScopeSummary(clientWs, scope) {
@@ -273,11 +289,12 @@ function emitCopilotPageAnchor(clientWs, pageContext) {
   safeSend(clientWs, { type: "copilot.ticket", ticket, source: "page_context" });
 }
 
-function emitCopilotFromThreadState(clientWs, thread, scope) {
+function emitCopilotFromThreadState(clientWs, thread, scope, options = {}) {
   if (!thread) return;
 
+  const skipPending = options.skipPendingProposal === true;
   const pending = latestAwaitingProposal(thread.pendingProposals || []);
-  if (pending && String(pending.state || "") === "awaiting_confirm") {
+  if (!skipPending && pending && String(pending.state || "") === "awaiting_confirm") {
     const exp = pending.expires_at ? new Date(String(pending.expires_at)).getTime() : 0;
     if (!exp || Date.now() <= exp) {
       const anchor = thread.scopeSnapshot?.anchor || scope?.anchor;
@@ -332,6 +349,9 @@ async function handleJarvisPortalStream(clientWs) {
   let pendingResponseAfterTool = false;
   let greetingSent = false;
   let greetingFallbackTimer = null;
+  let vadAutoResponseEnabled = false;
+  let cachedSystemPrompt = "";
+  let cachedModel = "";
 
   const apiKey = openaiApiKey();
   if (!apiKey) {
@@ -356,6 +376,33 @@ async function handleJarvisPortalStream(clientWs) {
     safeSend(clientWs, { type: "session.ready" });
   }
 
+  function responseDoneTerminal(status) {
+    const s = String(status || "").toLowerCase();
+    return s === "completed" || s === "cancelled" || s === "incomplete";
+  }
+
+  /** Single gate for response.create — avoids greeting/VAD/tool collisions. */
+  function scheduleResponseCreate() {
+    if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) return false;
+    if (responseInProgress) {
+      pendingResponseAfterTool = true;
+      return false;
+    }
+    safeSend(openaiWs, { type: "response.create" });
+    responseInProgress = true;
+    return true;
+  }
+
+  function enableVadAutoResponse() {
+    if (vadAutoResponseEnabled || !openaiWs || openaiWs.readyState !== WebSocket.OPEN) return;
+    if (!cachedSystemPrompt) return;
+    vadAutoResponseEnabled = true;
+    safeSend(
+      openaiWs,
+      buildJarvisGaSessionUpdate(cachedSystemPrompt, cachedModel, { vadCreateResponse: true })
+    );
+  }
+
   function startGreetingOnce() {
     if (greetingSent || !openaiWs || openaiWs.readyState !== WebSocket.OPEN) return;
     greetingSent = true;
@@ -363,12 +410,15 @@ async function handleJarvisPortalStream(clientWs) {
       clearTimeout(greetingFallbackTimer);
       greetingFallbackTimer = null;
     }
-    safeSend(openaiWs, { type: "response.create" });
-    responseInProgress = true;
+    scheduleResponseCreate();
   }
 
   let pendingConfirmToken = "";
   let pendingSessionEnd = false;
+  /** Staff utterances heard this call (gates writes until someone actually spoke). */
+  let staffTurnCount = 0;
+  /** staffTurnCount when the current pending confirm token was issued. */
+  let confirmTokenIssuedAtTurn = 0;
 
   function toolCtx() {
     return {
@@ -378,8 +428,12 @@ async function handleJarvisPortalStream(clientWs) {
       pageContext,
       scope: voiceScope,
       pendingConfirmToken,
+      staffTurnCount,
+      confirmTokenIssuedAtTurn,
+      requireSessionConfirmToken: true,
       onPendingConfirm: (token) => {
         pendingConfirmToken = String(token || "").trim();
+        confirmTokenIssuedAtTurn = staffTurnCount;
       },
       onSessionEndRequested: () => {
         pendingSessionEnd = true;
@@ -417,21 +471,13 @@ async function handleJarvisPortalStream(clientWs) {
 
     emitCopilotFromToolResult(clientWs, toolName, toolResult);
 
-    if (responseInProgress) {
-      pendingResponseAfterTool = true;
-    } else {
-      safeSend(openaiWs, { type: "response.create" });
-      responseInProgress = true;
-    }
+    scheduleResponseCreate();
   }
 
   function flushPendingResponse() {
     if (!pendingResponseAfterTool) return;
     pendingResponseAfterTool = false;
-    if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
-      safeSend(openaiWs, { type: "response.create" });
-      responseInProgress = true;
-    }
+    scheduleResponseCreate();
   }
 
   function maybeEndSessionAfterResponse() {
@@ -470,9 +516,10 @@ async function handleJarvisPortalStream(clientWs) {
       staffContext,
       pageContext,
       traceId,
+      forVoice: true,
     });
     voiceScope = loaded.scope;
-    emitCopilotFromThreadState(clientWs, loaded.thread, loaded.scope);
+    emitCopilotFromThreadState(clientWs, loaded.thread, loaded.scope, { skipPendingProposal: true });
     emitCopilotScopeSummary(clientWs, loaded.scope);
 
     const systemPrompt = buildJarvisSystemPrompt({
@@ -481,12 +528,18 @@ async function handleJarvisPortalStream(clientWs) {
     });
 
     const model = voiceModel() || "gpt-realtime-2";
+    cachedSystemPrompt = systemPrompt;
+    cachedModel = model;
+    vadAutoResponseEnabled = false;
     openaiWs = new WebSocket(`${OPENAI_REALTIME_URL}?model=${encodeURIComponent(model)}`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
 
     const configure = () => {
-      safeSend(openaiWs, buildJarvisGaSessionUpdate(systemPrompt, model));
+      safeSend(
+        openaiWs,
+        buildJarvisGaSessionUpdate(systemPrompt, model, { vadCreateResponse: false })
+      );
     };
 
     openaiWs.on("open", configure);
@@ -520,16 +573,28 @@ async function handleJarvisPortalStream(clientWs) {
         });
       }
       if (msg.type === "conversation.item.input_audio_transcription.completed" && msg.transcript) {
+        const userText = String(msg.transcript).trim();
+        if (userText.length >= 2) {
+          staffTurnCount += 1;
+        }
         safeSend(clientWs, { type: "transcript.user", text: String(msg.transcript) });
       }
 
-      if (msg.type === "session.created" || msg.type === "session.updated") {
+      if (msg.type === "session.created") {
         markSessionReady();
-        if (msg.type === "session.updated") {
-          if (greetingFallbackTimer) {
-            clearTimeout(greetingFallbackTimer);
-            greetingFallbackTimer = null;
-          }
+        if (!greetingSent && !greetingFallbackTimer) {
+          greetingFallbackTimer = setTimeout(() => startGreetingOnce(), GREETING_FALLBACK_MS);
+        }
+        return;
+      }
+
+      if (msg.type === "session.updated") {
+        markSessionReady();
+        if (greetingFallbackTimer) {
+          clearTimeout(greetingFallbackTimer);
+          greetingFallbackTimer = null;
+        }
+        if (!vadAutoResponseEnabled) {
           startGreetingOnce();
         }
         return;
@@ -540,9 +605,15 @@ async function handleJarvisPortalStream(clientWs) {
       }
 
       if (msg.type === "response.done") {
-        responseInProgress = false;
-        flushPendingResponse();
-        maybeEndSessionAfterResponse();
+        const status = String(msg.response?.status || "").toLowerCase();
+        if (responseDoneTerminal(status)) {
+          responseInProgress = false;
+          if (greetingSent && !vadAutoResponseEnabled) {
+            enableVadAutoResponse();
+          }
+          flushPendingResponse();
+          maybeEndSessionAfterResponse();
+        }
       }
 
       if (msg.type === "response.function_call_arguments.done") {
@@ -558,6 +629,20 @@ async function handleJarvisPortalStream(clientWs) {
       }
 
       if (msg.type === "error") {
+        const errObj = msg.error && typeof msg.error === "object" ? msg.error : {};
+        const errCode = String(errObj.code || "").trim();
+        const errMessage = String(errObj.message || msg.message || "Realtime API error").trim();
+        if (errCode === "conversation_already_has_active_response") {
+          pendingResponseAfterTool = true;
+          emit({
+            level: "info",
+            trace_id: traceId,
+            log_kind: "jarvis_voice",
+            event: "openai_response_busy_queued",
+            data: { message: errMessage.slice(0, 200) },
+          });
+          return;
+        }
         emit({
           level: "error",
           trace_id: traceId,
@@ -567,7 +652,7 @@ async function handleJarvisPortalStream(clientWs) {
         });
         safeSend(clientWs, {
           type: "error",
-          message: String(msg.error?.message || "Realtime API error"),
+          message: errMessage,
         });
       }
     });

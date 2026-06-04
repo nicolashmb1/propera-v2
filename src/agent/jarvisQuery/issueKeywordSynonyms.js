@@ -8,6 +8,7 @@ const ISSUE_SYNONYMS = {
   fridge: ["fridge", "refrigerator", "refrig", "freezer"],
   freezer: ["freezer", "refrigerator", "fridge"],
   dishwasher: ["dishwasher", "dish washer"],
+  icemaker: ["icemaker", "ice maker", "ice-maker"],
   microwave: ["microwave"],
   oven: ["oven", "stove", "range"],
   stove: ["stove", "oven", "range", "burner"],
@@ -62,6 +63,8 @@ const STOP_WORDS = new Set([
   "was",
   "were",
   "about",
+  "maker",
+  "ice",
 ]);
 
 /**
@@ -73,7 +76,22 @@ function expandIssueKeywords(phrase) {
     .trim()
     .toLowerCase()
     .replace(/[^\w\s/-]/g, " ");
-  const tokens = raw.split(/\s+/).filter((w) => w.length > 2 && !STOP_WORDS.has(w));
+  const normalized = raw.replace(/-/g, " ").replace(/\s+/g, " ").trim();
+  if (!normalized) return [];
+
+  if (/ice\s*maker|icemaker/.test(normalized.replace(/\s/g, ""))) {
+    return ["icemaker", "ice maker"];
+  }
+
+  const compactPhrase = normalized.replace(/\s+/g, " ");
+  const phraseSyns = ISSUE_SYNONYMS[compactPhrase];
+  if (phraseSyns) return [...new Set(phraseSyns)];
+
+  const nospace = compactPhrase.replace(/\s/g, "");
+  const nospaceSyns = ISSUE_SYNONYMS[nospace];
+  if (nospaceSyns) return [...new Set(nospaceSyns)];
+
+  const tokens = compactPhrase.split(/\s+/).filter((w) => w.length > 2 && !STOP_WORDS.has(w));
   if (!tokens.length) return [];
 
   const out = new Set();
@@ -85,9 +103,8 @@ function expandIssueKeywords(phrase) {
     }
   }
 
-  // Whole phrase match for multi-word (e.g. "heat exchanger")
-  const compact = tokens.join(" ");
-  if (compact.length > 4) out.add(compact);
+  const joined = tokens.join(" ");
+  if (joined.length > 4) out.add(joined);
 
   return Array.from(out);
 }

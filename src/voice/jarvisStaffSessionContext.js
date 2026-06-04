@@ -65,7 +65,15 @@ async function loadStaffRoleHints(sb, staffId, propertyCode) {
  * @param {object | null} [pageContext]
  * @param {string} [propertyCatalogLine]
  */
-function formatJarvisStaffContextBlock(scope, roleHints, thread, pageContext, propertyCatalogLine, portfolioOpenCount) {
+function formatJarvisStaffContextBlock(
+  scope,
+  roleHints,
+  thread,
+  pageContext,
+  propertyCatalogLine,
+  portfolioOpenCount,
+  forVoice = false
+) {
   const lines = ["## Staff Jarvis context (system — authoritative for this session)"];
 
   const actor = scope?.actor || {};
@@ -133,7 +141,13 @@ function formatJarvisStaffContextBlock(scope, roleHints, thread, pageContext, pr
   if (thread) {
     const pending = latestAwaitingProposal(thread.pendingProposals || []);
     if (pending?.summary_human) {
-      lines.push(`Pending confirm: ${pending.summary_human}`);
+      if (forVoice) {
+        lines.push(
+          "Thread may have an old unconfirmed action — ignore unless staff explicitly asks to continue it; never confirm or re-propose on your own."
+        );
+      } else {
+        lines.push(`Pending confirm: ${pending.summary_human}`);
+      }
     }
     const receipt = thread.lastReceipt;
     if (receipt && typeof receipt === "object") {
@@ -262,6 +276,7 @@ async function loadJarvisStaffSessionContext(opts) {
     }
   }
 
+  const forVoice = opts.forVoice === true;
   const promptBlock = scope
     ? formatJarvisStaffContextBlock(
         scope,
@@ -269,7 +284,8 @@ async function loadJarvisStaffSessionContext(opts) {
         thread,
         pageContext,
         propertyCatalogLine,
-        portfolioOpenCount
+        portfolioOpenCount,
+        forVoice
       )
     : "";
 

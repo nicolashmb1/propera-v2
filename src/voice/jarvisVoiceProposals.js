@@ -1868,6 +1868,14 @@ async function confirmPendingProposal(ctx) {
 
   let confirmToken = String(ctx.pendingConfirmToken || "").trim();
 
+  if (!confirmToken && ctx.requireSessionConfirmToken) {
+    return {
+      error: "no_session_proposal",
+      message: "Nothing to confirm in this call — propose the action first, read it back, then wait for staff to say yes.",
+      speak: "I need to propose the action and hear you say yes before I commit anything.",
+    };
+  }
+
   if (!confirmToken && jarvisThreadEnabled()) {
     const sb = getSupabase();
     if (sb && ctx.staffActorKey) {
