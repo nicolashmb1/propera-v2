@@ -18,4 +18,9 @@ describe("buildJarvisSystemPrompt", () => {
     assert.match(p, /propose_schedule_ticket/i);
     assert.match(p, /## context/);
   });
+
+  it("uses custom agent display name when provided", () => {
+    const p = buildJarvisSystemPrompt({ agentName: "Nova" });
+    assert.match(p, /You are Nova, Propera's staff operations assistant/i);
+  });
 });

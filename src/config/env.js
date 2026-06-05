@@ -103,8 +103,45 @@ function voiceModel() {
   return String(env("PROPERA_VOICE_MODEL", "gpt-realtime-2")).trim();
 }
 
+const OPENAI_REALTIME_VOICES = new Set([
+  "alloy",
+  "ash",
+  "ballad",
+  "coral",
+  "echo",
+  "sage",
+  "shimmer",
+  "verse",
+  "marin",
+  "cedar",
+]);
+
 function voiceAgentVoice() {
-  return String(env("PROPERA_VOICE_AGENT_VOICE", "alloy")).trim();
+  let v = String(env("PROPERA_VOICE_AGENT_VOICE", "alloy")).trim().toLowerCase();
+  if (v === "shimer") v = "shimmer";
+  if (!OPENAI_REALTIME_VOICES.has(v)) return "alloy";
+  return v;
+}
+
+/** Spoken display name for tenant maintenance voice (e.g. greeting: "Hi — Max with …"). */
+function voiceAgentName() {
+  const v = String(env("PROPERA_VOICE_AGENT_NAME", "Max")).trim();
+  return v.slice(0, 32) || "Max";
+}
+
+/** Spoken display name for staff Jarvis live voice. */
+function jarvisAgentName() {
+  const v = String(env("PROPERA_JARVIS_AGENT_NAME", "Jarvis")).trim();
+  return v.slice(0, 32) || "Jarvis";
+}
+
+/** Voice delivery accent/style — british | american | australian | neutral (default). */
+function voiceSpeakingStyle() {
+  const v = String(env("PROPERA_VOICE_SPEAKING_STYLE", "neutral")).trim().toLowerCase();
+  if (v === "british" || v === "uk" || v === "en-gb" || v === "en_gb") return "british";
+  if (v === "american" || v === "us" || v === "en-us" || v === "en_us") return "american";
+  if (v === "australian" || v === "au" || v === "en-au" || v === "en_au") return "australian";
+  return "neutral";
 }
 
 /** semantic_vad eagerness: low | medium | high — default low to avoid cutting callers off mid-thought */
@@ -654,6 +691,16 @@ function jarvisAskLlmModel() {
   return m || openaiModelExtract();
 }
 
+/**
+ * Max wait for the optional Ask LLM wording pass before falling back to the
+ * deterministic reply. Bounds portal-chat P95 (was a hardcoded 20s). Clamped [2s, 30s].
+ */
+function jarvisAskLlmTimeoutMs() {
+  const n = parseInt(env("JARVIS_ASK_LLM_TIMEOUT_MS", "10000"), 10);
+  if (!Number.isFinite(n)) return 10000;
+  return Math.min(Math.max(n, 2000), 30000);
+}
+
 /** Adapter conversation row TTL (hours). Default 48; 0 = disable lazy expiry. */
 function tenantAgentConversationTtlHours() {
   const raw = env("TENANT_AGENT_CONVERSATION_TTL_HOURS", "48");
@@ -683,6 +730,9 @@ module.exports = {
   canManageJarvisStaffSettings,
   voiceModel,
   voiceAgentVoice,
+  voiceAgentName,
+  jarvisAgentName,
+  voiceSpeakingStyle,
   voiceVadEagerness,
   voiceTurnDetectionMode,
   voiceSilenceDurationMs,
@@ -706,6 +756,7 @@ module.exports = {
   jarvisAskEnabled,
   jarvisAskLlmEnabled,
   jarvisAskLlmModel,
+  jarvisAskLlmTimeoutMs,
   jarvisPlanEnabled,
   jarvisCommPortfolioEnabled,
   jarvisCommDefaultDeliveryMode,

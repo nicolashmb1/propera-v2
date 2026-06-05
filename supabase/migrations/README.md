@@ -55,6 +55,7 @@ Run SQL files in **numeric order** in the Supabase SQL Editor (same project as `
 | **088_unit_assets_v1.sql** | **`unit_assets`**, **`portal_unit_assets_v1`**; one active row per asset type per unit | **`unitAssets.js`**, portal **`/api/portal/unit-assets*`**; same lifecycle flag; see **`docs/UNIT_LIFECYCLE_BUILD_PLAN.md`** Phase 3 |
 | **089_unit_asset_nameplates_storage.sql** | Private Supabase bucket **`unit-asset-nameplates`** for nameplate photos | App upload **`/api/unit-assets/nameplate/upload`**; OCR via **`assetNameplateVision.js`** |
 | **090_ticket_episode_stamp.sql** | `tickets.unit_occupancy_id`, `tickets.tenant_roster_id_at_open` | **`ticketEpisodeStamp.js`** at create; History API **`unitEpisodeTicketHistory.js`**; run after **087** |
+| **091_access_locations_staff_only.sql** | `access_locations.staff_only` | Amenity program **Internal only** — staff command center only; blocks tenant portal / agent / inbound ACCESS_* |
 
 ### Minimum paths
 

@@ -23,6 +23,33 @@ const {
 
 const OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime";
 const GREETING_FALLBACK_MS = 1200;
+/** Ping clients on this cadence; terminate any that miss a pong (half-open drop). */
+const HEARTBEAT_INTERVAL_MS = 30000;
+
+/**
+ * One heartbeat sweep over a set of client sockets: terminate clients that never
+ * answered the previous ping (dead/half-open), ping the rest. A `pong` handler
+ * resets `isAlive`. Exported for tests. Pure over the passed iterable.
+ * @param {Iterable<{ isAlive?: boolean, terminate?: () => void, ping?: () => void }>} clients
+ */
+function heartbeatSweep(clients) {
+  for (const ws of clients || []) {
+    if (ws.isAlive === false) {
+      try {
+        ws.terminate && ws.terminate();
+      } catch (_) {
+        /* already gone */
+      }
+      continue;
+    }
+    ws.isAlive = false;
+    try {
+      ws.ping && ws.ping();
+    } catch (_) {
+      /* socket dying — terminated next sweep */
+    }
+  }
+}
 
 function buildJarvisGaSessionUpdate(systemPrompt, model, options = {}) {
   const vadCreateResponse =
@@ -42,6 +69,7 @@ function buildJarvisGaSessionUpdate(systemPrompt, model, options = {}) {
         input: {
           format: { type: "audio/pcm", rate: 24000 },
           turn_detection: turnDetection,
+          transcription: { model: "gpt-4o-mini-transcribe", language: "en" },
         },
         output: {
           format: { type: "audio/pcm", rate: 24000 },
@@ -155,25 +183,57 @@ function emitCopilotFromToolResult(clientWs, toolName, toolResult) {
   }
 
   if (toolResult.needs_confirm) {
+    const op = String(toolResult.op || "proposal").trim();
+    const portalFields = extractProposalPortalFields(op, toolResult);
     safeSend(clientWs, {
       type: "copilot.proposal",
       proposal: {
-        op: String(toolResult.op || "proposal"),
+        op,
         summary: String(toolResult.summary_human || toolResult.summary || "").trim(),
-        humanTicketId: String(toolResult.human_ticket_id || ticketPayload?.humanTicketId || "").trim(),
+        humanTicketId:
+          String(toolResult.human_ticket_id || ticketPayload?.humanTicketId || portalFields.humanTicketId || "")
+            .trim() || undefined,
         needsConfirm: true,
         confirmToken: String(toolResult.confirm_token || "").trim() || undefined,
-        amountCents: Number(toolResult.amount_cents) || undefined,
-        entryType: String(toolResult.entry_type || "").trim() || undefined,
-        vendorName: String(toolResult.vendor_name || "").trim() || undefined,
-        noteText: String(toolResult.note_text || toolResult.noteText || "").trim() || undefined,
-        dispatch: toolResult.dispatch === false ? false : toolResult.dispatch === true ? true : undefined,
-        propertyCode: String(toolResult.property_code || "").trim() || undefined,
-        unitLabel: String(toolResult.unit_label || "").trim() || undefined,
-        issue: String(toolResult.issue_text || toolResult.issue || "").trim() || undefined,
-        preferredWindow: String(toolResult.preferred_window || "").trim() || undefined,
-        statusTo: String(toolResult.status_to || "").trim() || undefined,
-        category: String(toolResult.category || "").trim() || undefined,
+        amountCents:
+          portalFields.amountCents ??
+          (Number(toolResult.amount_cents) > 0 ? Number(toolResult.amount_cents) : undefined),
+        entryType: portalFields.entryType || String(toolResult.entry_type || "").trim() || undefined,
+        vendorName:
+          portalFields.vendorName || String(toolResult.vendor_name || "").trim() || undefined,
+        noteText:
+          portalFields.noteText ||
+          String(toolResult.note_text || toolResult.noteText || "").trim() ||
+          undefined,
+        dispatch:
+          toolResult.dispatch === false ? false : toolResult.dispatch === true ? true : portalFields.dispatch,
+        propertyCode: portalFields.propertyCode || String(toolResult.property_code || "").trim() || undefined,
+        unitLabel: portalFields.unitLabel || String(toolResult.unit_label || "").trim() || undefined,
+        issue:
+          portalFields.issue ||
+          String(toolResult.issue_text || toolResult.issue || "").trim() ||
+          undefined,
+        preferredWindow:
+          portalFields.preferredWindow || String(toolResult.preferred_window || "").trim() || undefined,
+        statusTo: portalFields.statusTo || String(toolResult.status_to || "").trim() || undefined,
+        category: portalFields.category || String(toolResult.category || "").trim() || undefined,
+        amenityName: portalFields.amenityName,
+        bookingLabel: portalFields.bookingLabel,
+        tenantName: portalFields.tenantName,
+        scheduleSummary: portalFields.scheduleSummary,
+        policySummary: portalFields.policySummary,
+        maxDurationMin: portalFields.maxDurationMin,
+        audienceLabel: portalFields.audienceLabel,
+        willSend: portalFields.willSend,
+        skippedNoPhone: portalFields.skippedNoPhone,
+        skippedOptOut: portalFields.skippedOptOut,
+        messageBody: portalFields.messageBody,
+        finalMessagePreview: portalFields.finalMessagePreview,
+        smsSegments: portalFields.smsSegments,
+        campaignId: portalFields.campaignId,
+        commType: portalFields.commType,
+        deliveryMode: portalFields.deliveryMode,
+        recipientsPreview: portalFields.recipientsPreview,
       },
     });
   }
@@ -187,6 +247,11 @@ function emitCopilotFromToolResult(clientWs, toolName, toolResult) {
         humanTicketId: String(toolResult.human_ticket_id || "").trim() || undefined,
       },
     });
+    safeSend(clientWs, { type: "copilot.proposal.clear" });
+  }
+
+  if (toolResult.dismissed === true || toolResult.pending_cleared === true) {
+    safeSend(clientWs, { type: "copilot.proposal.clear" });
   }
 
   if (toolResult.read_only && toolName === "query_service_history") {
@@ -267,6 +332,8 @@ function proposalFieldsFromPending(pending, anchor) {
     smsSegments: fields.smsSegments,
     campaignId: fields.campaignId,
     commType: fields.commType,
+    deliveryMode: fields.deliveryMode,
+    recipientsPreview: fields.recipientsPreview,
   };
 }
 
@@ -323,6 +390,14 @@ function emitCopilotFromThreadState(clientWs, thread, scope, options = {}) {
 function createJarvisVoiceWss() {
   const wss = new WebSocket.Server({ noServer: true });
   wss.on("connection", handleJarvisPortalStream);
+
+  // Detect half-open client sockets (mobile/network drop with no close frame) so
+  // the paired OpenAI Realtime connection is freed instead of leaking. terminate()
+  // fires clientWs 'close', which tears the upstream socket down.
+  const heartbeat = setInterval(() => heartbeatSweep(wss.clients), HEARTBEAT_INTERVAL_MS);
+  if (typeof heartbeat.unref === "function") heartbeat.unref();
+  wss.on("close", () => clearInterval(heartbeat));
+
   return wss;
 }
 
@@ -352,6 +427,34 @@ async function handleJarvisPortalStream(clientWs) {
   let vadAutoResponseEnabled = false;
   let cachedSystemPrompt = "";
   let cachedModel = "";
+
+  // Heartbeat liveness: createJarvisVoiceWss pings; a pong marks the socket alive.
+  clientWs.isAlive = true;
+  clientWs.on("pong", () => {
+    clientWs.isAlive = true;
+  });
+
+  // Single idempotent teardown — closes BOTH sockets and clears timers so a drop
+  // or error on either side never leaks the paired connection.
+  let toreDown = false;
+  function teardown() {
+    if (toreDown) return;
+    toreDown = true;
+    if (greetingFallbackTimer) {
+      clearTimeout(greetingFallbackTimer);
+      greetingFallbackTimer = null;
+    }
+    try {
+      if (openaiWs && openaiWs.readyState === WebSocket.OPEN) openaiWs.close();
+    } catch (_) {
+      /* already closing */
+    }
+    try {
+      if (clientWs.readyState === WebSocket.OPEN) clientWs.close();
+    } catch (_) {
+      /* already closing */
+    }
+  }
 
   const apiKey = openaiApiKey();
   if (!apiKey) {
@@ -417,8 +520,18 @@ async function handleJarvisPortalStream(clientWs) {
   let pendingSessionEnd = false;
   /** Staff utterances heard this call (gates writes until someone actually spoke). */
   let staffTurnCount = 0;
-  /** staffTurnCount when the current pending confirm token was issued. */
   let confirmTokenIssuedAtTurn = 0;
+  let staffSpeechSeen = false;
+  let lastStaffTranscript = "";
+
+  function noteStaffUtterance(transcript) {
+    const text = String(transcript || "").trim();
+    if (text.length >= 2) {
+      staffSpeechSeen = true;
+      staffTurnCount += 1;
+      lastStaffTranscript = text;
+    }
+  }
 
   function toolCtx() {
     return {
@@ -429,11 +542,16 @@ async function handleJarvisPortalStream(clientWs) {
       scope: voiceScope,
       pendingConfirmToken,
       staffTurnCount,
+      staffSpeechSeen,
+      lastStaffTranscript,
       confirmTokenIssuedAtTurn,
       requireSessionConfirmToken: true,
       onPendingConfirm: (token) => {
         pendingConfirmToken = String(token || "").trim();
         confirmTokenIssuedAtTurn = staffTurnCount;
+      },
+      onPendingClear: () => {
+        pendingConfirmToken = "";
       },
       onSessionEndRequested: () => {
         pendingSessionEnd = true;
@@ -573,11 +691,12 @@ async function handleJarvisPortalStream(clientWs) {
         });
       }
       if (msg.type === "conversation.item.input_audio_transcription.completed" && msg.transcript) {
-        const userText = String(msg.transcript).trim();
-        if (userText.length >= 2) {
-          staffTurnCount += 1;
-        }
+        noteStaffUtterance(msg.transcript);
         safeSend(clientWs, { type: "transcript.user", text: String(msg.transcript) });
+      }
+
+      if (msg.type === "input_audio_buffer.speech_stopped" && vadAutoResponseEnabled) {
+        staffSpeechSeen = true;
       }
 
       if (msg.type === "session.created") {
@@ -659,7 +778,7 @@ async function handleJarvisPortalStream(clientWs) {
 
     openaiWs.on("close", () => {
       emit({ level: "info", trace_id: traceId, log_kind: "jarvis_voice", event: "openai_ws_closed" });
-      if (clientWs.readyState === WebSocket.OPEN) clientWs.close();
+      teardown();
     });
 
     openaiWs.on("error", (err) => {
@@ -670,6 +789,7 @@ async function handleJarvisPortalStream(clientWs) {
         event: "openai_ws_error",
         data: { error: String(err?.message || err) },
       });
+      teardown();
     });
   }
 
@@ -721,8 +841,7 @@ async function handleJarvisPortalStream(clientWs) {
 
   clientWs.on("close", () => {
     emit({ level: "info", trace_id: traceId, log_kind: "jarvis_voice", event: "client_ws_closed" });
-    if (greetingFallbackTimer) clearTimeout(greetingFallbackTimer);
-    if (openaiWs && openaiWs.readyState === WebSocket.OPEN) openaiWs.close();
+    teardown();
   });
 
   clientWs.on("error", (err) => {
@@ -733,6 +852,7 @@ async function handleJarvisPortalStream(clientWs) {
       event: "client_ws_error",
       data: { error: String(err?.message || err) },
     });
+    teardown();
   });
 }
 
@@ -740,5 +860,7 @@ module.exports = {
   createJarvisVoiceWss,
   buildJarvisGaSessionUpdate,
   handleJarvisPortalStream,
+  heartbeatSweep,
   GREETING_FALLBACK_MS,
+  HEARTBEAT_INTERVAL_MS,
 };

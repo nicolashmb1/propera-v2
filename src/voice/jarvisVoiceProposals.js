@@ -53,6 +53,7 @@ const {
   findRecentDuplicateAppendNote,
 } = require("../dal/jarvisOperatorThreads");
 const { guardPendingProposalBeforeNewPropose } = require("../agent/proposals/guardPendingProposal");
+const { dismissJarvisPendingProposal } = require("../agent/proposals/dismissJarvisPendingProposal");
 const { refreshCommCampaignProposalHit } = require("../agent/proposals/commCampaignProposalGuard");
 const { executeJarvisConfirm } = require("../agent/proposals/executeJarvisConfirm");
 const { PROPOSAL_OPS } = require("../agent/proposals/types");
@@ -1846,10 +1847,15 @@ async function proposeSendCommunicationCampaign(args, ctx) {
     summary_human: prepared.summary,
     audience_label: prepared.audienceLabel,
     will_send: prepared.willSend,
+    skipped_no_phone: prepared.skippedNoPhone,
+    skipped_opt_out: prepared.skippedOptOut,
     message_body: prepared.messageBody,
     final_message_preview: prepared.finalMessagePreview,
     sms_segments: prepared.smsSegments,
     campaign_id: prepared.campaignId,
+    comm_type: prepared.commType,
+    delivery_mode: String(prepared.audienceFilter?.delivery_mode || "sms_only").trim(),
+    recipients_sample: (prepared.recipientsSample || []).slice(0, 8),
     confirm_token: confirmToken,
     speak,
   };
@@ -1910,6 +1916,15 @@ async function confirmPendingProposal(ctx) {
     return { error: "confirm_in_flight", message: result.replyText, speak: result.replyText };
   }
   if (!result.ok) {
+    if (result.error === "commit_failed" || result.error === "stale_proposal") {
+      await dismissJarvisPendingProposal({
+        staffActorKey: ctx.staffActorKey,
+        confirmToken,
+        traceId: ctx.traceId,
+        reason: "failed",
+      });
+      ctx.onPendingClear?.();
+    }
     emit({
       level: "warn",
       trace_id: ctx.traceId || null,
@@ -1925,6 +1940,7 @@ async function confirmPendingProposal(ctx) {
       error: result.error || "commit_failed",
       message: result.replyText,
       speak: result.replyText,
+      pending_cleared: result.error === "commit_failed" || result.error === "stale_proposal",
     };
   }
 
@@ -1944,6 +1960,40 @@ async function confirmPendingProposal(ctx) {
     human_ticket_id: result.human_ticket_id,
     multi_ticket: result.multi_ticket,
     speak: result.idempotent ? result.reply : undefined,
+  };
+}
+
+/**
+ * Staff cancel — clear awaiting confirm without committing.
+ * @param {object} ctx
+ */
+async function dismissPendingProposal(ctx) {
+  const result = await dismissJarvisPendingProposal({
+    staffActorKey: ctx.staffActorKey,
+    confirmToken: ctx.pendingConfirmToken || undefined,
+    traceId: ctx.traceId,
+    reason: "rejected",
+  });
+
+  if (!result.ok) {
+    return {
+      error: result.error || "dismiss_failed",
+      message: result.message || "Could not cancel pending proposal.",
+      speak: result.message || "I couldn't cancel that pending action.",
+    };
+  }
+
+  if (result.dismissed) {
+    ctx.onPendingClear?.();
+  }
+
+  return {
+    dismissed: result.dismissed === true,
+    op: result.op,
+    message: result.message,
+    speak: result.dismissed
+      ? "Cancelled. What would you like to do instead?"
+      : "There wasn't anything pending to cancel.",
   };
 }
 
@@ -1997,6 +2047,7 @@ module.exports = {
   proposeUpdateAmenityPolicy,
   proposeSendCommunicationCampaign,
   confirmPendingProposal,
+  dismissPendingProposal,
   resolveOpenTicket,
   formatDisambiguationSpeak,
   formatCandidateLine,

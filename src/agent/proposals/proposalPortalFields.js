@@ -117,6 +117,19 @@ function extractProposalPortalFields(op, payload) {
     if (campaignId) out.campaignId = campaignId;
     const commType = String(p.comm_type || p.commType || "").trim();
     if (commType) out.commType = commType;
+    const deliveryMode = String(
+      p.delivery_mode || p.deliveryMode || p.audience_filter?.delivery_mode || ""
+    ).trim();
+    if (deliveryMode) out.deliveryMode = deliveryMode;
+    const rawSample = p.recipients_sample ?? p.recipientsSample;
+    if (Array.isArray(rawSample) && rawSample.length) {
+      out.recipientsPreview = rawSample.slice(0, 50).map((row) => ({
+        name: String(row?.name || row?.tenant_name || "Resident").trim(),
+        unitLabel: String(row?.unitLabel || row?.unit_label || "").trim() || undefined,
+        propertyCode: String(row?.propertyCode || row?.property_code || "").trim() || undefined,
+        phone: String(row?.phone || row?.phone_e164 || row?.phoneE164 || "").trim() || undefined,
+      }));
+    }
   } else if (normalizedOp === "update_amenity_policy") {
     const amenityName = String(p.location_name || p.locationName || "").trim();
     if (amenityName) out.amenityName = amenityName;

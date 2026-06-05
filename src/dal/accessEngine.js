@@ -31,6 +31,7 @@ function mapLocationRow(row) {
     name: row.name,
     description: row.description,
     active: !!row.active,
+    staffOnly: !!row.staff_only,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -108,6 +109,7 @@ async function listAccessProgramForProperty(propertyCode) {
       label: pl.label,
       sortOrder: pl.sort_order,
       enrolled: !!(hit && hit.active),
+      staffOnly: !!(hit && hit.active && hit.staff_only),
       accessLocationId: hit ? hit.id : null,
       slug: hit ? hit.slug : null,
       accessName: hit ? hit.name : null,
@@ -130,14 +132,40 @@ async function listAccessProgramForProperty(propertyCode) {
  * @param {boolean} opts.enabled
  * @param {string} [opts.actor]
  */
+function parseStaffOnlyFlag(opts) {
+  if (opts == null || typeof opts !== "object") return undefined;
+  if (opts.staffOnly !== undefined) return !!opts.staffOnly;
+  if (opts.internalOnly !== undefined) return !!opts.internalOnly;
+  if (opts.staff_only !== undefined) {
+    return opts.staff_only === true || String(opts.staff_only).toLowerCase() === "true";
+  }
+  if (opts.internal_only !== undefined) {
+    return opts.internal_only === true || String(opts.internal_only).toLowerCase() === "true";
+  }
+  return undefined;
+}
+
+function parseEnrollmentEnabled(opts) {
+  if (opts == null || typeof opts !== "object") return undefined;
+  if (opts.enabled !== undefined) {
+    return opts.enabled === true || String(opts.enabled).toLowerCase() === "true";
+  }
+  if (opts.enrolled !== undefined) {
+    return opts.enrolled === true || String(opts.enrolled).toLowerCase() === "true";
+  }
+  return undefined;
+}
+
 async function setAccessProgramEnrollment(opts) {
   const sb = getSupabase();
   if (!sb) throw new Error("no_db");
   const code = String(opts.propertyCode || "").trim().toUpperCase();
   const propertyLocationId = String(opts.propertyLocationId || "").trim();
-  const enabled = !!opts.enabled;
+  const enabled = parseEnrollmentEnabled(opts);
+  const staffOnly = parseStaffOnlyFlag(opts);
   const actor = String(opts.actor || "portal_staff").trim();
   if (!code || !propertyLocationId) throw new Error("missing_fields");
+  if (enabled === undefined && staffOnly === undefined) throw new Error("missing_fields");
 
   const { data: pl, error: plErr } = await sb
     .from("property_locations")
@@ -159,8 +187,8 @@ async function setAccessProgramEnrollment(opts) {
     .limit(1)
     .maybeSingle();
 
-  if (!enabled) {
-    if (!existing) return { enrolled: false, accessLocation: null };
+  if (enabled === false) {
+    if (!existing) return { enrolled: false, accessLocation: null, staffOnly: false };
     const { data: updated, error } = await sb
       .from("access_locations")
       .update({ active: false, updated_at: new Date().toISOString() })
@@ -168,17 +196,19 @@ async function setAccessProgramEnrollment(opts) {
       .select("*")
       .single();
     if (error) throw new Error(error.message || "deactivate_failed");
-    return { enrolled: false, accessLocation: mapLocationRow(updated) };
+    return { enrolled: false, accessLocation: mapLocationRow(updated), staffOnly: false };
   }
 
   if (existing) {
+    const patch = {
+      name: String(pl.label || existing.name).trim(),
+      updated_at: new Date().toISOString(),
+    };
+    if (enabled === true) patch.active = true;
+    if (staffOnly !== undefined) patch.staff_only = staffOnly;
     const { data: updated, error } = await sb
       .from("access_locations")
-      .update({
-        active: true,
-        name: String(pl.label || existing.name).trim(),
-        updated_at: new Date().toISOString(),
-      })
+      .update(patch)
       .eq("id", existing.id)
       .select("*")
       .single();
@@ -208,7 +238,15 @@ async function setAccessProgramEnrollment(opts) {
         active: true,
       });
     }
-    return { enrolled: true, accessLocation: loc };
+    return {
+      enrolled: !!loc.active,
+      accessLocation: loc,
+      staffOnly: !!loc.staffOnly,
+    };
+  }
+
+  if (enabled !== true) {
+    throw new Error("missing_fields");
   }
 
   const label = String(pl.label || "").trim();
@@ -234,10 +272,11 @@ async function setAccessProgramEnrollment(opts) {
       slug,
       propertyLocationId,
       active: true,
+      staffOnly: staffOnly === true,
     },
     actor
   );
-  return { enrolled: true, accessLocation: loc };
+  return { enrolled: true, accessLocation: loc, staffOnly: !!loc.staffOnly };
 }
 
 /**
@@ -506,6 +545,11 @@ async function createAccessLocationForPortal(body, actor = "") {
     name,
     description: String(body.description || ""),
     active: body.active !== false,
+    staff_only:
+      body.staffOnly === true ||
+      body.staff_only === true ||
+      body.internalOnly === true ||
+      body.internal_only === true,
   };
   if (propertyLocationId) insertRow.property_location_id = propertyLocationId;
 
@@ -998,6 +1042,11 @@ async function createReservationForPortal(body, actor = "") {
 
   const loc = await getAccessLocationById(locationId);
   if (!loc) throw new Error("location_not_found");
+  if (tenantId && !staffOverride && loc.staffOnly) {
+    const err = new Error("staff_only_location");
+    err.code = "staff_only_location";
+    throw err;
+  }
 
   const policy = await getActivePolicy(sb, locationId);
   let status = "CONFIRMED";

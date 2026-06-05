@@ -56,6 +56,28 @@ function pruneExpiredPending(pending) {
 }
 
 /**
+ * Map a jarvis_operator_threads row (snake_case columns, or `row_to_json`
+ * output from an RPC) to the in-memory thread shape. Single source of truth so
+ * reads, upserts, and list scans return identical objects.
+ * @param {Record<string, unknown> | null | undefined} data
+ */
+function rowToThread(data) {
+  if (!data) return null;
+  return {
+    threadId: data.thread_id,
+    actorKey: data.actor_key,
+    transportChannel: data.transport_channel,
+    anchorFingerprint: data.anchor_fingerprint,
+    status: data.status,
+    pendingProposals: pruneExpiredPending(parsePendingProposals(data.pending_proposals)),
+    lastReceipt: data.last_receipt || null,
+    scopeSnapshot: data.scope_snapshot || null,
+    expiresAt: data.expires_at,
+    updatedAt: data.updated_at,
+  };
+}
+
+/**
  * @param {import("@supabase/supabase-js").SupabaseClient} sb
  * @param {object} o
  */
@@ -68,19 +90,7 @@ async function loadJarvisThread(sb, o) {
     .eq("thread_id", threadId)
     .maybeSingle();
   if (error || !data) return null;
-  const pending = pruneExpiredPending(parsePendingProposals(data.pending_proposals));
-  return {
-    threadId: data.thread_id,
-    actorKey: data.actor_key,
-    transportChannel: data.transport_channel,
-    anchorFingerprint: data.anchor_fingerprint,
-    status: data.status,
-    pendingProposals: pending,
-    lastReceipt: data.last_receipt || null,
-    scopeSnapshot: data.scope_snapshot || null,
-    expiresAt: data.expires_at,
-    updatedAt: data.updated_at,
-  };
+  return rowToThread(data);
 }
 
 /**
@@ -118,7 +128,7 @@ async function upsertJarvisThread(sb, o) {
     .maybeSingle();
 
   if (error || !data) return null;
-  return loadJarvisThread(sb, { threadId: data.thread_id });
+  return rowToThread(data);
 }
 
 /**
@@ -264,11 +274,17 @@ async function markProposalOnThread(sb, o) {
   );
 
   const stillAwaiting = pending.some((p) => p.state === "awaiting_confirm");
-  const status = stillAwaiting
-    ? "proposal_pending"
-    : newState === "committed"
-      ? "done"
-      : existing.status;
+  const anyExecuting = pending.some((p) => p.state === "executing");
+  let status = existing.status;
+  if (stillAwaiting) {
+    status = "proposal_pending";
+  } else if (anyExecuting) {
+    status = "executing";
+  } else if (newState === "committed") {
+    status = "done";
+  } else {
+    status = "idle";
+  }
 
   return upsertJarvisThread(sb, {
     threadId,
@@ -324,9 +340,11 @@ async function findThreadWithProposalForActor(sb, actorKey, transportChannel, pr
   const id = String(proposalId || "").trim();
   if (!actor || !id) return null;
 
+  // One query for the actor's recent threads; evaluate in memory instead of a
+  // per-thread round trip (was up to 20 sequential reads).
   const { data, error } = await sb
     .from("jarvis_operator_threads")
-    .select("thread_id")
+    .select("*")
     .eq("actor_key", actor)
     .eq("transport_channel", channel)
     .order("updated_at", { ascending: false })
@@ -334,9 +352,9 @@ async function findThreadWithProposalForActor(sb, actorKey, transportChannel, pr
   if (error || !Array.isArray(data)) return null;
 
   for (const row of data) {
-    const threadId = String(row.thread_id || "").trim();
+    const thread = rowToThread(row);
+    const threadId = String(thread?.threadId || "").trim();
     if (!threadId) continue;
-    const thread = await loadJarvisThread(sb, { threadId });
     if (findProposalStateOnThread(thread, id)) {
       return { thread, threadId };
     }
@@ -345,13 +363,15 @@ async function findThreadWithProposalForActor(sb, actorKey, transportChannel, pr
 }
 
 /**
+ * Legacy non-atomic claim (read-modify-write). Fallback for when the atomic
+ * `jarvis_transition_proposal` RPC is unavailable (migration 092 not yet
+ * applied, or a test mock without `.rpc`). Single-instance safe only.
  * @param {import("@supabase/supabase-js").SupabaseClient} sb
  * @param {{ threadId: string, proposalId: string }} o
  */
-async function tryClaimProposalForCommit(sb, o) {
+async function claimProposalLegacy(sb, o) {
   const threadId = String(o.threadId || "").trim();
   const proposalId = String(o.proposalId || "").trim();
-  if (!threadId || !proposalId) return { kind: "not_found" };
 
   const thread = await loadJarvisThread(sb, { threadId });
   if (!thread) return { kind: "not_found" };
@@ -373,6 +393,57 @@ async function tryClaimProposalForCommit(sb, o) {
     state: "executing",
   });
   return { kind: "claimed", thread: updated || thread };
+}
+
+/**
+ * Atomically claim a proposal for commit: awaiting_confirm -> executing under a
+ * Postgres row lock so exactly one caller (across V2 instances) wins. This is
+ * the gate that prevents a double brain commit. Degrades to the legacy
+ * read-modify-write claim when the RPC is missing, so confirms keep working
+ * before migration 092 is deployed.
+ * @param {import("@supabase/supabase-js").SupabaseClient} sb
+ * @param {{ threadId: string, proposalId: string }} o
+ */
+async function tryClaimProposalForCommit(sb, o) {
+  const threadId = String(o.threadId || "").trim();
+  const proposalId = String(o.proposalId || "").trim();
+  if (!threadId || !proposalId) return { kind: "not_found" };
+
+  if (!sb || typeof sb.rpc !== "function") {
+    return claimProposalLegacy(sb, { threadId, proposalId });
+  }
+
+  const { data, error } = await sb.rpc("jarvis_transition_proposal", {
+    p_thread_id: threadId,
+    p_proposal_id: proposalId,
+    p_from_states: ["awaiting_confirm"],
+    p_to_state: "executing",
+    p_status: "executing",
+  });
+
+  // RPC absent (PGRST202) or any failure → degrade to the legacy claim.
+  if (error || !data || typeof data !== "object") {
+    return claimProposalLegacy(sb, { threadId, proposalId });
+  }
+
+  if (data.found === false) return { kind: "not_found" };
+
+  const thread = rowToThread(data.thread);
+  if (data.present === false) {
+    return { kind: "not_awaiting", thread, state: null };
+  }
+  if (data.applied === true) {
+    return { kind: "claimed", thread };
+  }
+
+  const current = String(data.current_state || "").trim();
+  if (current === "committed") {
+    return { kind: "already_committed", thread, receipt: thread?.lastReceipt || null };
+  }
+  if (current === "executing") {
+    return { kind: "in_flight", thread };
+  }
+  return { kind: "not_awaiting", thread, state: current || null };
 }
 
 /**
@@ -539,6 +610,7 @@ function findRecentDuplicateCreate(thread, target, withinMs = 5 * 60 * 1000) {
 }
 
 module.exports = {
+  rowToThread,
   loadJarvisThread,
   upsertJarvisThread,
   findLatestJarvisThreadForActor,

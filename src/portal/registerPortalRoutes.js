@@ -2521,6 +2521,11 @@ function registerPortalReadRoutes(app) {
     return handleJarvisPendingProposal(req, res);
   }));
 
+  const { handleJarvisDismissProposal } = require("./handleJarvisDismissProposal");
+  app.post("/api/portal/jarvis/dismiss-proposal", gate(async (req, res) => {
+    return handleJarvisDismissProposal(req, res);
+  }));
+
   // ─── Leasing Engine V1 ──────────────────────────────────────────────────────
 
   app.get("/api/portal/leasing/expiring-leases", gateLeasing(async (req, res) => {

@@ -18,8 +18,8 @@ const {
 } = require("../../dal/jarvisOperatorThreads");
 const { verifyProposalConfirmToken } = require("./proposalToken");
 const { commitProposal } = require("./commitProposal");
-const { PROPOSAL_OPS } = require("./types");
-const { refreshCommCampaignProposalHit, campaignIdFromProposal } = require("./commCampaignProposalGuard");
+const { runPreCommitValidate } = require("./preCommitValidators");
+const { refreshCommCampaignProposalHit } = require("./commCampaignProposalGuard");
 const { recordThreadForStaffRun } = require("../thread/recordThreadForStaffRun");
 const { clearExpenseConfirmPending } = require("../../dal/staffExpenseCapture");
 const { formatJarvisConfirmReceipt } = require("./jarvisConfirmReceipt");
@@ -196,6 +196,20 @@ async function executeJarvisConfirm(opts) {
       if (state === "committed") {
         return idempotentResult(verified, thread);
       }
+      if (state === "failed" || state === "rejected" || state === "expired") {
+        return {
+          ok: false,
+          committed: false,
+          brain: "jarvis_plan",
+          replyText:
+            state === "failed"
+              ? "That action failed earlier. Cancel it and propose again."
+              : "That proposal is no longer active. Propose a new action.",
+          error: state === "failed" ? "commit_failed" : "stale_proposal",
+          op: verified.op,
+          proposal_id: verified.proposal_id,
+        };
+      }
       if (state === "executing") {
         const outcome = await waitForProposalOutcome(sb, {
           threadId,
@@ -215,11 +229,15 @@ async function executeJarvisConfirm(opts) {
           };
         }
         if (outcome?.state === "failed") {
-          await markProposalOnThread(sb, {
-            threadId,
-            proposalId: verified.proposal_id,
-            state: "awaiting_confirm",
-          });
+          return {
+            ok: false,
+            committed: false,
+            brain: "jarvis_plan",
+            replyText: "That action could not be saved. Cancel and try something else.",
+            error: "commit_failed",
+            op: verified.op,
+            proposal_id: verified.proposal_id,
+          };
         }
       }
 
@@ -230,6 +248,17 @@ async function executeJarvisConfirm(opts) {
         });
         if (claim.kind === "already_committed") {
           return idempotentResult(verified, claim.thread || thread);
+        }
+        if (claim.kind === "not_awaiting") {
+          return {
+            ok: false,
+            committed: false,
+            brain: "jarvis_plan",
+            replyText: "Nothing pending to confirm — propose a new action first.",
+            error: "nothing_pending",
+            op: verified.op,
+            proposal_id: verified.proposal_id,
+          };
         }
         if (claim.kind === "in_flight") {
           const outcome = await waitForProposalOutcome(sb, {
@@ -254,54 +283,29 @@ async function executeJarvisConfirm(opts) {
       await clearExpenseConfirmPending(sb, staffActorKey);
     }
 
-    if (verified.op === PROPOSAL_OPS.SEND_COMMUNICATION_CAMPAIGN) {
-      const campaignId = campaignIdFromProposal({ confirm_token: confirmToken });
-      if (!campaignId) {
-        if (sb && threadId) {
-          await markProposalOnThread(sb, {
-            threadId,
-            proposalId: verified.proposal_id,
-            state: "expired",
-          });
-        }
-        return {
-          ok: false,
-          committed: false,
-          brain: "jarvis_plan",
-          replyText:
-            "That broadcast draft is no longer valid. Ask Jarvis to draft a new tenant message.",
-          error: "stale_proposal",
-          op: verified.op,
-          proposal_id: verified.proposal_id,
-        };
+    // Op-specific commit-time guards (e.g. campaign still exists). Generic spine
+    // stays op-agnostic — validators live with their op in preCommitValidators.
+    const preValidate = await runPreCommitValidate(sb, verified, {
+      traceId: String(o.traceId || "").trim(),
+    });
+    if (!preValidate.ok) {
+      if (sb && threadId) {
+        await markProposalOnThread(sb, {
+          threadId,
+          proposalId: verified.proposal_id,
+          state: preValidate.markState || "expired",
+        });
       }
-      if (sb) {
-        const { data: campaignRow } = await sb
-          .from("communication_campaigns")
-          .select("id")
-          .eq("id", campaignId)
-          .maybeSingle();
-        if (!campaignRow) {
-          if (threadId) {
-            await markProposalOnThread(sb, {
-              threadId,
-              proposalId: verified.proposal_id,
-              state: "expired",
-            });
-          }
-          return {
-            ok: false,
-            committed: false,
-            brain: "jarvis_plan",
-            replyText:
-              "That broadcast draft was removed from Communications. Ask Jarvis to draft a new message.",
-            error: "stale_proposal",
-            op: verified.op,
-            proposal_id: verified.proposal_id,
-            resolution: { error: "not_found", campaign_id: campaignId },
-          };
-        }
-      }
+      return {
+        ok: false,
+        committed: false,
+        brain: "jarvis_plan",
+        replyText: preValidate.replyText,
+        error: preValidate.error || "precommit_failed",
+        op: verified.op,
+        proposal_id: verified.proposal_id,
+        ...(preValidate.resolution ? { resolution: preValidate.resolution } : {}),
+      };
     }
 
     const actorLabel =
@@ -322,7 +326,7 @@ async function executeJarvisConfirm(opts) {
         await markProposalOnThread(sb, {
           threadId,
           proposalId: verified.proposal_id,
-          state: "awaiting_confirm",
+          state: "failed",
         });
       }
       await appendEventLog({

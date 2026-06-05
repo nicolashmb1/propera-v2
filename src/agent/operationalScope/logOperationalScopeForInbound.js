@@ -37,6 +37,16 @@ async function logOperationalScopeForPortalChat(opts) {
   if (!isPortalChatInbound(transportChannel, routerParameter)) {
     return { logged: false, reason: "not_portal_chat" };
   }
+  // Only compile for the Jarvis situational surfaces that actually use scope.
+  // `jarvis_ask` consumes `_operationalScopeJson` (and self-compiles as a
+  // fallback if absent); `jarvis_plan` keeps the observation log. Capture modes
+  // (staff_capture / cost / financial) never read it — skip the ~4-5 reads.
+  const portalChatMode = String(routerParameter._portalChatMode || "")
+    .trim()
+    .toLowerCase();
+  if (portalChatMode !== "jarvis_ask" && portalChatMode !== "jarvis_plan") {
+    return { logged: false, reason: "non_jarvis_mode" };
+  }
   if (!isDbConfigured()) {
     return { logged: false, reason: "no_db" };
   }

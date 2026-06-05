@@ -2,20 +2,22 @@
  * Jarvis staff live voice — system prompt (expression layer).
  */
 
-const { jarvisPlanEnabled } = require("../config/env");
+const { jarvisPlanEnabled, jarvisAgentName } = require("../config/env");
+const { buildSpeakingStylePromptBlock } = require("./voiceSpeakingStyle");
 
 /**
  * @param {object} [opts]
  * @param {string} [opts.staffDisplayName]
  * @param {string} [opts.sessionContextBlock]
  * @param {string} [opts.agentName]
+ * @param {string} [opts.speakingStyle] — british | american | australian | neutral override
  */
 function buildJarvisSystemPrompt(opts) {
   const o = opts || {};
   const name = String(o.staffDisplayName || "").trim();
   const firstName = name.split(/\s+/)[0] || "";
   const ctx = String(o.sessionContextBlock || "").trim();
-  const agentName = String(o.agentName || "Jarvis").trim() || "Jarvis";
+  const agentName = String(o.agentName || jarvisAgentName()).trim() || "Jarvis";
   const planOn = jarvisPlanEnabled();
 
   const greet = firstName
@@ -54,17 +56,20 @@ function buildJarvisSystemPrompt(opts) {
       "Pass brief in plain language; engine composes copy. Read back audience label, recipient count, and message preview → confirm before send. " +
       "Requires Communication Engine enabled.\n" +
       "- When multiple tickets match a unit, disambiguate by ISSUE in plain language — e.g. \"the one for shower clogged, or the one for microwave?\" Never lead with ticket ids on voice; staff remember issues, not PENN-060126-0001.\n" +
-      "- Confirm readbacks: unit + issue + action — \"Schedule unit 303 shower clogged for today 1-5pm. Say yes?\" Ticket id only if staff asked for it.\n" +
+      "- Voice confirm: ONE short readback per action (unit + issue + what you'll do). Ask once — \"Yes?\" — then call confirm_pending_proposal when they say yes. Never re-ask the same confirm; never call confirm before propose.\n" +
       "- If resolve returns candidates, ask ONE short disambiguation by issue — do not list ticket ids.\n" +
-      "- confirm_pending_proposal ONLY after you read back the pending action and staff clearly says yes/confirm/go ahead in a NEW utterance — never confirm in the same turn as propose, never confirm without hearing them.\n" +
+      "- Do not propose writes or confirm until staff clearly asked for that action.\n" +
       "- After a create confirms, if staff asked for more tickets same unit, immediately propose the next issue — do not re-ask property or schedule unless they change it.\n" +
       "- Block duplicate only when the SAME issue was just created — different issues same apt are allowed.\n" +
       "- Do not invent model numbers, parts, or amounts — only what staff said.\n\n"
     : `## Writes\n` +
       "- Write actions are disabled — direct staff to portal Plan mode for notes and costs.\n\n";
 
+  const speechBlock = buildSpeakingStylePromptBlock(o.speakingStyle);
+
   return (
     `You are ${agentName}, Propera's staff operations assistant on live voice.\n\n` +
+    (speechBlock ? `${speechBlock}\n\n` : "") +
     `## Your job\n` +
     "- Help staff ask about tickets, open work, and property situation (ask_propera).\n" +
     "- For ALL open services/tickets across properties, call list_open_service_tickets — not ask_propera.\n" +

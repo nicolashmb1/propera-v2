@@ -7,6 +7,53 @@
 
 ---
 
+## 2026-06-04 — GAS cutover: tenant-roster authz ported off GAS (propera-app)
+
+**Context:** GAS is already disconnected in production (Vercel app has no `PROPERA_API_BASE_URL`; V2 never called GAS). The one path with a real behavior consequence was the **tenant-roster staff check**, which called GAS `?path=me` and silently became a no-op once those env vars were unset — i.e. staff were no longer blocked from editing the roster.
+
+| Area | Change |
+|------|--------|
+| **Authz restored** | `propera-app/src/lib/tenantMutationGuard.ts` `blockIfStaff()` now resolves role from Supabase **`portal_auth_allowlist.portal_role`** (new `resolvePortalRoleForEmail` in `portalMeFromSupabase.ts`, same source as `/api/me`) instead of the GAS `path=me` call. Rule restored: **staff/maintenance/field = read-only on the roster; owners/ops may edit** (`isStaffRoleLabel`). |
+| **Fail mode** | Fail-open on infra error (no service client / Supabase blip) — a known "is staff" answer blocks; an unknown one allows. Matches prior resilience; avoids locking owners out. |
+| **GAS coupling removed** | `tenantMutationGuard.ts` no longer reads `PROPERA_API_BASE_URL` / `PROPERA_PM_TOKEN`. |
+
+**Dead-code sweep (merged 2026-06-04):** removed dormant GAS paths from `propera-app` — `gas-only` read rollback, GAS create-ticket branch, `fetchGas*` helpers, `PROPERA_API_BASE_URL` from `loadV2EnvFallback.ts`.
+
+**Operator:** apply migrations **092** + **093** on Supabase when ready (code degrades gracefully until then).
+
+---
+
+## 2026-06-04 — Jarvis reliability/speed pass (#4–#7)
+
+| # | Area | Change |
+|---|------|--------|
+| **#5** | **Boundary — generic confirm spine** | Campaign existence check moved to `preCommitValidators.js` + `preCommitValidateSendCommunicationCampaign` in `sendCommunicationCampaign.js`. |
+| **#4** | **Speed — scope compile gate** | `logOperationalScopeForInbound.js` compiles scope only for `jarvis_ask` / `jarvis_plan`. |
+| **#6** | **Reliability — open-ticket scope** | Migration **`093_portal_open_tickets_v1.sql`**; scope reads use open-only view with fallback. |
+| **#7 (partial)** | **Voice WS drop** | Heartbeat + idempotent `teardown()` in `jarvisVoiceWebSocketBridge.js`. Client auto-reconnect still open. |
+
+---
+
+## 2026-06-04 — Jarvis Ask read path: parallelized + bounded LLM timeout
+
+| Area | Change |
+|------|--------|
+| **Parallel reads** | `gatherJarvisFacts.js` — service-history eager; cost + spend via `Promise.all`. |
+| **Bounded LLM** | `JARVIS_ASK_LLM_TIMEOUT_MS` (default 10s) via `jarvisAskLlmTimeoutMs()`. |
+| **Bug fix** | Missing `parseServiceHistoryAnalysis` import fixed. |
+
+---
+
+## 2026-06-04 — Jarvis thread DAL: atomic confirm claim + fewer round trips
+
+| Area | Change |
+|------|--------|
+| **Atomic claim** | Migration **`092_jarvis_proposal_transition.sql`** — `jarvis_transition_proposal` RPC. |
+| **Round trips** | `rowToThread()`, upsert returns row, `findThreadWithProposalForActor` single query. |
+| **Tests** | `tests/dal/jarvisClaimProposal.test.js`; `tests/dal/*.test.js` wired in `npm test`. |
+
+---
+
 ## 2026-06-02 — Jarvis confirm loop hardening
 
 | Area | Change |

@@ -3,7 +3,11 @@
  */
 
 const { openaiChatJson } = require("../../brain/intake/openaiStructuredSignal");
-const { openaiApiKey, jarvisAskLlmModel } = require("../../config/env");
+const {
+  openaiApiKey,
+  jarvisAskLlmModel,
+  jarvisAskLlmTimeoutMs,
+} = require("../../config/env");
 
 /**
  * @param {object} opts
@@ -47,7 +51,7 @@ async function maybeJarvisAskLlmReply(opts) {
     model: jarvisAskLlmModel(),
     system,
     user,
-    timeoutMs: 20000,
+    timeoutMs: jarvisAskLlmTimeoutMs(),
   });
 
   if (!r.ok || !r.json || typeof r.json.reply !== "string") {

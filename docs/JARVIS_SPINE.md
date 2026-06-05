@@ -401,7 +401,7 @@ Patch Law: spine changes stay in **agent/compiler** and **proposal routers**; do
 | Layer | Location | Status |
 |-------|----------|--------|
 | Operational Scope | `src/agent/operationalScope/` | **v0 live** |
-| Thread state | `src/agent/thread/`, `src/dal/jarvisOperatorThreads.js`, migration `070` | **v0** — pending + receipt on propose/commit |
+| Thread state | `src/agent/thread/`, `src/dal/jarvisOperatorThreads.js`, migrations `070` + `092` | **v0** — pending + receipt on propose/commit. Confirm claim (`awaiting_confirm → executing`) is **atomic** via `jarvis_transition_proposal` RPC (`092`), with legacy read-modify-write fallback when unapplied. |
 | Operation contract | `src/agent/proposals/` | **Live** — cost, note, vendor, create, schedule, access amenity ops (see § Proposal payload map) |
 | Jarvis Ask | `src/agent/jarvisAsk/` | **Portal + voice** behind `JARVIS_ASK_ENABLED` |
 | Jarvis Plan | `src/agent/jarvisPlan/` | **Live** — propose → confirm card; portal + voice share spine |
@@ -547,7 +547,7 @@ End: End call button OR end_voice_session tool → overlay closes
 9. ~~**Service history analytics read**~~ **Done (slice 1)**
 10. ~~**Portfolio open list** (`list_open_service_tickets`)~~ **Done**
 11. ~~**Confirm loop hardening** — idempotent confirm, portal/voice dedupe, partial schedule success receipts~~ **Done (2026-06)**
-12. **Reconnect** — if WS drops mid-call, graceful recovery
+12. **Reconnect** — server-side foundation **done** (2026-06-04): heartbeat ping/pong terminates half-open sockets + idempotent `teardown()` on close/error frees the paired OpenAI connection (`heartbeatSweep` in `jarvisVoiceWebSocketBridge.js`). **Remaining:** client-side reconnect + conversation resume (multi-repo, live-tested)
 13. ~~**Phase 3 ticket lifecycle** (status, category, issue, complete, cancel)~~ **Done (2026-06)**
 14. **Access follow-ups** — regenerate PIN, edit booking time, blackouts (portal today; voice later)
 15. **Batch create op** (optional) — one confirm for N tickets if operators want it; today = sequential only

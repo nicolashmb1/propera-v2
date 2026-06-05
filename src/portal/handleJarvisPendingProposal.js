@@ -118,6 +118,8 @@ async function handleJarvisPendingProposal(req, res) {
       smsSegments: fields.smsSegments,
       campaignId: fields.campaignId,
       commType: fields.commType,
+      deliveryMode: fields.deliveryMode,
+      recipientsPreview: fields.recipientsPreview,
     },
   });
 }

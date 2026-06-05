@@ -25,6 +25,18 @@ async function canReserve(params) {
     return { allowed: false, reason: "invalid_input" };
   }
 
+  const tenantIdEarly = String(params.tenantId || "").trim();
+  if (tenantIdEarly && !params.staffOverride) {
+    const { data: locRow } = await sb
+      .from("access_locations")
+      .select("staff_only, active")
+      .eq("id", locationId)
+      .maybeSingle();
+    if (!locRow?.active || locRow.staff_only) {
+      return { allowed: false, reason: "staff_only_location" };
+    }
+  }
+
   const policy = await getActivePolicy(sb, locationId, startAt);
   if (!policy) return { allowed: false, reason: "no_policy" };
 

@@ -141,6 +141,28 @@ async function resolveFocusFromAnchor(anchor, openWis) {
   return null;
 }
 
+const OPEN_TICKET_SELECT =
+  "ticket_row_id, ticket_id, property_code, unit_label, status, message_raw, category_final, category";
+
+/**
+ * @param {string} prop
+ * @param {string} unitLabel
+ * @param {string} status
+ * @param {Record<string, unknown>} row
+ */
+function mapOpenTicketRow(prop, row) {
+  return {
+    ticketRowId: String(row.ticket_row_id || row.id || "").trim(),
+    humanTicketId: String(row.ticket_id || "").trim(),
+    propertyCode: prop || normProp(row.property_code),
+    unitLabel: String(row.unit_label || "").trim(),
+    status: String(row.status || "").trim(),
+    summary: String(row.category_final || row.category || row.message_raw || "")
+      .trim()
+      .slice(0, 200),
+  };
+}
+
 /**
  * @param {string} propertyCode
  * @returns {Promise<import("./types").OperationalScopeOpenTicket[]>}
@@ -151,11 +173,22 @@ async function listOpenTicketsForProperty(propertyCode) {
   const sb = getSupabase();
   if (!sb) return [];
 
+  // Open-only view: every row is open, so LIMIT cannot drop open tickets.
+  const open = await sb
+    .from("portal_open_tickets_v1")
+    .select(OPEN_TICKET_SELECT)
+    .eq("property_code", prop)
+    .order("updated_at", { ascending: false })
+    .limit(PROPERTY_OPEN_TICKET_LIMIT);
+
+  if (!open.error && open.data) {
+    return open.data.map((row) => mapOpenTicketRow(prop, row)).filter((t) => t.ticketRowId);
+  }
+
+  // Fallback (view not yet applied): base view + JS open filter.
   const { data, error } = await sb
     .from("portal_tickets_v1")
-    .select(
-      "ticket_row_id, ticket_id, property_code, unit_label, status, message_raw, category_final, category"
-    )
+    .select(OPEN_TICKET_SELECT)
     .eq("property_code", prop)
     .order("updated_at", { ascending: false })
     .limit(PROPERTY_OPEN_TICKET_LIMIT);
@@ -164,18 +197,7 @@ async function listOpenTicketsForProperty(propertyCode) {
 
   return data
     .filter((row) => isOpenTicketStatus(row.status))
-    .map((row) => ({
-      ticketRowId: String(row.ticket_row_id || row.id || "").trim(),
-      humanTicketId: String(row.ticket_id || "").trim(),
-      propertyCode: prop,
-      unitLabel: String(row.unit_label || "").trim(),
-      status: String(row.status || "").trim(),
-      summary: String(
-        row.category_final || row.category || row.message_raw || ""
-      )
-        .trim()
-        .slice(0, 200),
-    }))
+    .map((row) => mapOpenTicketRow(prop, row))
     .filter((t) => t.ticketRowId);
 }
 
@@ -192,11 +214,24 @@ async function listAllOpenServiceTickets(opts = {}) {
   const sb = getSupabase();
   if (!sb) return [];
 
+  // Open-only view: ask for exactly `limit` rows — no 4× overfetch, and no open
+  // ticket can be dropped by the LIMIT window.
+  const open = await sb
+    .from("portal_open_tickets_v1")
+    .select(OPEN_TICKET_SELECT + ", priority, updated_at")
+    .order("updated_at", { ascending: false })
+    .limit(limit);
+
+  if (!open.error && open.data) {
+    return open.data
+      .map((row) => mapOpenTicketRow("", row))
+      .filter((t) => t.ticketRowId && t.humanTicketId);
+  }
+
+  // Fallback (view not yet applied): base view, overfetch + JS open filter.
   const { data, error } = await sb
     .from("portal_tickets_v1")
-    .select(
-      "ticket_row_id, ticket_id, property_code, unit_label, status, message_raw, category_final, category, priority, updated_at"
-    )
+    .select(OPEN_TICKET_SELECT + ", priority, updated_at")
     .order("updated_at", { ascending: false })
     .limit(limit * 4);
 
@@ -205,18 +240,7 @@ async function listAllOpenServiceTickets(opts = {}) {
   return data
     .filter((row) => isOpenTicketStatus(row.status))
     .slice(0, limit)
-    .map((row) => ({
-      ticketRowId: String(row.ticket_row_id || row.id || "").trim(),
-      humanTicketId: String(row.ticket_id || "").trim(),
-      propertyCode: normProp(row.property_code),
-      unitLabel: String(row.unit_label || "").trim(),
-      status: String(row.status || "").trim(),
-      summary: String(
-        row.category_final || row.category || row.message_raw || ""
-      )
-        .trim()
-        .slice(0, 200),
-    }))
+    .map((row) => mapOpenTicketRow("", row))
     .filter((t) => t.ticketRowId && t.humanTicketId);
 }
 

@@ -73,6 +73,45 @@ function buildSendCommunicationCampaignProposal(draft, summary) {
 }
 
 /**
+ * Commit-time guard for this op: the drafted campaign must still exist before
+ * we send. Lives with the op so the generic confirm spine stays op-agnostic.
+ * @param {import("@supabase/supabase-js").SupabaseClient | null} sb
+ * @param {{ op: string, proposal_id: string, payload?: object }} verified
+ * @returns {Promise<{ ok: true } | { ok: false, error: string, replyText: string, markState?: string, resolution?: object }>}
+ */
+async function preCommitValidateSendCommunicationCampaign(sb, verified) {
+  const p = verified?.payload || {};
+  const campaignId = String(p.campaign_id || p.campaignId || "").trim();
+  if (!campaignId) {
+    return {
+      ok: false,
+      error: "stale_proposal",
+      markState: "expired",
+      replyText:
+        "That broadcast draft is no longer valid. Ask Jarvis to draft a new tenant message.",
+    };
+  }
+  if (sb) {
+    const { data: campaignRow } = await sb
+      .from("communication_campaigns")
+      .select("id")
+      .eq("id", campaignId)
+      .maybeSingle();
+    if (!campaignRow) {
+      return {
+        ok: false,
+        error: "stale_proposal",
+        markState: "expired",
+        replyText:
+          "That broadcast draft was removed from Communications. Ask Jarvis to draft a new message.",
+        resolution: { error: "not_found", campaign_id: campaignId },
+      };
+    }
+  }
+  return { ok: true };
+}
+
+/**
  * @param {import("@supabase/supabase-js").SupabaseClient} _sb
  * @param {{ op: string, proposal_id: string, payload: object }} verified
  * @param {{ traceId?: string }} ctx
@@ -147,5 +186,6 @@ async function commitSendCommunicationCampaign(_sb, verified, ctx) {
 module.exports = {
   proposalFromSendCommunicationCampaignDraft,
   buildSendCommunicationCampaignProposal,
+  preCommitValidateSendCommunicationCampaign,
   commitSendCommunicationCampaign,
 };

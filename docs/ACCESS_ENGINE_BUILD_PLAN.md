@@ -147,6 +147,7 @@ All tables include **`org_id`** (FK → `organizations` when present). **`proper
 | `slug` | optional stable key for NL (“gameroom”) |
 | `name`, `description` | staff + tenant display |
 | `active` | bool |
+| `staff_only` | bool — when true, amenity is in the program for **staff command center / override** only; excluded from tenant portal, inbound ACCESS_* , tenant agent gather, and public QR (`091_access_locations_staff_only.sql`) |
 | `created_at`, `updated_at` | |
 
 ### `access_location_policies` (columns)

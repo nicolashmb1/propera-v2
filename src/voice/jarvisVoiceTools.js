@@ -21,6 +21,7 @@ const {
   proposeUpdateAmenityPolicy,
   proposeSendCommunicationCampaign,
   confirmPendingProposal,
+  dismissPendingProposal,
   resolveOpenTicket,
 } = require("./jarvisVoiceProposals");
 const { listOpenServiceTickets } = require("./listOpenServiceTickets");
@@ -379,7 +380,15 @@ const JARVIS_VOICE_WRITE_TOOLS = [
     type: "function",
     name: "confirm_pending_proposal",
     description:
-      "Commit the pending proposal from THIS call only after you read it back and staff clearly says yes/confirm in a later utterance. Never call with the propose tool in the same turn.",
+      "Commit the pending proposal after staff says yes. Call once when they confirm — not before propose, not repeatedly.",
+    parameters: { type: "object", properties: {}, required: [] },
+  },
+  {
+    type: "function",
+    name: "dismiss_pending_proposal",
+    description:
+      "Cancel the pending proposal when staff says no, cancel, never mind, forget it, or wants something else instead. " +
+      "Clears the stuck confirm card so a new action can be proposed.",
     parameters: { type: "object", properties: {}, required: [] },
   },
 ];
@@ -645,6 +654,48 @@ function jarvisVoiceToolSchemas() {
  * @param {object} args
  * @param {object} ctx
  */
+const JARVIS_VOICE_READ_TOOL_NAMES = new Set([
+  "query_service_history",
+  "list_open_service_tickets",
+  "ask_propera",
+  "resolve_open_ticket",
+  "list_amenity_locations",
+  "lookup_amenity_booking",
+  "get_amenity_booking_rules",
+]);
+
+const JARVIS_VOICE_WRITE_TOOL_NAMES = new Set([
+  "propose_append_service_note",
+  "propose_attach_ticket_cost",
+  "propose_vendor_request",
+  "propose_create_service_request",
+  "propose_schedule_ticket",
+  "propose_set_ticket_status",
+  "propose_set_ticket_category",
+  "propose_update_ticket_issue",
+  "propose_close_ticket",
+  "propose_cancel_ticket",
+  "propose_book_amenity",
+  "propose_set_amenity_hours",
+  "propose_cancel_amenity_booking",
+  "propose_update_amenity_policy",
+  "propose_send_communication_campaign",
+  "confirm_pending_proposal",
+  "dismiss_pending_proposal",
+]);
+
+function staffAffirmsUtterance(text) {
+  const t = String(text || "").trim().toLowerCase();
+  if (!t) return false;
+  return /\b(yes|yeah|yep|yup|confirm|confirmed|go ahead|do it|correct|right|sure|ok|okay|please do|sounds good|that's fine|thats fine|affirmative)\b/.test(
+    t
+  );
+}
+
+function voiceStaffSpeechSeen(ctx) {
+  return ctx.staffSpeechSeen === true || voiceStaffTurnCount(ctx) >= 1;
+}
+
 function voiceStaffTurnCount(ctx) {
   const n = Number(ctx.staffTurnCount);
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
@@ -657,28 +708,33 @@ function voiceConfirmIssuedTurn(ctx) {
 
 function voiceToolGate(tool, ctx) {
   const turns = voiceStaffTurnCount(ctx);
+  const spoke = voiceStaffSpeechSeen(ctx);
   if (tool === "end_voice_session") return null;
-  if (turns < 1) {
+
+  const isWrite = JARVIS_VOICE_WRITE_TOOL_NAMES.has(tool);
+  if (!JARVIS_VOICE_READ_TOOL_NAMES.has(tool) && isWrite && !spoke) {
     return {
       error: "awaiting_staff_speech",
-      message: "Wait until staff speaks before using tools.",
+      message: "Wait until staff speaks before write actions.",
       speak: "I'm listening — tell me what you need.",
     };
   }
+
   if (tool === "confirm_pending_proposal") {
     const token = String(ctx.pendingConfirmToken || "").trim();
     if (!token) {
       return {
         error: "no_session_proposal",
         message: "Propose an action in this call before confirming.",
-        speak: "I haven't proposed anything to confirm yet.",
+        speak: "I haven't proposed anything yet.",
       };
     }
-    if (turns <= voiceConfirmIssuedTurn(ctx)) {
+    const affirmed = staffAffirmsUtterance(ctx.lastStaffTranscript);
+    if (!affirmed && turns <= voiceConfirmIssuedTurn(ctx)) {
       return {
         error: "confirm_after_readback",
-        message: "Read back the proposal and wait for staff to say yes in a new utterance.",
-        speak: "Say yes after I read back what I'll do — I can't commit until then.",
+        message: "Wait for staff to say yes after the readback.",
+        speak: "Say yes if that looks right.",
       };
     }
     return null;
@@ -983,6 +1039,10 @@ async function runJarvisVoiceTool(name, args, ctx) {
     return result;
   }
 
+  if (tool === "dismiss_pending_proposal") {
+    return dismissPendingProposal(ctx);
+  }
+
   return { error: "unknown_tool", tool };
 }
 
@@ -990,4 +1050,5 @@ module.exports = {
   JARVIS_VOICE_TOOL_SCHEMAS: jarvisVoiceToolSchemas(),
   jarvisVoiceToolSchemas,
   runJarvisVoiceTool,
+  staffAffirmsUtterance,
 };

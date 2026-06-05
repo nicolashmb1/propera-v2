@@ -14,6 +14,7 @@ const {
   openaiApiKey,
   voiceModel,
   voiceAgentVoice,
+  voiceAgentName,
   voiceVadEagerness,
   voiceTurnDetectionMode,
   voiceSilenceDurationMs,
@@ -62,8 +63,11 @@ function buildTurnDetection() {
   };
 }
 
-function buildGaSessionUpdate(systemPrompt, model) {
+function buildGaSessionUpdate(systemPrompt, model, options = {}) {
+  const vadCreateResponse =
+    options.vadCreateResponse !== undefined ? Boolean(options.vadCreateResponse) : false;
   const voice = voiceAgentVoice() || "alloy";
+  const turnDetection = { ...buildTurnDetection(), create_response: vadCreateResponse };
   return {
     type: "session.update",
     session: {
@@ -76,7 +80,8 @@ function buildGaSessionUpdate(systemPrompt, model) {
       audio: {
         input: {
           format: { type: "audio/pcmu" },
-          turn_detection: buildTurnDetection(),
+          turn_detection: turnDetection,
+          transcription: { model: "gpt-4o-mini-transcribe", language: "en" },
         },
         output: {
           format: { type: "audio/pcmu" },
@@ -104,11 +109,15 @@ async function handleTwilioStream(twilioWs) {
   let pendingResponseAfterTool = false;
   let greetingSent = false;
   let greetingFallbackTimer = null;
+  let vadAutoResponseEnabled = false;
+  let cachedSystemPrompt = "";
+  let cachedModel = "";
   let intakeDraft = {};
   let createTicketAttempts = 0;
   let isUnknownCaller = false;
   let orgBrandLabel = "";
   let unknownGreetingStep = 0;
+  const agentDisplayName = voiceAgentName();
 
   const apiKey = openaiApiKey();
   if (!apiKey) {
@@ -132,6 +141,47 @@ async function handleTwilioStream(twilioWs) {
     pendingAudio.length = 0;
   }
 
+  function responseDoneTerminal(status) {
+    const s = String(status || "").toLowerCase();
+    return s === "completed" || s === "cancelled" || s === "incomplete";
+  }
+
+  /** Single gate for response.create — avoids greeting/VAD/tool collisions. */
+  function scheduleResponseCreate(extra = {}) {
+    if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) return false;
+    if (responseInProgress) {
+      pendingResponseAfterTool = true;
+      return false;
+    }
+    safeOpenAiSend(openaiWs, { type: "response.create", ...extra });
+    responseInProgress = true;
+    return true;
+  }
+
+  function enableVadAutoResponse() {
+    if (vadAutoResponseEnabled || !openaiWs || openaiWs.readyState !== WebSocket.OPEN) return;
+    if (!cachedSystemPrompt) return;
+    vadAutoResponseEnabled = true;
+    safeOpenAiSend(
+      openaiWs,
+      buildGaSessionUpdate(cachedSystemPrompt, cachedModel, { vadCreateResponse: true })
+    );
+    emit({
+      level: "info",
+      trace_id: traceId,
+      log_kind: "voice_bridge",
+      event: "vad_auto_response_enabled",
+    });
+  }
+
+  function maybeEnableVadAfterGreeting(unknownStep2Queued) {
+    if (unknownStep2Queued) return;
+    if (isUnknownCaller && unknownGreetingStep < 2) return;
+    if (greetingSent && !vadAutoResponseEnabled) {
+      enableVadAutoResponse();
+    }
+  }
+
   function startGreetingOnce() {
     if (greetingSent || !openaiWs || openaiWs.readyState !== WebSocket.OPEN) return;
     greetingSent = true;
@@ -141,30 +191,26 @@ async function handleTwilioStream(twilioWs) {
     }
     if (isUnknownCaller) {
       unknownGreetingStep = 1;
-      safeOpenAiSend(openaiWs, {
-        type: "response.create",
+      scheduleResponseCreate({
         response: {
           instructions:
-            `Say ONLY this intro — no questions yet, then stop: "Hi, this is Max with ${orgBrandLabel}."`,
+            `Say ONLY this intro — no questions yet, then stop: "Hi, this is ${agentDisplayName} with ${orgBrandLabel}."`,
         },
       });
     } else {
-      safeOpenAiSend(openaiWs, { type: "response.create" });
+      scheduleResponseCreate();
     }
-    responseInProgress = true;
   }
 
   function continueUnknownCallerGreeting(status) {
     if (!isUnknownCaller || unknownGreetingStep !== 1 || status !== "completed") return false;
     unknownGreetingStep = 2;
-    safeOpenAiSend(openaiWs, {
-      type: "response.create",
+    scheduleResponseCreate({
       response: {
         instructions:
           'Say ONLY this question, then stop and wait in silence: "Which building or property are you calling from?"',
       },
     });
-    responseInProgress = true;
     emit({
       level: "info",
       trace_id: traceId,
@@ -242,18 +288,14 @@ async function handleTwilioStream(twilioWs) {
     if (responseInProgress) {
       pendingResponseAfterTool = true;
     } else {
-      safeOpenAiSend(openaiWs, { type: "response.create" });
-      responseInProgress = true;
+      scheduleResponseCreate();
     }
   }
 
   function flushPendingResponse() {
     if (!pendingResponseAfterTool) return;
     pendingResponseAfterTool = false;
-    if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
-      safeOpenAiSend(openaiWs, { type: "response.create" });
-      responseInProgress = true;
-    }
+    scheduleResponseCreate();
   }
 
   openaiWs.on("message", async (raw) => {
@@ -293,12 +335,20 @@ async function handleTwilioStream(twilioWs) {
     switch (msg.type) {
       case "session.created":
         emit({ level: "info", trace_id: traceId, log_kind: "voice_bridge", event: "openai_session_created" });
-        greetingFallbackTimer = setTimeout(() => startGreetingOnce(), GREETING_FALLBACK_MS);
+        if (!greetingSent && !greetingFallbackTimer) {
+          greetingFallbackTimer = setTimeout(() => startGreetingOnce(), GREETING_FALLBACK_MS);
+        }
         break;
 
       case "session.updated":
         emit({ level: "info", trace_id: traceId, log_kind: "voice_bridge", event: "openai_session_updated" });
-        startGreetingOnce();
+        if (greetingFallbackTimer) {
+          clearTimeout(greetingFallbackTimer);
+          greetingFallbackTimer = null;
+        }
+        if (!vadAutoResponseEnabled) {
+          startGreetingOnce();
+        }
         break;
 
       case "response.created":
@@ -316,10 +366,11 @@ async function handleTwilioStream(twilioWs) {
 
       case "response.done": {
         const status = String(msg.response?.status || "").toLowerCase();
-        if (status === "completed" || status === "cancelled" || status === "incomplete") {
+        if (responseDoneTerminal(status)) {
           responseInProgress = false;
         }
         const queuedUnknownStep2 = continueUnknownCallerGreeting(status);
+        maybeEnableVadAfterGreeting(queuedUnknownStep2);
         if (!queuedUnknownStep2) {
           flushPendingResponse();
         }
@@ -350,6 +401,18 @@ async function handleTwilioStream(twilioWs) {
         }
         break;
 
+      case "conversation.item.input_audio_transcription.completed":
+        if (msg.transcript) {
+          emit({
+            level: "info",
+            trace_id: traceId,
+            log_kind: "voice_transcript",
+            event: "caller_spoke",
+            data: { text: String(msg.transcript).slice(0, 200) },
+          });
+        }
+        break;
+
       case "input_audio_buffer.speech_started":
         /* Let OpenAI semantic_vad handle interruption — manual response.cancel caused Max to cut himself on "ok"/"uh-huh". */
         break;
@@ -360,6 +423,7 @@ async function handleTwilioStream(twilioWs) {
           code === "response_cancel_not_active" ||
           code === "conversation_already_has_active_response"
         ) {
+          pendingResponseAfterTool = true;
           break;
         }
         emit({
@@ -452,7 +516,7 @@ async function handleTwilioStream(twilioWs) {
           const propLabel = brandCtx.propertyDisplayName || brandCtx.orgBrandShort;
           greetingInstruction =
             `Caller: ${firstName}, unit ${rosterRow.unit_label}, ${propLabel}. ` +
-            `Greet: "Hi ${firstName} — Max with ${brandCtx.orgBrandName || brandCtx.orgBrandShort}. ` +
+            `Greet: "Hi ${firstName} — ${agentDisplayName} with ${brandCtx.orgBrandName || brandCtx.orgBrandShort}. ` +
             `You're at ${propLabel}, unit ${rosterRow.unit_label}. How can I help?"`;
         } else {
           greetingInstruction =
@@ -472,8 +536,11 @@ async function handleTwilioStream(twilioWs) {
           greetingInstruction +
           (callerContextBlock ? `\n\n${callerContextBlock}` : "");
 
+        cachedSystemPrompt = systemPrompt;
+        cachedModel = model;
+
         const configure = () => {
-          safeOpenAiSend(openaiWs, buildGaSessionUpdate(systemPrompt, model));
+          safeOpenAiSend(openaiWs, buildGaSessionUpdate(systemPrompt, model, { vadCreateResponse: false }));
           markSessionReady();
         };
 

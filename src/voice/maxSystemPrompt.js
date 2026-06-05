@@ -2,7 +2,18 @@
  * Max — Propera voice maintenance agent (expression layer only; tools call the brain).
  */
 
-function buildMaxSystemPrompt({ brandName, brandShort, propertyName, rosterKnown = true }) {
+const { voiceAgentName } = require("../config/env");
+const { buildSpeakingStylePromptBlock } = require("./voiceSpeakingStyle");
+
+function buildMaxSystemPrompt({
+  brandName,
+  brandShort,
+  propertyName,
+  rosterKnown = true,
+  agentName,
+  speakingStyle,
+}) {
+  const agent = String(agentName || voiceAgentName()).trim() || "Max";
   const brand = brandShort || brandName || "the property management team";
   const fullBrand = brandName || brandShort || "your property management company";
   const property = propertyName || "your property";
@@ -16,12 +27,14 @@ After the opening (intro, then property question): ask unit number on a NEW turn
 Then ask what they need — one question per turn. Confirm property + unit + issue → create_ticket.`;
 
   const roleLine = rosterKnown
-    ? `You are Max, maintenance assistant for ${fullBrand} at ${property}. Warm, patient, natural — like helpful building staff.${unknownCaller}`
-    : `You are Max, maintenance assistant for ${fullBrand}. Warm, patient, natural — like helpful building staff.${unknownCaller}`;
+    ? `You are ${agent}, maintenance assistant for ${fullBrand} at ${property}. Warm, patient, natural — like helpful building staff.${unknownCaller}`
+    : `You are ${agent}, maintenance assistant for ${fullBrand}. Warm, patient, natural — like helpful building staff.${unknownCaller}`;
+
+  const speechBlock = buildSpeakingStylePromptBlock(speakingStyle);
 
   return `${roleLine}
 
-## Wait for answers (CRITICAL — #1 rule)
+${speechBlock ? `${speechBlock}\n\n` : ""}## Wait for answers (CRITICAL — #1 rule)
 - ONE question per response. After you ask it, STOP — your turn is over. Wait in silence.
 - Never ask two questions in one response (not property AND unit, not issue AND location).
 - The resident may pause to think — "um", silence, and slow answers are normal. Do NOT jump in early.

@@ -27,7 +27,14 @@ describe("buildGaSessionUpdate", () => {
     assert.equal(evt.session.audio.output.format.type, "audio/pcmu");
     assert.equal(evt.session.instructions, "Hello");
     assert.equal(evt.session.audio.input.turn_detection.interrupt_response, false);
+    assert.equal(evt.session.audio.input.turn_detection.create_response, false);
+    assert.equal(evt.session.audio.input.transcription.model, "gpt-4o-mini-transcribe");
     assert.ok(Array.isArray(evt.session.tools));
+  });
+
+  it("enables VAD auto-response when requested", () => {
+    const evt = buildGaSessionUpdate("Hello", "gpt-realtime-2", { vadCreateResponse: true });
+    assert.equal(evt.session.audio.input.turn_detection.create_response, true);
   });
 });
 
@@ -54,6 +61,26 @@ describe("buildMaxSystemPrompt", () => {
     });
     assert.match(prompt, /Unknown caller/i);
     assert.match(prompt, /NEW turn/i);
+  });
+
+  it("uses custom agent display name when provided", () => {
+    const prompt = buildMaxSystemPrompt({
+      brandName: "Grand Management",
+      brandShort: "Grand",
+      propertyName: "The Grand at Penn",
+      agentName: "Alex",
+    });
+    assert.match(prompt, /You are Alex, maintenance assistant/i);
+  });
+
+  it("omits speech block when neutral", () => {
+    const prompt = buildMaxSystemPrompt({
+      brandName: "Grand",
+      brandShort: "Grand",
+      propertyName: "Penn",
+      speakingStyle: "neutral",
+    });
+    assert.doesNotMatch(prompt, /## Speech/);
   });
 });
 

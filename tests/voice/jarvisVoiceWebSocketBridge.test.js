@@ -12,6 +12,7 @@ describe("buildJarvisGaSessionUpdate", () => {
     assert.equal(evt.session.audio.input.format.type, "audio/pcm");
     assert.equal(evt.session.audio.input.format.rate, 24000);
     assert.equal(evt.session.audio.input.turn_detection.create_response, true);
+    assert.equal(evt.session.audio.input.transcription.model, "gpt-4o-mini-transcribe");
     const names = jarvisVoiceToolSchemas().map((t) => t.name);
     assert.ok(names.includes("ask_propera"));
     assert.ok(names.includes("resolve_open_ticket"));

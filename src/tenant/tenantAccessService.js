@@ -60,7 +60,7 @@ async function listTenantAccessLocations(tenantCtx) {
   if (!code) return [];
 
   const locations = await listAccessLocationsForPortal({ propertyCode: code });
-  const active = locations.filter((l) => l.active);
+  const active = locations.filter((l) => l.active && !l.staffOnly);
   const sb = getSupabase();
   const out = [];
   for (const loc of active) {
@@ -112,7 +112,7 @@ async function getPublicAccessLocation(orgId, propertyCode, slug) {
     .eq("slug", s)
     .eq("active", true)
     .maybeSingle();
-  if (!data) return null;
+  if (!data || data.staff_only) return null;
 
   const policy = await getActivePolicy(sb, data.id);
   if (!policy) return null;
@@ -144,7 +144,7 @@ async function getTenantAccessLocationBySlug(tenantCtx, slug) {
     .eq("slug", s)
     .eq("active", true)
     .maybeSingle();
-  if (!data) return null;
+  if (!data || data.staff_only) return null;
 
   const loc = {
     id: data.id,
@@ -228,8 +228,8 @@ async function getTenantAccessReservation(tenantCtx, reservationId) {
  */
 async function checkTenantCanReserve(tenantCtx, locationId, startAt, endAt) {
   const loc = await getAccessLocationById(locationId);
-  if (!loc || loc.propertyCode !== tenantPropertyCode(tenantCtx)) {
-    return { allowed: false, reason: "location_not_found" };
+  if (!loc || loc.propertyCode !== tenantPropertyCode(tenantCtx) || loc.staffOnly) {
+    return { allowed: false, reason: loc?.staffOnly ? "staff_only_location" : "location_not_found" };
   }
   return canReserve({
     locationId,

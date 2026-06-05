@@ -76,14 +76,15 @@ function registerAccessRoutes(app) {
         const propertyLocationId = String(
           req.body?.propertyLocationId || req.body?.property_location_id || ""
         ).trim();
-        const enabled =
-          req.body?.enabled === true ||
-          req.body?.enrolled === true ||
-          String(req.body?.enabled || "").toLowerCase() === "true";
         const out = await setAccessProgramEnrollment({
           propertyCode: code,
           propertyLocationId,
-          enabled,
+          enabled: req.body?.enabled,
+          enrolled: req.body?.enrolled,
+          staffOnly: req.body?.staffOnly,
+          internalOnly: req.body?.internalOnly,
+          staff_only: req.body?.staff_only,
+          internal_only: req.body?.internal_only,
           actor: actorFromReq(req),
         });
         return res.json({ ok: true, ...out });

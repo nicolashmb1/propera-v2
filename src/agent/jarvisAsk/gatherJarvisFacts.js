@@ -16,6 +16,7 @@ const { pickRecentTimeline } = require("./timeBrief");
 const { classifyJarvisIntent, isPortfolioOpenListQuestion } = require("./classifyJarvisIntent");
 const {
   parseServiceHistoryQuestion,
+  parseServiceHistoryAnalysis,
   queryServiceHistory,
 } = require("../jarvisQuery");
 
@@ -143,6 +144,24 @@ async function gatherJarvisFacts(scope, question) {
   const propertyCode =
     String(anchor.propertyCode || "").trim().toUpperCase() || "";
 
+  // Service history depends only on the question + anchor property — not on the
+  // focus-ticket chain below. Start it now so it overlaps those reads. Best
+  // effort: a failed history query degrades to null rather than failing the answer.
+  const serviceHistoryPromise =
+    intents.has("SERVICE_HISTORY")
+      ? (async () => {
+          const parsed = parseServiceHistoryQuestion(q, { propertyCode });
+          if (!parsed?.keywords?.length) return null;
+          return queryServiceHistory({
+            issueKeywords: parsed.keywords,
+            daysBack: parsed.daysBack,
+            propertyCode: parsed.propertyCode || propertyCode || undefined,
+            issueLabel: parsed.issueLabel,
+            analysisMode: parsed.analysisMode || parseServiceHistoryAnalysis(q),
+          });
+        })().catch(() => null)
+      : Promise.resolve(null);
+
   let openTicketsAtProperty = scope.propertyOpenTickets || [];
   if (propertyCode) {
     openTicketsAtProperty = await listOpenTicketsForProperty(propertyCode);
@@ -198,28 +217,18 @@ async function gatherJarvisFacts(scope, question) {
   }
 
   const focusTicket = await loadFocusTicketDetail({ ticketRowId, humanTicketId });
-  const costRowId = focusTicket?.ticketRowId || ticketRowId;
-  const costSummary = costRowId ? await loadTicketCostSummary(costRowId) : null;
 
+  // Cost summary and property spend are independent of each other once the
+  // focus ticket is known — run them together instead of back to back.
+  const costRowId = focusTicket?.ticketRowId || ticketRowId;
   const propCode =
     propertyCode || String(focusTicket?.propertyCode || "").trim().toUpperCase();
-  const propertySituation = propCode
-    ? await loadPropertyMaintenanceSpend(propCode)
-    : null;
+  const [costSummary, propertySituation] = await Promise.all([
+    costRowId ? loadTicketCostSummary(costRowId) : Promise.resolve(null),
+    propCode ? loadPropertyMaintenanceSpend(propCode) : Promise.resolve(null),
+  ]);
 
-  let serviceHistory = null;
-  if (intents.has("SERVICE_HISTORY")) {
-    const parsed = parseServiceHistoryQuestion(q, { propertyCode });
-    if (parsed?.keywords?.length) {
-      serviceHistory = await queryServiceHistory({
-        issueKeywords: parsed.keywords,
-        daysBack: parsed.daysBack,
-        propertyCode: parsed.propertyCode || propertyCode || undefined,
-        issueLabel: parsed.issueLabel,
-        analysisMode: parsed.analysisMode || parseServiceHistoryAnalysis(q),
-      });
-    }
-  }
+  const serviceHistory = await serviceHistoryPromise;
 
   return {
     scopeStory: scope.story || "",
