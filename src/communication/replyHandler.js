@@ -3,11 +3,13 @@ const {
   twilioBroadcastFrom,
   commMainNumberDisplay,
   commReplyWindowHours,
+  communicationOrgId,
 } = require("../config/env");
 const { normalizePhoneE164 } = require("../utils/phone");
 const { sendTwilioMessage } = require("../outbound/twilioSendMessage");
 const { appendEventLog } = require("../dal/appendEventLog");
 const { classifyReply } = require("./replyClassifier");
+const { getBrandContext } = require("./brandContextService");
 const { createMaintenanceTicketFromCommReply } = require("../brain/createMaintenanceTicketFromCommReply");
 
 function normalizeInboundFrom(raw) {
@@ -19,28 +21,67 @@ function normalizeInboundFrom(raw) {
   return normalizePhoneE164(s);
 }
 
-function buildAutoResponse(replyClass) {
-  const mainNumber = String(commMainNumberDisplay() || "").trim();
-  const maintenanceHint = mainNumber
-    ? " For maintenance, call or text " + mainNumber + "."
-    : " For maintenance, contact your building office.";
+function resolveReplyBrandName(brandContext, propertyCode) {
+  const ctx = brandContext && typeof brandContext === "object" ? brandContext : {};
+  const short = String(ctx.orgBrandShort || "").trim();
+  if (short) return short;
+  const full = String(ctx.orgBrandName || "").trim();
+  if (full) return full;
+  const code = String(propertyCode || "").trim().toUpperCase();
+  const prop = ctx.properties && ctx.properties[code];
+  if (prop && prop.displayName) return String(prop.displayName).trim();
+  return "";
+}
+
+/**
+ * Auto-response for inbound texts to the broadcast number. The broadcast inbox
+ * is not staffed, so every reply professionally redirects the resident to the
+ * brand's office and sets the expectation that no human will answer here.
+ * `opts.brandName` / `opts.officeNumber` are resolved by the caller; when absent
+ * the copy degrades gracefully to generic office wording.
+ */
+function buildAutoResponse(replyClass, opts) {
+  const o = opts && typeof opts === "object" ? opts : {};
+  const brand = String(o.brandName || "").trim();
+  const office = String(
+    (o.officeNumber !== undefined && o.officeNumber !== null
+      ? o.officeNumber
+      : commMainNumberDisplay()) || ""
+  ).trim();
   const klass = String(replyClass || "").trim().toUpperCase();
+
+  // STOP / opt-out: distinct, compliance-friendly confirmation.
   if (klass === "OPT_OUT") {
+    let tail = "";
+    if (brand && office) tail = " For assistance, contact " + brand + " at " + office + ".";
+    else if (brand) tail = " For assistance, contact " + brand + ".";
+    else if (office) tail = " For assistance, call " + office + ".";
     return (
-      "You have been opted out of broadcast notices from this number." + maintenanceHint
+      "You've been unsubscribed and won't receive further notices from this number." + tail
     );
   }
-  if (klass === "MAINTENANCE_SIGNAL" || klass === "EMERGENCY_SIGNAL") {
+
+  // Every other inbound reply gets the same unmonitored-inbox redirect.
+  if (brand && office) {
     return (
-      "This number is only for broadcast notices." +
-      (mainNumber
-        ? " For maintenance or emergencies, call or text " + mainNumber + " now."
-        : " For maintenance or emergencies, contact your building office now.")
+      "This inbox is not monitored. For assistance, please contact " +
+      brand +
+      "'s office at " +
+      office +
+      "."
     );
   }
-  return (
-    "Thanks for your reply. This number is only for broadcast notices." + maintenanceHint
-  );
+  if (brand) {
+    return "This inbox is not monitored. For assistance, please contact " + brand + "'s office.";
+  }
+  if (office) {
+    return (
+      "This inbox is not monitored. For assistance, please contact the management office at " +
+      office +
+      "."
+    );
+  }
+  return "This inbox is not monitored. Please contact your building management office for assistance.";
 }
 
 function withinReplyWindow(sentAtIso, windowHours) {
@@ -150,7 +191,24 @@ async function handleBroadcastReply(input, opts) {
     ticketSeedId = handoff && handoff.ticketSeedId ? handoff.ticketSeedId : null;
   }
 
-  const autoResponse = buildAutoResponse(replyClass);
+  const propertyCode =
+    (tenantMatch && tenantMatch.propertyCode) ||
+    (recipientMatch && recipientMatch.propertyCode) ||
+    "";
+  let brandName = "";
+  try {
+    const brandContext = await getBrandContext({
+      orgId: communicationOrgId(),
+      propertyCodes: propertyCode ? [propertyCode] : [],
+    });
+    brandName = resolveReplyBrandName(brandContext, propertyCode);
+  } catch (_) {
+    // Brand lookup is best-effort; auto-response degrades to generic copy.
+  }
+  const autoResponse = buildAutoResponse(replyClass, {
+    brandName,
+    officeNumber: commMainNumberDisplay(),
+  });
 
   const { data: inserted, error: insertError } = await sb
     .from("communication_replies")

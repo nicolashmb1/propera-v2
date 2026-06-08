@@ -54,7 +54,7 @@ Broadcast Twilio number → POST /webhooks/communications/sms
 | `unit_id` | **`units.id`** (uuid) | Floor filter uses **`units.floor`** (text — normalize/compare as string or parsed int) |
 | `organizations` | **No table yet** | V1: `org_id text` on campaigns without FK, or migration **`055`** adds minimal `organizations` + brand columns |
 | Property display names | **`properties.display_name`**, **`short_name`** (`003`/`008`) | Add **`display_name_short`**, **`comm_sender_label`** in **`055`**; seed Grand names in SQL |
-| Main number env | **`TWILIO_SMS_FROM`** | Add **`TWILIO_BROADCAST_FROM`**, **`COMM_MAIN_NUMBER_DISPLAY`** (footer), **`COMM_REPLY_WINDOW_HOURS`** |
+| Main number env | **`TWILIO_SMS_FROM`** | Add **`TWILIO_BROADCAST_FROM`**, **`COMM_MAIN_NUMBER_DISPLAY`** (reply auto-response office number), **`COMM_REPLY_WINDOW_HOURS`** |
 | `createTicketSeed()` | **Does not exist** | Phase D: implement **one** DAL/brain entry; do not duplicate finalize logic inside `src/communication/` |
 
 **Properties in scope (seed / filters):** `PENN`, `MORRIS`, `MURRAY`, `WESTFIELD`, `WESTGRAND` (and `WGRA` if used in DB — always resolve from `properties`, never hardcode in engine code).
@@ -268,7 +268,7 @@ Tier 1 deterministic regex / keyword classifier for `OPT_OUT`, `ACKNOWLEDGMENT`,
  * 2. Match recent communication_recipients (sent_at within COMM_REPLY_WINDOW_HOURS)
  * 3. classifyReply(Body) → insert communication_replies
  * 4. OPT_OUT → set comm_broadcast_opt_out on roster
- * 5. Auto-response (all classes): redirect to main number — never maintenance intake here
+ * 5. Auto-response: professional "this inbox is not monitored — contact <Brand>'s office at <COMM_MAIN_NUMBER_DISPLAY>" redirect (brand from brandContext, falls back to generic office copy); STOP gets a distinct opt-out confirmation. Never maintenance intake here.
  * 6. MAINTENANCE_SIGNAL | EMERGENCY_SIGNAL → createMaintenanceTicketFromCommReply(...) ; handoff_created=true
  * 7. Reply via broadcast FROM number
  * 8. Return empty TwiML (responses sent via API, not TwiML body)
@@ -486,3 +486,5 @@ When a phase ships, update:
 | 2026-05-26 | Added final SMS preview + segment estimate using a new thin preview seam over canonical `appendFooter()` / segment math in `messageComposer.js`. |
 | 2026-05-26 | Added `DELETE /api/communications/campaigns/:id` for safe draft deletion plus live `/communications/[id]` deep links and recipient/reply tabs in the portal. |
 | 2026-05-26 | Shifted the portal to the hybrid route shape: `/communications` for monitoring, `/communications/new` for setup, and `/communications/[id]` for campaign operations. |
+| 2026-06-06 | Reworked `buildAutoResponse` to a professional unmonitored-inbox redirect ("This inbox is not monitored. For assistance, please contact &lt;Brand&gt;'s office at &lt;number&gt;.") with brand resolved from `brandContext` and a distinct STOP opt-out confirmation; `handleBroadcastReply` now resolves brand context for the reply. Footer copy unchanged. |
+| 2026-06-07 | Dropped the "For maintenance, call or text …" line from the broadcast footer for this phase — footer is now just sender label + STOP opt-out, decoupled from `COMM_MAIN_NUMBER_DISPLAY` (which now only feeds the reply auto-response office number). `appendFooter` keeps its `mainNumberDisplay` param so the line can be restored without touching callers. |

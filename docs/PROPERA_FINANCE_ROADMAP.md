@@ -66,7 +66,7 @@ INBOUND (any channel)
 
 | Direction | Shape | Examples today / planned |
 |-----------|--------|-------------------------|
-| **Package in** | External payment or cost reality → **normalized financial fact** → stored on canonical tables | Receipt upload on cost row; manual ledger POST; **Leasehold/rent-roll snapshot** (Phase 1.5 — **not implemented** until export spec); Phase 2 rent CSV / Stripe webhook → `rent_postings` when Propera becomes rent source |
+| **Package in** | External payment or cost reality → **normalized financial fact** → stored on canonical tables | Receipt upload on cost row; manual ledger POST; **Leasehold snapshot** via **`leasehold-bridge`** → `tenant_account_snapshots` (**Phase 1.5 shipped**); Phase 2 rent CSV / Stripe webhook → `rent_postings` when Propera becomes rent source |
 | **Package out** | Closed period or rollup → **owner-facing expression** (PDF, email, portal card) | Phase 5 owner statement via outgate; portfolio KPI cards on `/financial` |
 
 Adapters for rent imports or bank CSV **must not** assign responsibility, change ticket lifecycle, or bypass the signal layer. They only **ingest normalized financial packages** that the finance DAL posts.
@@ -119,7 +119,7 @@ Every phase below extends this graph — it does not fork a new money silo.
 | **Tenant charge on cost row** | `tenant_charge_amount_cents` + `tenant_charge_status` on every cost row; approved rows auto-post to `tenant_ledger_entries` when `PROPERA_FINANCE_LEDGER_ENABLED=1` |
 | **Maintenance rollups** | `portal_property_maintenance_spend_month_v1` (UTC month); `portal_properties_v1` with UTC-month + YTD spend/charge/count (migration 048) |
 | **Vendor catalog** | `vendors` table + assignment to tickets + preventive program lines (migration 046) |
-| **Owner `/financial` area** | Portfolio page with property cards (expected rent + tenant balances + maintenance net owner cost live; rent/delinquency **explicit placeholders**); `/financial/properties/[p]` units table now shows lease rent, selected-month posted payments, standing balance, lease expiry, last payment, deposit, and 6-month payment history from Propera lease + ledger data |
+| **Owner `/financial` area** | Portfolio + property views use **Leasehold snapshots** when imported (**094**): billed, collected, collection rate, balance due, deposits, net rent enrichment; overview dashboard financial strip; `/financial/imports` for dev refresh; maintenance economics unchanged |
 | **Unit lease snapshot** | `unit_leases` table (migration 049) — rent, deposit, lease dates, recurring charge billing modes; editable in propera-app |
 | **Unit tenant ledger** | `tenant_ledger_entries` read + ticket-charge cross-check + **manual POST** (charge, fee, payment, credit, waiver, adjustment) from propera-app unit hub; manual lines support `effective_date` + `notes` (migration 052) |
 
@@ -180,22 +180,34 @@ Every phase below extends this graph — it does not fork a new money silo.
 
 ---
 
-## Phase 1.5 — Accounting state snapshot (incumbent read-only) — **blocked until export samples**
+## Phase 1.5 — Accounting state snapshot (incumbent read-only) — **shipped 2026-06-08**
 
-> **Status (2026-05):** **Not implemented.** A speculative CSV import was reverted — we do not know Leasehold export shape yet. **Gate:** accounting provides **real rent roll + ledger export** for one property → engineering writes **column mapping spec** → then migration + import + UI.
+> **Status:** **Live** for Leasehold via sibling **`leasehold-bridge`** (flat-file adapter). Propera never parses `H.Dat`; bridge exports normalized facts → propera-app import → Supabase. **Office syncher** (mirror → staging → changed-properties import) is **specified** — script + Task Scheduler **pending** at office PC.
 
 > **Goal:** `/financial` portfolio and unit views show **real** rent collected, delinquent, and balance from the incumbent — refreshed on a schedule — without Propera becoming the rent ledger.
 
 | Build | Detail | Migrations / code |
 |-------|--------|-------------------|
-| **`tenant_account_snapshots`** (or split tables) | Per `unit_catalog_id` + period: `balance_cents`, `rent_cents`, `last_payment_at`, `last_payment_cents`, `lease_end`, `deposit_cents`, `status` (current/paid_up/delinquent), `source_system` (`leasehold`), `synced_at`, raw `payload_json` for audit | Migration **058** (planned) |
-| **`tenant_payment_history`** | Rolling window of payments from export (date, amount, type) | Same migration or **058b** |
-| **Import adapter** | `POST /api/financial/import/leasehold-rent-roll` (CSV shape TBD with accounting) → upsert snapshots; idempotent on `(unit, period, source)` | propera-app server route + DAL |
-| **Scheduled sync** | Cron or manual “Refresh from Leasehold” button; show **“As of {synced_at}”** on every financial card | propera-app + ops doc |
-| **Wire snapshot APIs** | Phase 1 `GET /api/financial/portfolio` and `.../properties/[code]` prefer snapshot for rent/delinquency/balance when fresh; fall back to placeholders | propera-app |
+| **`tenant_account_snapshots`** | Per `unit_catalog_id`: balance, rent, payments, lease dates, `payload_json`, `source_system`, `synced_at` | Migration **094** (**shipped**) |
+| **Net rent enrichment** | Standing credits / subsidized units → `unit_leases.net_rent_cents` | Migration **095** + `leaseEnrichmentImport.ts` |
+| **Deposit enrichment** | Security + key deposits from S.Dat/R.Dat | Migration **096** + `depositEnrichmentImport.ts` |
+| **Import adapter** | `POST /api/financial/import/accounting-snapshots`; dev helpers `run-leasehold`, `run-leasehold-all` | propera-app + `leaseholdBridgeExport.ts` |
+| **Scheduled sync** | Office PC: robocopy mirror → staging, fingerprint, import changed properties only. **Mon–Sat 5 min, Sun 6 h.** Manual UI: `/financial/imports` | `../propera-app/docs/FINANCIAL_LEASEHOLD_SYNC.md` |
+| **Wire snapshot APIs** | `GET /api/financial/portfolio` and `.../properties/[code]` prefer snapshot; overview KPI strip on `/dashboard` | `financialSnapshot.ts` (**shipped**) |
+| **Properties v1** | WESTGRAND, WESTFIELD, MURRAY, MORRIS, PENN | `leasehold-bridge/config/property-mapping.json` |
+
+**Accounting “as of” display (locked UX):** `synced_at` is stored on every snapshot row (audit + idempotency) but shown **once per scope** in the UI — not on every unit row, metric card, or table cell.
+
+| Scope | Show once | Do **not** repeat |
+|-------|-----------|-------------------|
+| **Property `/financial/properties/[code]`** | One quiet line in the header/subtitle: `Accounting · Leasehold · as of {date time}` next to the month picker or under the property title | Per-unit row, per-metric hint, CSV columns |
+| **Portfolio `/financial`** | One portfolio-level line only when imported accounting numbers are in use: `Portfolio accounting · as of {latest sync across properties}` | Per property card, per KPI |
+| **Unit hub** | Inherits property context — no extra stamp on the unit page | “As of” on balance/rent cells |
+
+Stale sync: if `synced_at` is older than policy (e.g. 24h), tint the **single** header badge warn — still one line, not row noise.
 | **Unit match key** | Map export rows → `unit_catalog_id` (property + unit label / external id column) | One-time mapping table or config |
 
-**Phase 1.5 deliverable:** Portfolio cards show **real** rent collected and delinquent from Leasehold export; unit hub shows current balance and payment history **read-only** with sync timestamp. No write-back to Leasehold.
+**Phase 1.5 deliverable:** Portfolio cards show **real** rent collected and delinquent from Leasehold export; property financial view shows unit balances **read-only** with **one** property-level “as of” line. No write-back to Leasehold.
 
 **Guardrail:** Snapshot rows are **immutable facts from import** except superseded by the next sync. Propera enrichment columns live on **`unit_leases`** or a sibling `unit_lease_enrichment` table — never mixed into snapshot payload as if Leasehold said so.
 
@@ -380,4 +392,4 @@ Each phase is independently toggleable. Operators not ready for Phase 3 never se
 
 ---
 
-*Created: 2026-05-19. Updated: 2026-05-19 — Phase 1.5 implementation **reverted** (blocked on Leasehold export samples); §Incumbent ledger strategy retained. Update §Baseline and migration table when new migrations land. When a phase completes, note in HANDOFF_LOG.md and update PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md §2.5a + §8.*
+*Created: 2026-05-19. Updated: 2026-06-08 — Phase 1.5 **shipped** (094–096, leasehold-bridge, import APIs, portfolio rollups, overview KPIs). Office syncher script pending. When a phase item changes, note in HANDOFF_LOG.md and update PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md §2.5a + §8.*

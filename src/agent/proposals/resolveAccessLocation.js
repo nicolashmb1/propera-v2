@@ -49,7 +49,7 @@ async function resolveAccessLocation(opts) {
     return { ok: false, error: "missing_location", message: "Which amenity — gameroom, sauna, terrace?" };
   }
 
-  const locations = (await listAccessLocationsForPortal({ propertyCode })).filter((l) => l.active !== false);
+  const locations = await listAccessLocationsForPortal({ propertyCode, activeOnly: true });
   if (!locations.length) {
     return {
       ok: false,

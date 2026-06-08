@@ -701,6 +701,34 @@ function jarvisAskLlmTimeoutMs() {
   return Math.min(Math.max(n, 2000), 30000);
 }
 
+/**
+ * Tool-driven Jarvis read agent — a bounded OpenAI tool-calling loop where the
+ * model decides which read-only lookups to run instead of a fixed intent parser.
+ * Read-only; requires OPENAI_API_KEY. Default off.
+ */
+function jarvisReasonEnabled() {
+  return envFlagTrue("JARVIS_REASON_ENABLED", false);
+}
+
+function jarvisReasonModel() {
+  const m = String(env("JARVIS_REASON_MODEL", "")).trim();
+  return m || jarvisAskLlmModel();
+}
+
+/** Max tool-call iterations before the loop must produce a final answer. Clamped [1, 8]. */
+function jarvisReasonMaxSteps() {
+  const n = parseInt(env("JARVIS_REASON_MAX_STEPS", "4"), 10);
+  if (!Number.isFinite(n)) return 4;
+  return Math.min(Math.max(n, 1), 8);
+}
+
+/** Overall wall-clock budget for the whole reasoning loop. Clamped [3s, 60s]. */
+function jarvisReasonTimeoutMs() {
+  const n = parseInt(env("JARVIS_REASON_TIMEOUT_MS", "25000"), 10);
+  if (!Number.isFinite(n)) return 25000;
+  return Math.min(Math.max(n, 3000), 60000);
+}
+
 /** Adapter conversation row TTL (hours). Default 48; 0 = disable lazy expiry. */
 function tenantAgentConversationTtlHours() {
   const raw = env("TENANT_AGENT_CONVERSATION_TTL_HOURS", "48");
@@ -713,6 +741,8 @@ module.exports = {
   env,
   nodeEnv: env("NODE_ENV", "development"),
   port: parseInt(env("PORT", "8080"), 10) || 8080,
+  /** Cloud Run requires 0.0.0.0; localhost:8080 still works locally. Override with HOST=127.0.0.1 if needed. */
+  listenHost: env("HOST", "0.0.0.0"),
   supabaseUrl: env("SUPABASE_URL", ""),
   supabaseServiceRoleKey: env("SUPABASE_SERVICE_ROLE_KEY", ""),
   identityApiEnabled,
@@ -757,6 +787,10 @@ module.exports = {
   jarvisAskLlmEnabled,
   jarvisAskLlmModel,
   jarvisAskLlmTimeoutMs,
+  jarvisReasonEnabled,
+  jarvisReasonModel,
+  jarvisReasonMaxSteps,
+  jarvisReasonTimeoutMs,
   jarvisPlanEnabled,
   jarvisCommPortfolioEnabled,
   jarvisCommDefaultDeliveryMode,

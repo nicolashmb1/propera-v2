@@ -262,9 +262,9 @@ Jarvis Ask earns its keep here — **not** by repeating open ticket lists.
 
 Intent classification (agent or deterministic) → `QuerySpec` → SQL / read-model → **FactPack** → formatter or grounded LLM.
 
-**Code today:** `src/agent/jarvisAsk/` — portal Ask + voice `ask_propera`; `src/agent/jarvisQuery/` — **slice 1** service-history analytics (`query_service_history` voice tool + Ask intent). No full `QuerySpec` layer yet.
+**Code today:** `src/agent/jarvisAsk/` — portal Ask + voice `ask_propera`; `src/agent/jarvisQuery/` — **slice 1** service-history analytics (`query_service_history` voice tool + Ask intent). **`src/agent/jarvisReason/`** — the generalized read path: a tool-calling reasoning loop where the model chooses read-only lookups per question (`lookup_tickets`, `lookup_costs`, `get_ticket_detail`) instead of classifying into fixed intents. Behind `JARVIS_REASON_ENABLED`, used as the first path in Ask. This is the intended replacement for the intent-parser shape (`classifyJarvisIntent` / `parseServiceHistoryQuestion`); a formal `QuerySpec` schema is still open.
 
-**Build toward:** generalized `QuerySpec` → SQL/read-model → FactPack; shared by Ask, voice reads, and Plan drafts.
+**Build toward:** a ticket-joined cost drill-down ("which tickets cost the most") and other read tools on the same loop; optional `QuerySpec` formalization → FactPack shared by Ask, voice reads, and Plan drafts.
 
 ---
 
@@ -407,8 +407,9 @@ Patch Law: spine changes stay in **agent/compiler** and **proposal routers**; do
 | Jarvis Plan | `src/agent/jarvisPlan/` | **Live** — propose → confirm card; portal + voice share spine |
 | Staff live voice | `src/voice/jarvisVoice*.js`, `propera-app` co-pilot | **Slice 3** — full-screen overlay, structured confirm card, multi-ticket create, access ops |
 | Query / analytics | `src/agent/jarvisQuery/` | **Slice 1** — service history counts + unit breakdown (`query_service_history`) |
+| Tool-driven reads | `src/agent/jarvisReason/` | **Live** behind `JARVIS_REASON_ENABLED` — bounded tool-calling loop where the model picks read-only lookups instead of a fixed intent parser. Tools: `lookup_tickets` (filters + groupBy/countOnly), `lookup_costs` (spend aggregation, finance-flag gated → `finance_not_enabled` when off), `get_ticket_detail` (one-ticket story + cost summary), `get_unit_assets` (installed equipment make/model/serial; lifecycle-flag gated), `get_unit_service_history` (a unit's past work incl. service notes / what was tried — for diagnosis), `search_parts` (deep links to buy a part — Amazon + PartSelect/RepairClinic; links only, no price fetch, never auto-purchase). Wired as the first path in Jarvis Ask; falls back to the deterministic fact pack. Staff-activity is covered by `lookup_tickets`. **Layer 5 / parts arc:** Phase 1 (equipment→model) + Phase 2 (diagnosis) + Phase 3a (parts deep links) **done**; next is Phase 3b (paid search API for cheapest-price ranking) and Phase 4 (photo→asset capture) — see HANDOFF_LOG |
 | Access reads (voice) | `src/agent/access/` | **Live** — `list_amenity_locations`, `lookup_amenity_booking`, `get_amenity_booking_rules` (requires `PROPERA_ACCESS_ENGINE_ENABLED=1`) |
-| Tool gateway | — | **Not started** (external parts/tracking APIs) |
+| Tool gateway | `src/agent/jarvisReason/partsSearchTool.js` | **Phase 3a live** — `search_parts` builds deep links (Amazon + PartSelect model page + RepairClinic) for a resolved make/model + part. Read-only, **links only (no price fetch), never auto-purchase**. Phase 3b (paid search API for real cheapest-price ranking) + tracking APIs still not started |
 | Coordination loops | lifecycle + comms partial | **Partial** (not Jarvis-wired) |
 | Portal ingress | `runInboundPipeline.js`, `portal_chat_mode` | **Live** |
 

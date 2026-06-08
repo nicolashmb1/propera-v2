@@ -30,6 +30,7 @@ If the user says anything about **finances, ledger, rent, delinquency, owner sta
 1. **`docs/PROPERA_FINANCE_ROADMAP.md`** — **start here**. Six-phase plan + **§Finance inside Propera architecture** (channel-agnostic POS, package in/out, `/financial` module spine). Shows what is done, what is next, and the migration sequence. **Check which phase we are in before building anything.**
 2. **`docs/PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md`** — honest snapshot of what ships today (capabilities checklist, Layer 0–5 depth map, feature flags, §2.5a for propera-app finance surfaces).
 3. **`docs/PROPERA_FINANCIAL_LAYER_MAP.md`** — where tables live, portal routes, guardrails, app proxy pattern for cost/ledger data.
+4. **`../propera-app/docs/FINANCIAL_LEASEHOLD_SYNC.md`** — Leasehold snapshot ingest, office syncher (mirror → staging), schedule, migrations **094–096**.
 
 ### Where the roadmap stands right now (update this when a phase item ships)
 
@@ -38,7 +39,7 @@ If the user says anything about **finances, ledger, rent, delinquency, owner sta
 | **Baseline** | ✅ Complete | 051 (051 = program_lines staff — ops, not finance) |
 | **Phase 1** — credible daily use (snapshot APIs, lease/rent on cards, ledger void/date/notes) | 🟡 In progress | **052** applied; Phase 1d (property expenses + record payment + bill scan) shipped **2026-05-30** — see roadmap §1d |
 | **Phase 1d** — parallel-run operating expenses (`property_expenses` table, expense tab, bill scan, record payment) | ✅ Shipped | **082** `property_expenses`; record payment uses existing ledger POST; bill scan via V2 `expenseScanVision.js` |
-| **Phase 1.5** — incumbent accounting **read-only snapshot** (Leasehold rent roll / ledger export → `/financial`) | 🔲 **Blocked** — no code until export samples + column spec | see roadmap §1.5; **do not** apply **058** until spec exists |
+| **Phase 1.5** — incumbent accounting **read-only snapshot** (Leasehold → `/financial`) | ✅ **Shipped** (2026-06-08) — bridge + import APIs + snapshot rollups; office syncher **planned** | migrations **094–096**; see `../propera-app/docs/FINANCIAL_LEASEHOLD_SYNC.md` |
 | **Phase 2** — rent roll + delinquency (native `rent_postings` or promoted import) | 🔲 Not started | needs 053 |
 | **Phase 3** — vendor finance / AP | 🔲 Not started | needs 054–055 |
 | **Phase 4** — budget vs actual | 🔲 Not started | needs 056 |
@@ -53,7 +54,7 @@ If the user says anything about **finances, ledger, rent, delinquency, owner sta
 - **Manual ledger lines** and **unit lease** upserts go through **propera-app Next routes** with the tenant-mutation gate — not the V2 ticket-cost DAL.
 - Ticket economics stay **authoritative on tickets**. Manual ledger lines are PM/owner adjustments only.
 - Each phase needs **schema + API + propera-app surface** (+ financial snapshot read APIs for portfolio/property views). No orphaned half-done migrations.
-- Placeholders in the UI must stay honest (say "not connected" rather than showing zero).
+- When Leasehold snapshots are absent, portfolio rent/delinquency may fall back to lease/ledger reads — show honest **as-of** / import prompts, not fake zeros.
 
 ---
 

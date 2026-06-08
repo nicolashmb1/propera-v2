@@ -19,6 +19,15 @@
 | Tenant ledger (opt-in) | `public.tenant_ledger_entries` | Posted from approved ticket charges when `PROPERA_FINANCE_LEDGER_ENABLED=1`. |
 | Rollups | `portal_ticket_financial_summary_v1`, `portal_property_maintenance_spend_month_v1`, **`portal_properties_v1`** (current UTC month + **YTD** maintenance columns after **048**) | Read models for badges / property spend. |
 | Activity timeline | `public.ticket_timeline_events` | Trigger-owned kinds unchanged; V2 appends `cost_added`, `cost_updated`, `tenant_charge_decision`. |
+| Incumbent snapshot (Leasehold) | `public.tenant_account_snapshots` | Read-only import per unit; migration **094**. Payment history in `payload_json`. |
+| Lease enrichment (import-derived) | `public.unit_leases` | `net_rent_cents` (**095**), `security_deposit_cents` / `key_deposit_cents` (**096**), `*_derived_at` stamps. |
+
+## Incumbent ingest (propera-app, not V2 portal)
+
+- **Adapter:** `leasehold-bridge` (sibling repo) — parses mirror flat files; Propera accepts JSON only.
+- **Routes:** `POST /api/financial/import/accounting-snapshots`, `run-leasehold`, `run-leasehold-all`.
+- **Rollups:** `propera-app/src/lib/server/financialSnapshot.ts` — portfolio/property KPIs when `accountingSnapshot` present.
+- **Ops:** Office PC syncher → staging copy → changed properties only. See **`../propera-app/docs/FINANCIAL_LEASEHOLD_SYNC.md`**.
 
 ## Attachments
 

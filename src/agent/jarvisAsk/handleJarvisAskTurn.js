@@ -6,11 +6,13 @@ const { appendEventLog } = require("../../dal/appendEventLog");
 const {
   jarvisAskEnabled,
   jarvisAskLlmEnabled,
+  jarvisReasonEnabled,
 } = require("../../config/env");
 const { compileOperationalScope } = require("../operationalScope/compileOperationalScope");
 const { gatherJarvisFacts } = require("./gatherJarvisFacts");
 const { formatJarvisAskReply } = require("./formatJarvisAskReply");
 const { maybeJarvisAskLlmReply } = require("./maybeJarvisAskLlmReply");
+const { runJarvisReasoning } = require("../jarvisReason");
 
 /**
  * @param {object} opts
@@ -55,6 +57,37 @@ async function handleJarvisAskTurn(opts) {
       actorKey: String(staffContext.staffActorKey || "").trim(),
       transportChannel: "portal",
     });
+  }
+
+  // Tool-driven reasoning path: the model decides which read-only lookups answer
+  // the question (no fixed intent parser). Falls back to the deterministic fact
+  // pack below if disabled, unavailable, or it cannot produce an answer.
+  if (jarvisReasonEnabled() && question) {
+    const reasoned = await runJarvisReasoning({ question, scope }).catch(() => null);
+    if (reasoned && reasoned.ok && reasoned.reply) {
+      await appendEventLog({
+        traceId,
+        log_kind: "agent",
+        event: "JARVIS_REASON_ANSWERED",
+        payload: {
+          question_len: question.length,
+          steps: reasoned.steps || 0,
+          exhausted: reasoned.exhausted === true,
+          lookups: (reasoned.trace || []).map((t) => ({
+            tool: t.tool,
+            total: t.total,
+            capped: t.capped,
+          })),
+          story: scope.story || "",
+        },
+      });
+      return {
+        ok: true,
+        brain: "jarvis_ask",
+        replyText: reasoned.reply,
+        resolution: { mode: "ask", readOnly: true, usedLlm: true, reasoning: true },
+      };
+    }
   }
 
   const facts = await gatherJarvisFacts(scope, question);

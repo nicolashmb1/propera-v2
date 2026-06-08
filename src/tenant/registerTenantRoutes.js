@@ -30,6 +30,7 @@ const {
   listTenantDocuments,
   getTenantDocumentDownloadUrl,
 } = require("./tenantDocumentsService");
+const { getTenantAccountBalance } = require("./tenantAccountService");
 const {
   listTenantAccessLocations,
   getPublicAccessLocation,
@@ -242,6 +243,26 @@ function registerTenantRoutes(app) {
         return res.status(status).json({ ok: false, error: err });
       }
       return res.json({ ok: true, ...result });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err?.message || err) });
+    }
+  });
+
+  // ── Account balance (Leasehold snapshot, tenant unit only) ─────────────────
+
+  app.get("/api/tenant/balance", requireTenantAuth, async (req, res) => {
+    const sb = getSupabase();
+    if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+    try {
+      const result = await getTenantAccountBalance(sb, req.tenantCtx);
+      if (!result.ok) {
+        const status =
+          result.error === "missing_unit_context" || result.error === "property_mismatch"
+            ? 404
+            : 500;
+        return res.status(status).json({ ok: false, error: result.error });
+      }
+      return res.json(result);
     } catch (err) {
       return res.status(500).json({ ok: false, error: String(err?.message || err) });
     }

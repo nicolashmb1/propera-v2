@@ -42,6 +42,10 @@ describe("communication audience helpers", () => {
       floors: ["3", "4"],
       unit_ids: ["abc", "def"],
       tenant_ids: ["ten1", "ten2"],
+      // Normalized filter also carries delivery-mode defaults consumed by
+      // resolveAudience / campaignService / tenantNoticesService.
+      include_tenant_portal: true,
+      delivery_mode: "sms_and_portal",
     });
   });
 

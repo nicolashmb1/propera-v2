@@ -6,6 +6,7 @@ const express = require("express");
 const {
   port,
   nodeEnv,
+  listenHost,
   identityApiEnabled,
   lifecycleCronSecret,
 } = require("./config/env");
@@ -509,8 +510,8 @@ app.get("/health", async (req, res) => {
   });
 });
 
-const server = app.listen(port, () => {
-  boot("listen", { port, nodeEnv });
+const server = app.listen(port, listenHost, () => {
+  boot("listen", { port, listenHost, nodeEnv });
   registerVoiceRoutes(app, server);
 });
 

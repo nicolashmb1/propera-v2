@@ -357,7 +357,7 @@ function mapPolicyRow(policy) {
   };
 }
 
-async function listAccessLocationsForPortal({ orgId, propertyCode } = {}) {
+async function listAccessLocationsForPortal({ orgId, propertyCode, activeOnly = false } = {}) {
   const sb = getSupabase();
   if (!sb) return [];
   let q = sb
@@ -367,9 +367,51 @@ async function listAccessLocationsForPortal({ orgId, propertyCode } = {}) {
     .order("name", { ascending: true });
   if (orgId) q = q.eq("org_id", String(orgId).trim());
   if (propertyCode) q = q.eq("property_code", String(propertyCode).trim().toUpperCase());
+  if (activeOnly) q = q.eq("active", true);
   const { data, error } = await q;
   if (error || !data) return [];
   return data.map(mapLocationRow);
+}
+
+/**
+ * Staff portal — patch enrolled location metadata (e.g. staff_only visibility).
+ * @param {string} locationId
+ * @param {object} patch
+ * @param {boolean} [patch.staffOnly]
+ * @param {boolean} [patch.internalOnly]
+ */
+async function updateAccessLocationForPortal(locationId, patch = {}) {
+  const sb = getSupabase();
+  if (!sb) throw new Error("no_db");
+  const id = String(locationId || "").trim();
+  if (!id) throw new Error("missing_location_id");
+
+  let staffOnlyValue;
+  if (patch.staffOnly !== undefined) staffOnlyValue = !!patch.staffOnly;
+  else if (patch.internalOnly !== undefined) staffOnlyValue = !!patch.internalOnly;
+  else if (patch.staff_only !== undefined) {
+    staffOnlyValue =
+      patch.staff_only === true || String(patch.staff_only).toLowerCase() === "true";
+  } else if (patch.internal_only !== undefined) {
+    staffOnlyValue =
+      patch.internal_only === true || String(patch.internal_only).toLowerCase() === "true";
+  } else {
+    throw new Error("no_updates");
+  }
+  const updates = {
+    staff_only: staffOnlyValue,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data, error } = await sb
+    .from("access_locations")
+    .update(updates)
+    .eq("id", id)
+    .select("*")
+    .maybeSingle();
+  if (error) throw new Error(error.message || "update_failed");
+  if (!data) throw new Error("not_found");
+  return mapLocationRow(data);
 }
 
 async function getAccessLocationById(locationId) {
@@ -1375,6 +1417,7 @@ module.exports = {
   listAccessProgramForProperty,
   setAccessProgramEnrollment,
   listAccessLocationsForPortal,
+  updateAccessLocationForPortal,
   getAccessLocationById,
   getAccessPolicyForLocation,
   listSchedulesForLocation,

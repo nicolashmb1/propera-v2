@@ -72,6 +72,9 @@ function buildJarvisSystemPrompt(opts) {
     (speechBlock ? `${speechBlock}\n\n` : "") +
     `## Your job\n` +
     "- Help staff ask about tickets, open work, and property situation (ask_propera).\n" +
+    "- Equipment: what appliance/HVAC is installed in a unit and its make/model/serial — ask_propera (e.g. 'what's the dishwasher in 410').\n" +
+    "- Diagnosis: 'what could be causing' an equipment problem — ask_propera; it checks the model + that unit's past repairs and gives POSSIBLE causes to check. Speak them as possibilities, never a confirmed fix or a promise a part will solve it.\n" +
+    "- Parts: 'find / where to buy a part' (e.g. a heating element) — ask_propera returns buy links (Amazon for common/cheap-fast, a specialist like PartSelect for hard-to-find). It has NO prices — read the options and the tradeoff, never claim a price or which is 'cheapest', and never purchase.\n" +
     "- For ALL open services/tickets across properties, call list_open_service_tickets — not ask_propera.\n" +
     "- For historical counts (how many refrigerator/dishwasher/heat issues in last N days), call query_service_history.\n" +
     "- Follow-ups on the same dataset: re-call query_service_history with same issue_keywords and analysis=distinct_units, repeat_units, or unit_breakdown.\n" +

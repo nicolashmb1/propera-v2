@@ -28,9 +28,30 @@ describe("communication reply classifier", () => {
     assert.equal(classifyReply("When will this happen?"), "QUESTION");
   });
 
-  test("buildAutoResponse redirects back to main number", () => {
-    const text = buildAutoResponse("MAINTENANCE_SIGNAL");
-    assert.match(text, /For maintenance or emergencies, call or text/i);
+  test("buildAutoResponse tells repliers the inbox is not monitored and points to the office", () => {
+    const text = buildAutoResponse("MAINTENANCE_SIGNAL", {
+      brandName: "The Grand",
+      officeNumber: "(908) 555-0100",
+    });
+    assert.match(text, /not monitored/i);
+    assert.match(text, /The Grand/);
+    assert.match(text, /\(908\) 555-0100/);
+  });
+
+  test("buildAutoResponse confirms opt-out for STOP", () => {
+    const text = buildAutoResponse("OPT_OUT", {
+      brandName: "The Grand",
+      officeNumber: "(908) 555-0100",
+    });
+    assert.match(text, /unsubscribed/i);
+    assert.match(text, /The Grand/);
+    assert.match(text, /\(908\) 555-0100/);
+  });
+
+  test("buildAutoResponse falls back to generic office copy without brand or number", () => {
+    const text = buildAutoResponse("QUESTION", { brandName: "", officeNumber: "" });
+    assert.match(text, /not monitored/i);
+    assert.match(text, /building management office/i);
   });
 });
 

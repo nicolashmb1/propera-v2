@@ -37,6 +37,14 @@ If you need to move V2 only, use e.g. `8081` in `.env` — **do not use 3000** f
 
 ## Run locally (first success check)
 
+See **[docs/CLOUD_RUN_DEPLOY.md](docs/CLOUD_RUN_DEPLOY.md)** when deploying to **Google Cloud Run** (`propera-live`, staging service `propera-v2-staging`). Local dev and ngrok are unchanged.
+
+**Where to put env vars (local `.env` vs Cloud Run vs Vercel):** **[docs/ENV_WHERE.md](docs/ENV_WHERE.md)**
+
+Production brain: **[docs/CLOUD_RUN_PROD_CHECKLIST.md](docs/CLOUD_RUN_PROD_CHECKLIST.md)** (`propera-v2-prod`) — separate secrets; no Vercel/webhook cutover until Phase 5. Deploy: `npm run cloud-run:deploy-prod` (2026-06-08: revision **00015** healthy).
+
+**Leasehold financial snapshots:** migrations **094–096**; ingest runs in **propera-app** + **`leasehold-bridge`**; office syncher spec in **`../propera-app/docs/FINANCIAL_LEASEHOLD_SYNC.md`**.
+
 ```bash
 cd propera-v2
 npm install

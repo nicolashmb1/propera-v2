@@ -113,8 +113,12 @@ const JARVIS_VOICE_READ_TOOLS = [
     type: "function",
     name: "ask_propera",
     description:
-      "Read-only: current ticket detail, unit status, costs, timeline, property situation. " +
-      "For historical counts (how many X last N days) use query_service_history instead.",
+      "Read-only deep answers. Use for: current ticket detail, unit status, costs, timeline, property situation; " +
+      "a unit's installed equipment make/model/serial ('what's the dishwasher in 410'); diagnosis of an equipment " +
+      "problem ('what could be causing the fridge at 502' — it checks the model + that unit's past repairs and gives " +
+      "POSSIBLE causes, never a confirmed fix); and where to buy a replacement part ('find a heating element for that " +
+      "dishwasher' — returns Amazon + specialist links, NO prices). For historical counts (how many X last N days) use " +
+      "query_service_history instead.",
     parameters: {
       type: "object",
       properties: {

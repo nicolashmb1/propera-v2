@@ -87,8 +87,7 @@ async function resolveAccessReservation(opts) {
   );
   const { startUtc, endUtc } = propertyDayBoundsUtc(dayMid);
 
-  let locations = await listAccessLocationsForPortal({ propertyCode });
-  locations = locations.filter((l) => l.active !== false);
+  let locations = await listAccessLocationsForPortal({ propertyCode, activeOnly: true });
 
   if (amenityName) {
     const locHit = await resolveAccessLocation({ propertyCode, locationHint: amenityName });

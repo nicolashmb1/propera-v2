@@ -19,6 +19,14 @@ describe("buildJarvisSystemPrompt", () => {
     assert.match(p, /## context/);
   });
 
+  it("advertises the reasoning-loop capabilities so voice routes them to ask_propera", () => {
+    const p = buildJarvisSystemPrompt({ staffDisplayName: "Nick" });
+    assert.match(p, /Equipment:.*make\/model\/serial/i);
+    assert.match(p, /Diagnosis:.*POSSIBLE causes/i);
+    assert.match(p, /Parts:.*ask_propera/i);
+    assert.match(p, /never claim a price or which is 'cheapest'/i);
+  });
+
   it("uses custom agent display name when provided", () => {
     const p = buildJarvisSystemPrompt({ agentName: "Nova" });
     assert.match(p, /You are Nova, Propera's staff operations assistant/i);

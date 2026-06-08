@@ -2,7 +2,6 @@ const {
   openaiApiKey,
   openaiCommDraftModel,
   commMainNumberDisplay,
-  commBroadcastFooterMainNumber,
 } = require("../config/env");
 const { openaiChatCompletionsWithRetry } = require("../integrations/openaiTransport");
 
@@ -263,19 +262,7 @@ function appendFooter(messageBody, brandContext, propertyCode, mainNumberDisplay
       : propertyCtx && propertyCtx.displayName
         ? "Management at " + propertyCtx.displayName
         : String(ctx.orgBrandShort || ctx.orgBrandName || "Management").trim());
-  const mainLine =
-    String(mainNumberDisplay || "").trim() || commBroadcastFooterMainNumber();
   const lang = normalizeLanguage(language);
-
-  let redirectLine = "";
-  if (mainLine) {
-    redirectLine = "For maintenance, call or text " + mainLine + ".";
-    if (lang === "es") {
-      redirectLine = "Para mantenimiento, llame o envie un texto al " + mainLine + ".";
-    } else if (lang === "pt") {
-      redirectLine = "Para manutencao, ligue ou envie mensagem para " + mainLine + ".";
-    }
-  }
 
   let stopLine = "Reply STOP to opt out.";
   if (lang === "es") {
@@ -284,9 +271,11 @@ function appendFooter(messageBody, brandContext, propertyCode, mainNumberDisplay
     stopLine = "Responda STOP para sair.";
   }
 
-  const footerParts = ["- " + label];
-  if (redirectLine) footerParts.push(redirectLine);
-  footerParts.push(stopLine);
+  // Maintenance/office redirect line intentionally omitted for this phase — the
+  // footer is just the sender label + STOP opt-out. `mainNumberDisplay` is kept
+  // in the signature so the line can be restored later without touching callers.
+  void mainNumberDisplay;
+  const footerParts = ["- " + label, stopLine];
 
   return normalizeBody(body + "\n\n" + footerParts.join("\n"));
 }

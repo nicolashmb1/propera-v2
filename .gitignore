@@ -1,5 +1,6 @@
 node_modules/
 .env
 .env.local
+config/cloud-run-prod.secrets.local.env
 *.log
 .DS_Store

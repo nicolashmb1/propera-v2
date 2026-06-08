@@ -56,6 +56,9 @@ Run SQL files in **numeric order** in the Supabase SQL Editor (same project as `
 | **089_unit_asset_nameplates_storage.sql** | Private Supabase bucket **`unit-asset-nameplates`** for nameplate photos | App upload **`/api/unit-assets/nameplate/upload`**; OCR via **`assetNameplateVision.js`** |
 | **090_ticket_episode_stamp.sql** | `tickets.unit_occupancy_id`, `tickets.tenant_roster_id_at_open` | **`ticketEpisodeStamp.js`** at create; History API **`unitEpisodeTicketHistory.js`**; run after **087** |
 | **091_access_locations_staff_only.sql** | `access_locations.staff_only` | Amenity program **Internal only** — staff command center only; blocks tenant portal / agent / inbound ACCESS_* |
+| **094_tenant_account_snapshots_v1.sql** | **`tenant_account_snapshots`** — incumbent read-only financial facts per unit (`source_system`, `synced_at`, `payload_json`) | **`propera-app`** `accountingSnapshotImport.ts`, `financialSnapshot.ts`; import via `POST /api/financial/import/accounting-snapshots` + leasehold-bridge adapter |
+| **095_unit_lease_net_rent_enrichment.sql** | **`unit_leases`**: `net_rent_cents`, `rent_subsidy_cents`, `net_rent_derived_at` | **`leaseEnrichmentImport.ts`** / `netRentEnrichmentImport.ts` on snapshot import; portfolio subsidy math |
+| **096_unit_lease_deposit_enrichment.sql** | **`unit_leases`**: `key_deposit_cents`, `deposits_derived_at` | **`depositEnrichmentImport.ts`**; unit hub + `/financial/properties/[p]` deposit display |
 
 ### Minimum paths
 

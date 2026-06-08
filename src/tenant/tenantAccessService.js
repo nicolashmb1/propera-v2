@@ -59,8 +59,8 @@ async function listTenantAccessLocations(tenantCtx) {
   const code = tenantPropertyCode(tenantCtx);
   if (!code) return [];
 
-  const locations = await listAccessLocationsForPortal({ propertyCode: code });
-  const active = locations.filter((l) => l.active && !l.staffOnly);
+  const locations = await listAccessLocationsForPortal({ propertyCode: code, activeOnly: true });
+  const active = locations.filter((l) => !l.staffOnly);
   const sb = getSupabase();
   const out = [];
   for (const loc of active) {

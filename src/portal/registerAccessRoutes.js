@@ -6,6 +6,7 @@ const { verifyPortalRequest } = require("./portalAuth");
 const { accessEngineEnabled } = require("../config/env");
 const {
   listAccessLocationsForPortal,
+  updateAccessLocationForPortal,
   getAccessLocationById,
   getAccessPolicyForLocation,
   listSchedulesForLocation,
@@ -109,6 +110,7 @@ function registerAccessRoutes(app) {
         const rows = await listAccessLocationsForPortal({
           orgId: req.query.orgId,
           propertyCode: req.query.propertyCode,
+          activeOnly: req.query.includeInactive !== "1",
         });
         return res.json({ ok: true, locations: rows });
       } catch (err) {
@@ -138,6 +140,21 @@ function registerAccessRoutes(app) {
         return res.json({ ok: true, location: loc });
       } catch (err) {
         return res.status(500).json({ ok: false, error: String(err.message || err) });
+      }
+    })
+  );
+
+  app.put(
+    "/api/portal/access/locations/:locationId",
+    gateAccess(async (req, res) => {
+      try {
+        const loc = await updateAccessLocationForPortal(req.params.locationId, req.body || {});
+        return res.json({ ok: true, location: loc });
+      } catch (err) {
+        const msg = String(err.message || err);
+        const status =
+          msg === "missing_location_id" || msg === "no_updates" ? 400 : msg === "not_found" ? 404 : 500;
+        return res.status(status).json({ ok: false, error: msg });
       }
     })
   );

@@ -7,6 +7,122 @@
 
 ---
 
+## 2026-06-08 — Leasehold financial snapshot ingest + office syncher spec
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **Migrations** | **094** `tenant_account_snapshots`; **095** net rent enrichment on `unit_leases`; **096** security + key deposit enrichment |
+| **propera-app import** | `accounting-snapshots`, `run-leasehold`, `run-leasehold-all`; batched `leaseEnrichmentImport`; typed `leaseholdBridgeExport.ts` |
+| **Portfolio math** | `financialSnapshot.ts` — tenant obligation from enriched net or billed; credits = billed − net per unit; simplified subtitles |
+| **UI** | Overview financial KPIs (Billed, Collected, Collection rate, Balance due); Financial nav under All Tickets; deposits on unit hub + property financial |
+| **leasehold-bridge** | Deposit parsers (S.Dat/R.Dat), pet fee naming, strict net-rent ADJ rules, batched import support |
+| **Vercel build** | TypeScript fixes `leaseholdBridgeExport`, `tenantLedgerMath` (commit `e409cfa`) |
+| **Cloud Run prod** | `npm run cloud-run:deploy-prod` — revision **00015** healthy; deploy skips missing optional Secret Manager bindings |
+| **Docs** | `propera-app/docs/FINANCIAL_LEASEHOLD_SYNC.md`; finance roadmap Phase 1.5 updated |
+
+### Architecture locked (office syncher)
+
+```text
+\\lhdata → office mirror (not Propera) → robocopy → Propera staging → bridge → import API
+```
+
+- Never touch `\\lhdata` or office mirror writes.
+- Incremental: fingerprint `RA####.DAT` / `H.Dat` / `S.Dat` / `R.Dat` per property; import only changed.
+- Schedule: **Mon–Sat every 5 min**, **Sunday every 6 h**.
+
+### Next / open
+
+| Item | Notes |
+|------|--------|
+| **Office PC** | Copy `leasehold-bridge` to office; set mirror source + staging paths; `npm install` |
+| **`sync-changed` script** | robocopy + cursor + POST import — not in repo yet |
+| **M2M import secret** | `PROPERA_FINANCIAL_IMPORT_SECRET` for unattended office POST |
+| **Task Scheduler** | Two tasks (weekday 5 min, Sunday 6 h) |
+| **Apply 094–096** | Supabase SQL Editor if not already applied |
+| **Re-import all 5** | After enrichment changes |
+
+### Commands
+
+```bash
+# Local dev import (machine with bridge + mirror)
+cd propera-app
+# Financial → Imports → Import all properties
+
+# Cloud Run prod deploy
+cd propera-v2
+npm run cloud-run:deploy-prod
+```
+
+---
+
+## 2026-06-06 — Jarvis reasoning read agent (slice 1): tool-driven, not intent-parsed
+
+**Why:** The Jarvis *write* spine is mature, but the *read* side was a fixed intent parser (`classifyJarvisIntent` + `parseServiceHistoryQuestion` → pre-fetch a fixed fact pack → phrase). Product direction: Jarvis should **understand the question and go look for the answer**, fetching different data per question, not match phrasings to canned reports.
+
+| Area | Change |
+|------|--------|
+| **New module** | `src/agent/jarvisReason/` — `ticketLookupTool.js` (flexible read-only `lookup_tickets`: filters property/status/category/priority/text/assignee/scheduled/date-range, plus `groupBy` + `countOnly`; reads `portal_tickets_v1`, recent-window capped at 300 with a `capped` floor flag) and `runJarvisReasoning.js` (bounded OpenAI **tool-calling loop**: model chooses lookups, may call several times, then answers; facts-only/read-only system prompt; forced no-tool summary on step/budget exhaustion; test seam `setReasonChatForTests`). |
+| **Wiring** | `handleJarvisAskTurn.js` — when `JARVIS_REASON_ENABLED` and a question is present, run the reasoning loop **first**; on disabled/no-key/failure it falls back to the existing `gatherJarvisFacts` deterministic path. Logs `JARVIS_REASON_ANSWERED` with the lookup trace. |
+| **Env** | `src/config/env.js` + `.env.example`: `JARVIS_REASON_ENABLED` (default off), `JARVIS_REASON_MODEL` (defaults to `JARVIS_ASK_LLM_MODEL`), `JARVIS_REASON_MAX_STEPS` (1–8, default 4), `JARVIS_REASON_TIMEOUT_MS` (3–60s, default 25s). |
+| **Tests** | `tests/agent/jarvisReason/ticketLookupTool.test.js` + `runJarvisReasoning.test.js` (11 tests, all green); added `tests/agent/jarvisReason/*.test.js` to the `npm test` glob. |
+
+**Scope:** Read-only (Tier 0) — no writes, no new brain mutation paths, safe under the freeze. This is the start of JARVIS_SPINE Layer 4; it does **not** yet remove the legacy intent parser (kept as fallback).
+
+**Same-day follow-on — two more read tools (same loop):**
+
+| Tool | File | What it answers |
+|------|------|-----------------|
+| `lookup_costs` | `src/agent/jarvisReason/costLookupTool.js` | Spend aggregation over `ticket_cost_entries` — "how much did we spend this year", "what did plumbing cost at Penn". Filters property/entryType/vendor/date; `groupBy` entry_type\|property\|vendor; company + tenant-charge totals (cents + USD). **Finance-flag gated** → returns `finance_not_enabled` (model says cost tracking is off, never $0). Voided rows JS-filtered so it works whether or not migration **053** is applied. |
+| `get_ticket_detail` | `src/agent/jarvisReason/ticketDetailTool.js` | One-ticket story — "what's the deal with 301": status/category/priority/assignee/window/tenant/notes/timeline + cost summary. Reuses `loadFocusTicketDetail` + `loadTicketCostSummary`. |
+
+Staff-activity questions ("why did Nick only do 4 today") are already covered by `lookup_tickets` (assignee + closed + date). **Next:** a ticket-joined cost drill-down. Tests: `tests/agent/jarvisReason/costAndDetailTools.test.js` (7 more; 18 jarvisReason tests total, all green). Full suite unchanged at 15 pre-existing reds.
+
+**Asset / parts arc — Phase 1: `get_unit_assets` (equipment → model).**
+
+Goal of the arc (staff voice): *"I'm working on unit 410's dishwasher, needs a heating element — find the cheapest part"* and *"fridge at Penn 502, what could be causing this?"* — Jarvis resolves the real make/model from the unit's asset registry, then does parts lookup / diagnosis. Phases: **(1) assets in the loop ← this**, (2) diagnosis synthesis (assets + service history), (3) external parts-search **tool gateway** (Layer 5; read-only links, **never auto-purchase** — buying is a future Tier-3 step; needs a data-source decision: search API vs appliance-parts specialist vs Amazon PA-API), (4) photo→asset capture (vision extract make/model/serial → confirm → `addUnitAsset`).
+
+| Area | Change |
+|------|--------|
+| **New tool** | `src/agent/jarvisReason/unitAssetsTool.js` — `get_unit_assets(propertyCode, unit, assetType?)`. Reuses `resolveUnitCatalogId` + `listUnitAssets` (no new schema; registry already has make/model/serial/nameplate_photo). Synonyms (fridge→refrigerator, ac→hvac). Read-only, gated by `unitLifecycleEnabled()` (`PROPERA_UNIT_LIFECYCLE_ENABLED`) → `assets_not_enabled`; `unit_not_found` when property+unit can't match. |
+| **Loop** | Registered in `runJarvisReasoning` TOOLS/TOOL_IMPL + system-prompt rule (resolve equipment → model via `get_unit_assets` before parts/diagnosis); exported from `jarvisReason/index.js`. |
+| **Tests** | `tests/agent/jarvisReason/unitAssetsTool.test.js` (6; resolve, filter, synonym, unit_not_found, assets_not_enabled, loop registration). Full suite **1169 pass / 15 pre-existing reds** — zero new. |
+
+**Enable assets in Jarvis:** `PROPERA_UNIT_LIFECYCLE_ENABLED=1` (plus the Jarvis reason flags).
+
+**Phase 2 — diagnosis ("fridge at 502, what's causing it?").** Diagnosis is a *synthesis* over existing data, not a new data source — but the missing piece was "what was already tried," which `lookup_tickets` omits.
+
+| Area | Change |
+|------|--------|
+| **New tool** | `src/agent/jarvisReason/unitServiceHistoryTool.js` — `get_unit_service_history(propertyCode, unit, assetType?)`: chronological unit work (open+closed) **including `service_notes`**, equipment text filter with synonym groups. Reads `portal_tickets_v1`. Distinct from `lookup_tickets` (no notes). Read-only, ungated (ticket reads). |
+| **Prompt** | `runJarvisReasoning` system prompt gained a **diagnosis discipline**: resolve model via `get_unit_assets` → pull prior work via `get_unit_service_history` → offer **possible** causes clearly labeled as possibilities, prioritized by history, recommend next diagnostic step. Facts (model, prior tickets, what was done) from tools only; **never a confirmed diagnosis or a promise a part/fix will work** (matches the north-star "allowed to say" boundary). |
+| **Tests** | `tests/agent/jarvisReason/unitServiceHistoryTool.test.js` (4; tool scope/filter/notes + a loop test proving diagnosis composes `get_unit_assets` → `get_unit_service_history` → answer). |
+
+**Test-suite note (correction):** the pre-existing red set is **flaky 13–15**, not a fixed 15 — several tenant-agent LLM-gather/TTL tests flip between runs. jarvisReason tests (now 28) are deterministic and green; zero new regressions from any slice here.
+
+**Phase 3a — parts search (deep links, the Layer 5 tool gateway begins).** Source decision (operator): buy via **Amazon** (cheapest/fastest for common parts) **and specialists PartSelect/RepairClinic** (pricier, find almost anything). Reality: neither has a free open "search by model" API, so v1 generates **deep links, not fetched prices**.
+
+| Area | Change |
+|------|--------|
+| **New tool** | `src/agent/jarvisReason/partsSearchTool.js` — `search_parts(make, model, part, applianceType)`. Builds links: **Amazon** `/s?k=`, **PartSelect** model page `/Models/<MODEL>/` (canonical OEM-catalog deep link; site-scoped Google fallback when no model), **RepairClinic** site-scoped Google. Pure (no fetch, no key, no DB), `pricesFetched:false`, `missing_part_query` when no model+part. |
+| **Prompt** | Parts rule: resolve model via `get_unit_assets` → `search_parts` → present Amazon (cheap/fast common) vs specialist (finds anything, pricier). **Links only — model must NOT state prices or claim "cheapest" as fact; never auto-purchase** (Layer 5 doctrine). |
+| **Tests** | `tests/agent/jarvisReason/partsSearchTool.test.js` (4; link construction, model-page vs fallback, missing_part_query, loop composition assets→search_parts). **jarvisReason suite now 32 tests, all green.** |
+
+**Test-suite note:** full `npm test` ~1181 pass / **flaky 13–15** pre-existing reds (tenant-agent/comms). jarvisReason 32/32 deterministic; zero new regressions.
+
+**Parts arc status:** Phase 1 (equipment→model) ✅, Phase 2 (diagnosis) ✅, **Phase 3a (parts deep links) ✅**. **Next:** Phase 3b = paid search API (SerpAPI/Bing/Google Shopping) for real **cheapest-price ranking** — `search_parts` is structured to add fetched results behind a key without changing the contract. Phase 4 = photo→asset capture (vision extract make/model/serial → confirm → `addUnitAsset`). Buying/payment remains a future **Tier-3** step, never automatic.
+
+**Voice wiring (important):** the reasoning loop is wired into `handleJarvisAskTurn`, which **both** the portal-chat `jarvis_ask` path **and** the staff **voice** `ask_propera` tool call (`src/voice/jarvisVoiceTools.js`). So all six reasoning tools (tickets/costs/detail/assets/service-history/parts) are reachable on voice for free when the model calls `ask_propera`. Discoverability pass done (2026-06-07): broadened the `ask_propera` description + `jarvisSystemPrompt.js` "Your job" so voice routes **equipment / diagnosis / parts** questions to `ask_propera` (with the voice guards: diagnosis = possibilities not a fix; parts = links, no price/"cheapest" claims, never purchase). Test: `tests/voice/jarvisSystemPrompt.test.js`. Note voice also has older dedicated read tools (`query_service_history`, `list_open_service_tickets`, `resolve_open_ticket`) that bypass the loop — kept as-is.
+
+**Asset capture in the Jarvis moment (scoping note, not built):** asset *photo* capture already exists on the unit page; the gap is capturing/registering **inside a Jarvis turn**. That is a WRITE → belongs in the proposal spine as a new op `register_unit_asset` (validator → existing `addUnitAsset`), not the read loop. Decompose: (i) in-conversation **registration** (spoken/typed model → propose → confirm → write) is buildable now on chat + voice, no camera; (ii) **photo-assisted** extraction in the moment works on chat (image attach → OCR → prefill) but the voice/glasses "snap while speaking" is blocked by the same camera-input limit (web-app glasses have no camera; needs native toolkit). Reading long model/serial codes aloud is unreliable — treat as low-confidence fallback; the plate photo/OCR is the real capture path.
+
+**Enable:** `JARVIS_ASK_ENABLED=1` + `JARVIS_REASON_ENABLED=1` + `OPENAI_API_KEY`, restart V2. The "answers vary by question, not a canned list" behavior is an LLM property — verify on a real key against live tickets.
+
+**Test suite note:** full `npm test` shows **15 pre-existing reds** (4 tenant-agent ones documented in AGENTS.md, plus communication helpers `normalizeAudienceFilter` / `buildAutoResponse` and several tenant-agent gather/golden tests). Confirmed pre-existing/unrelated — they reproduce standalone and this slice is additive + flag-gated. Not touched.
+
+---
+
 ## 2026-06-04 — GAS cutover: tenant-roster authz ported off GAS (propera-app)
 
 **Context:** GAS is already disconnected in production (Vercel app has no `PROPERA_API_BASE_URL`; V2 never called GAS). The one path with a real behavior consequence was the **tenant-roster staff check**, which called GAS `?path=me` and silently became a no-op once those env vars were unset — i.e. staff were no longer blocked from editing the roster.
@@ -580,6 +696,8 @@ Phase B–F per **`docs/TENANT_PORTAL_BUILD_PLAN.md`** (maintenance, notices, do
 ---
 
 ## 2026-05-19 — Phase 1.5 Leasehold import reverted (blocked on export samples)
+
+> **Superseded 2026-06-08** — Phase 1.5 re-shipped via `leasehold-bridge` + migrations 094–096. See latest HANDOFF section above.
 
 ### Done
 
