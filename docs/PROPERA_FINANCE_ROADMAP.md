@@ -190,7 +190,7 @@ Every phase below extends this graph — it does not fork a new money silo.
 |-------|--------|-------------------|
 | **`tenant_account_snapshots`** | Per `unit_catalog_id`: balance, rent, payments, lease dates, `payload_json`, `source_system`, `synced_at` | Migration **094** (**shipped**) |
 | **Net rent enrichment** | Standing credits / subsidized units → `unit_leases.net_rent_cents` | Migration **095** + `leaseEnrichmentImport.ts` |
-| **Deposit enrichment** | Security + key deposits from S.Dat/R.Dat | Migration **096** + `depositEnrichmentImport.ts` |
+| **Deposit enrichment** | Security, key, other, pet from S.Dat/R.Dat; LH Other = Key + Pet + Other | Migrations **096–097** + `leaseEnrichmentImport.ts` |
 | **Import adapter** | `POST /api/financial/import/accounting-snapshots`; dev helpers `run-leasehold`, `run-leasehold-all` | propera-app + `leaseholdBridgeExport.ts` |
 | **Scheduled sync** | Office PC: robocopy mirror → staging, fingerprint, import changed properties only. **Mon–Sat 5 min, Sun 6 h.** Manual UI: `/financial/imports` | `../propera-app/docs/FINANCIAL_LEASEHOLD_SYNC.md` |
 | **Wire snapshot APIs** | `GET /api/financial/portfolio` and `.../properties/[code]` prefer snapshot; overview KPI strip on `/dashboard` | `financialSnapshot.ts` (**shipped**) |
@@ -392,4 +392,4 @@ Each phase is independently toggleable. Operators not ready for Phase 3 never se
 
 ---
 
-*Created: 2026-05-19. Updated: 2026-06-08 — Phase 1.5 **shipped** (094–096, leasehold-bridge, import APIs, portfolio rollups, overview KPIs). Office syncher script pending. When a phase item changes, note in HANDOFF_LOG.md and update PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md §2.5a + §8.*
+*Created: 2026-05-19. Updated: 2026-06-08 — Phase 1.5 **shipped** (094–097, leasehold-bridge deposit parsers, import APIs, portfolio rollups, overview KPIs). WESTFIELD deposit reconciliation 29/30; unit 314 mirror gap documented. Office syncher script pending. When a phase item changes, note in HANDOFF_LOG.md and update PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md §2.5a + §8.*

@@ -58,7 +58,10 @@ Run SQL files in **numeric order** in the Supabase SQL Editor (same project as `
 | **091_access_locations_staff_only.sql** | `access_locations.staff_only` | Amenity program **Internal only** — staff command center only; blocks tenant portal / agent / inbound ACCESS_* |
 | **094_tenant_account_snapshots_v1.sql** | **`tenant_account_snapshots`** — incumbent read-only financial facts per unit (`source_system`, `synced_at`, `payload_json`) | **`propera-app`** `accountingSnapshotImport.ts`, `financialSnapshot.ts`; import via `POST /api/financial/import/accounting-snapshots` + leasehold-bridge adapter |
 | **095_unit_lease_net_rent_enrichment.sql** | **`unit_leases`**: `net_rent_cents`, `rent_subsidy_cents`, `net_rent_derived_at` | **`leaseEnrichmentImport.ts`** / `netRentEnrichmentImport.ts` on snapshot import; portfolio subsidy math |
-| **096_unit_lease_deposit_enrichment.sql** | **`unit_leases`**: `key_deposit_cents`, `deposits_derived_at` | **`depositEnrichmentImport.ts`**; unit hub + `/financial/properties/[p]` deposit display |
+| **096_unit_lease_deposit_enrichment.sql** | **`unit_leases`**: `key_deposit_cents`, `deposits_derived_at` | **`leaseEnrichmentImport.ts`**; unit hub + `/financial/properties/[p]` deposit display |
+| **097_unit_lease_other_pet_deposit_enrichment.sql** | **`unit_leases`**: `other_deposit_cents`, `pet_deposit_cents` | **`leaseEnrichmentImport.ts`**; LH “Other Security” bucket split (Key + Pet + Other = LH Other) |
+
+**Leasehold financial ingest (094–097):** apply all four before first full import. Join keys in SQL: `unit_leases.unit_catalog_id` → **`public.units`** (`id`), not a `unit_catalog` table. Property filter: `unit_leases.property_code` or `units.property_code` (both reference `properties.code`).
 
 ### Minimum paths
 

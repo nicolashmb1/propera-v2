@@ -71,7 +71,7 @@ These surfaces assume **`PROPERA_BACKEND=remote`** and the **049** / **050** mig
 | Surface | What it does (financially) |
 |---------|----------------------------|
 | **`/financial`** | **Portfolio-first** owner view: when Leasehold snapshots exist (**094**), shows **billed**, **collected**, **collection rate**, **balance due**, and portfolio **as-of** line. Falls back to lease/ledger placeholders when no import. Sub-nav: Portfolio, properties, imports, maintenance spend, etc. |
-| **`/financial/properties/[property]`** | **Units & balances** tab: imported **rent**, **payments**, **balance**, **deposits** (security + key from **096**), net rent enrichment (**095**); maintenance tab unchanged (12-month trend, categories, ticket drill-down). |
+| **`/financial/properties/[property]`** | **Units & balances** tab: imported **rent**, **payments**, **balance**, **deposits** (security, key, other, pet — **096–097**), net rent enrichment (**095**); maintenance tab unchanged (12-month trend, categories, ticket drill-down). |
 | **`/dashboard` (overview)** | Ticket KPI strip + **financial strip** (Billed, Collected, Collection rate, Balance due) when `NEXT_PUBLIC_PROPERA_FINANCIAL_MENU_ENABLED=1`. **Financial** nav directly under **All Tickets**. |
 | **`/financial/imports`** | Manual **Refresh from Leasehold** / **Import all properties** — requires local `leasehold-bridge` + mirror (dev). Production uses office syncher. |
 | **`/properties`** | Operational focus: **financial KPIs removed** from the main property grid so money lives under **`/financial`**. |

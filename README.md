@@ -43,7 +43,7 @@ See **[docs/CLOUD_RUN_DEPLOY.md](docs/CLOUD_RUN_DEPLOY.md)** when deploying to *
 
 Production brain: **[docs/CLOUD_RUN_PROD_CHECKLIST.md](docs/CLOUD_RUN_PROD_CHECKLIST.md)** (`propera-v2-prod`) — separate secrets; no Vercel/webhook cutover until Phase 5. Deploy: `npm run cloud-run:deploy-prod` (2026-06-08: revision **00015** healthy).
 
-**Leasehold financial snapshots:** migrations **094–096**; ingest runs in **propera-app** + **`leasehold-bridge`**; office syncher spec in **`../propera-app/docs/FINANCIAL_LEASEHOLD_SYNC.md`**.
+**Leasehold financial snapshots:** migrations **094–097** (snapshots, net rent, security/key/other/pet deposits); ingest in **propera-app** + **`leasehold-bridge`**; deposit reconciliation + office syncher in **`../propera-app/docs/FINANCIAL_LEASEHOLD_SYNC.md`**.
 
 ```bash
 cd propera-v2

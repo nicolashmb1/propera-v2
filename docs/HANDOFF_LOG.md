@@ -7,13 +7,39 @@
 
 ---
 
+## 2026-06-08 (b) — Westfield deposit reconciliation + migration 097
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **leasehold-bridge (M1)** | `deriveUnitDeposits.js` — key label expansion, signed key lines, same-day security cluster turnover, stale Other after key opening, S.Dat `ADJ` in security, pet/key net sums; `parseDepositLedgerDat.js` R.Dat labels; OXPS regression tests; `scripts/reconcileOxpsWestfield.js` |
+| **Westfield** | **29/30** units match LH OXPS print (`westifield2.oxps`); **unit 314** Other $700 still null — **mirror gap** (no 314 rows in `RA0003S.Dat` / `R.Dat`), not parser bug |
+| **Migration 097** | `unit_leases.other_deposit_cents`, `pet_deposit_cents` — apply on office Supabase with **094–096** |
+| **Docs** | Deposit invariant + manual override SQL (`units` join, not `unit_catalog`) in `FINANCIAL_LEASEHOLD_SYNC.md` |
+
+### Ops (office)
+
+1. Apply **097** if `other_deposit_cents` column missing.
+2. Re-import **WESTFIELD** (and other properties) after bridge fixes — **Financial → Imports**.
+3. Unit **314:** refresh mirror from `\\lhdata` **or** interim SQL `other_deposit_cents = 70000` (cleared on next import until mirror fixed).
+4. Spot-check unit hub vs LH screen: **LH Sec + Other = Propera Sec + Key + Pet + Other**.
+
+```powershell
+cd leasehold-bridge
+npm test
+npm run validate:deposits
+```
+
+---
+
 ## 2026-06-08 — Leasehold financial snapshot ingest + office syncher spec
 
 ### Done
 
 | Area | Change |
 |------|--------|
-| **Migrations** | **094** `tenant_account_snapshots`; **095** net rent enrichment on `unit_leases`; **096** security + key deposit enrichment |
+| **Migrations** | **094** `tenant_account_snapshots`; **095** net rent enrichment; **096** key + `deposits_derived_at`; **097** other + pet deposits |
 | **propera-app import** | `accounting-snapshots`, `run-leasehold`, `run-leasehold-all`; batched `leaseEnrichmentImport`; typed `leaseholdBridgeExport.ts` |
 | **Portfolio math** | `financialSnapshot.ts` — tenant obligation from enriched net or billed; credits = billed − net per unit; simplified subtitles |
 | **UI** | Overview financial KPIs (Billed, Collected, Collection rate, Balance due); Financial nav under All Tickets; deposits on unit hub + property financial |
@@ -40,7 +66,7 @@
 | **`sync-changed` script** | robocopy + cursor + POST import — not in repo yet |
 | **M2M import secret** | `PROPERA_FINANCIAL_IMPORT_SECRET` for unattended office POST |
 | **Task Scheduler** | Two tasks (weekday 5 min, Sunday 6 h) |
-| **Apply 094–096** | Supabase SQL Editor if not already applied |
+| **Apply 094–097** | Supabase SQL Editor if not already applied |
 | **Re-import all 5** | After enrichment changes |
 
 ### Commands
@@ -697,7 +723,7 @@ Phase B–F per **`docs/TENANT_PORTAL_BUILD_PLAN.md`** (maintenance, notices, do
 
 ## 2026-05-19 — Phase 1.5 Leasehold import reverted (blocked on export samples)
 
-> **Superseded 2026-06-08** — Phase 1.5 re-shipped via `leasehold-bridge` + migrations 094–096. See latest HANDOFF section above.
+> **Superseded 2026-06-08** — Phase 1.5 re-shipped via `leasehold-bridge` + migrations 094–097. See latest HANDOFF section above.
 
 ### Done
 
