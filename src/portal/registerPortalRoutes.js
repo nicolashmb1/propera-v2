@@ -2682,6 +2682,38 @@ function registerPortalReadRoutes(app) {
     return handleJarvisDismissProposal(req, res);
   }));
 
+  // ─── Financial renewals desk (status on unit_leases; no leasing UI flag) ─────
+
+  app.patch("/api/portal/financial/renewals/:leaseId", gateSettings(async (req, res) => {
+    try {
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const data = await patchLeaseRenewalStatus({
+        leaseId: req.params.leaseId,
+        renewalStatus: body.renewal_status ?? body.renewalStatus,
+        renewalNotes: body.renewal_notes ?? body.renewalNotes,
+        propertyCode: body.property_code || body.propertyCode || undefined,
+        orgScope: org,
+      });
+      if (!data) {
+        return res.status(404).json({ ok: false, error: "lease_not_found" });
+      }
+      let lifecycleSync = { ok: true, skipped: "not_vacating" };
+      if (String(data.renewal_status || "").trim().toLowerCase() === "vacating") {
+        lifecycleSync = await syncAfterLeaseMarkedVacating(data, { traceId: req.traceId });
+      }
+      return res.status(200).json({
+        ok: true,
+        lease: data,
+        lifecycle_sync: lifecycleSync,
+      });
+    } catch (err) {
+      const msg = String(err?.message || err);
+      const code = msg.includes("org_") || msg.includes("property_code") ? 403 : 400;
+      return res.status(code).json({ ok: false, error: msg });
+    }
+  }));
+
   // ─── Leasing Engine V1 ──────────────────────────────────────────────────────
 
   app.get("/api/portal/leasing/expiring-leases", gateLeasing(async (req, res) => {
