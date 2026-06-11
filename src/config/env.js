@@ -486,6 +486,14 @@ function communicationEngineEnabled() {
   return env("PROPERA_COMMUNICATION_ENGINE_ENABLED", "") === "1";
 }
 
+/**
+ * Automated balance-triggered lease reminders via Communication Engine cron.
+ * Requires communication engine + Twilio outbound. Rules: balanceReminderRules.config.js
+ */
+function balanceReminderEnabled() {
+  return env("PROPERA_BALANCE_REMINDER_ENABLED", "") === "1";
+}
+
 /** Conflict Mediation Engine — CME-1 portal read routes (`/api/conflict/*`). */
 function conflictMediationEngineEnabled() {
   return env("PROPERA_CONFLICT_MEDIATION_ENABLED", "") === "1";
@@ -820,6 +828,7 @@ module.exports = {
   financeCostCaptureChatEnabled,
   financeCostCapturePropertyAllowlist,
   communicationEngineEnabled,
+  balanceReminderEnabled,
   conflictMediationEngineEnabled,
   portalPushEnabled,
   vapidPublicKey,

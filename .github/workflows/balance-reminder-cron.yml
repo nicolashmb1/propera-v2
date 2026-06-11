@@ -1,0 +1,29 @@
+# Balance-reminder cron — POST /internal/cron/balance-reminders
+# Runs every 15 minutes; sends only when local time matches org send time in PROPERA_TZ.
+
+name: Balance Reminder Cron
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  balance-reminders:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call balance reminder endpoint
+        env:
+          CRON_URL: ${{ secrets.PROPERA_BALANCE_REMINDER_CRON_URL }}
+          CRON_SECRET: ${{ secrets.LIFECYCLE_CRON_SECRET }}
+        run: |
+          test -n "$CRON_URL"
+          test -n "$CRON_SECRET"
+          response="$(curl -sS -w '\n%{http_code}' -X POST "$CRON_URL" \
+            -H "x-propera-cron-secret: $CRON_SECRET" \
+            -H "ngrok-skip-browser-warning: true")"
+          body="$(echo "$response" | sed '$d')"
+          status="$(echo "$response" | tail -n1)"
+          echo "Balance reminder HTTP status: $status"
+          echo "Balance reminder response body: $body"
+          test "$status" -ge 200 -a "$status" -lt 300

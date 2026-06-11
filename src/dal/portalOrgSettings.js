@@ -68,7 +68,7 @@ async function getOrganizationForPortal(sb, orgId) {
 
   const { data, error } = await sb
     .from("organizations")
-    .select("id, brand_name, brand_short_name, show_propera_attribution, propera_subdomain, custom_domain")
+    .select("id, brand_name, brand_short_name, show_propera_attribution, propera_subdomain, custom_domain, comm_sms_header_template, comm_sms_footer_template")
     .eq("id", oid)
     .maybeSingle();
 
@@ -84,6 +84,8 @@ async function getOrganizationForPortal(sb, orgId) {
       showProperaAttribution: data.show_propera_attribution !== false,
       properaSubdomain: String(data.propera_subdomain || "").trim(),
       customDomain: String(data.custom_domain || "").trim(),
+      commSmsHeaderTemplate: String(data.comm_sms_header_template || "").trim(),
+      commSmsFooterTemplate: String(data.comm_sms_footer_template || "").trim(),
     },
   };
 }
@@ -108,6 +110,20 @@ async function patchOrganizationForPortal(sb, orgId, patch) {
     const v = patch.showProperaAttribution ?? patch.show_propera_attribution;
     updates.show_propera_attribution = v === true || v === "1" || v === 1;
   }
+  if (patch.commSmsHeaderTemplate != null || patch.comm_sms_header_template != null) {
+    updates.comm_sms_header_template = String(
+      patch.commSmsHeaderTemplate ?? patch.comm_sms_header_template ?? ""
+    )
+      .trim()
+      .slice(0, 500);
+  }
+  if (patch.commSmsFooterTemplate != null || patch.comm_sms_footer_template != null) {
+    updates.comm_sms_footer_template = String(
+      patch.commSmsFooterTemplate ?? patch.comm_sms_footer_template ?? ""
+    )
+      .trim()
+      .slice(0, 500);
+  }
 
   if (Object.keys(updates).length <= 1) {
     return { ok: false, error: "no_changes", status: 400 };
@@ -117,7 +133,7 @@ async function patchOrganizationForPortal(sb, orgId, patch) {
     .from("organizations")
     .update(updates)
     .eq("id", oid)
-    .select("id, brand_name, brand_short_name, show_propera_attribution, propera_subdomain, custom_domain")
+    .select("id, brand_name, brand_short_name, show_propera_attribution, propera_subdomain, custom_domain, comm_sms_header_template, comm_sms_footer_template")
     .maybeSingle();
 
   if (error) return { ok: false, error: error.message };

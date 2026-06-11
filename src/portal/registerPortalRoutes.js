@@ -138,6 +138,18 @@ const {
   listPolicyAuditForOrgPortal,
 } = require("../dal/portalOrgPolicies");
 const {
+  listBalanceRemindersForPortal,
+  patchBalanceReminderSettingsForPortal,
+  patchBalanceReminderRuleForPortal,
+  createBalanceReminderRuleForPortal,
+  deleteBalanceReminderRuleForPortal,
+} = require("../dal/portalBalanceReminders");
+const {
+  previewBalanceReminderMessage,
+  draftBalanceReminderMessage,
+  previewOrgBroadcastSms,
+} = require("../communication/balanceReminderMessage");
+const {
   getTeamSettingsBundleForOrg,
   patchOrgResponsibilityPrefs,
   patchEscalationConfigForOrg,
@@ -1887,6 +1899,21 @@ function registerPortalReadRoutes(app) {
     }
   }));
 
+  app.post("/api/portal/settings/organization/preview-sms", gateSettings(async (req, res) => {
+    try {
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await previewOrgBroadcastSms(org.orgId, body);
+      if (!out.ok) {
+        const status = out.error === "missing_message_body" ? 400 : 500;
+        return res.status(status).json({ ok: false, error: out.error || "preview_failed" });
+      }
+      return res.status(200).json(out);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
   app.get("/api/portal/settings/staff", gateSettings(async (req, res) => {
     try {
       const sb = getSupabase();
@@ -2453,6 +2480,135 @@ function registerPortalReadRoutes(app) {
         return res.status(status).json({ ok: false, error: out.error || "clear_failed" });
       }
       return res.status(200).json({ ok: true, policy: out.policy });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.get("/api/portal/settings/balance-reminders", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const out = await listBalanceRemindersForPortal(sb, org.orgId);
+      if (!out.ok) {
+        const status = out.error === "missing_org_id" ? 400 : out.error === "schema_missing" ? 503 : 500;
+        return res.status(status).json({ ok: false, error: out.error || "load_failed" });
+      }
+      return res.status(200).json({
+        ok: true,
+        orgId: out.orgId,
+        enabled: out.enabled,
+        sendHour: out.sendHour,
+        sendMinute: out.sendMinute,
+        timezone: out.timezone,
+        settingsUpdatedAt: out.settingsUpdatedAt,
+        rules: out.rules,
+      });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.patch("/api/portal/settings/balance-reminders", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await patchBalanceReminderSettingsForPortal(sb, org.orgId, body);
+      if (!out.ok) {
+        const status = typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "patch_failed" });
+      }
+      return res.status(200).json({
+        ok: true,
+        enabled: out.enabled,
+        sendHour: out.sendHour,
+        sendMinute: out.sendMinute,
+        timezone: out.timezone,
+        settingsUpdatedAt: out.settingsUpdatedAt,
+      });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.post("/api/portal/settings/balance-reminders/rules", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await createBalanceReminderRuleForPortal(sb, org.orgId, body);
+      if (!out.ok) {
+        const status = typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "create_failed" });
+      }
+      return res.status(201).json({ ok: true, rule: out.rule });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.post("/api/portal/settings/balance-reminders/preview-message", gateSettings(async (req, res) => {
+    try {
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await previewBalanceReminderMessage(org.orgId, body);
+      if (!out.ok) {
+        const status = out.error === "missing_message_body" ? 400 : 500;
+        return res.status(status).json({ ok: false, error: out.error || "preview_failed" });
+      }
+      return res.status(200).json(out);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.post("/api/portal/settings/balance-reminders/draft-message", gateSettings(async (req, res) => {
+    try {
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await draftBalanceReminderMessage(org.orgId, body);
+      if (!out.ok) {
+        const status = out.error === "missing_brief" ? 400 : 500;
+        return res.status(status).json({ ok: false, error: out.error || "draft_failed" });
+      }
+      return res.status(200).json(out);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.patch("/api/portal/settings/balance-reminders/:ruleKey", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const out = await patchBalanceReminderRuleForPortal(sb, org.orgId, req.params.ruleKey, body);
+      if (!out.ok) {
+        const status = typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "patch_failed" });
+      }
+      return res.status(200).json({ ok: true, rule: out.rule });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }));
+
+  app.delete("/api/portal/settings/balance-reminders/:ruleKey", gateSettings(async (req, res) => {
+    try {
+      const sb = getSupabase();
+      if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+      const org = portalOrgFromReq(req);
+      const out = await deleteBalanceReminderRuleForPortal(sb, org.orgId, req.params.ruleKey);
+      if (!out.ok) {
+        const status = typeof out.status === "number" && out.status >= 400 ? out.status : 500;
+        return res.status(status).json({ ok: false, error: out.error || "delete_failed" });
+      }
+      return res.status(200).json({ ok: true, ruleKey: out.ruleKey });
     } catch (err) {
       return res.status(500).json({ ok: false, error: String(err && err.message ? err.message : err) });
     }

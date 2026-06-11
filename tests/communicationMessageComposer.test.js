@@ -84,6 +84,22 @@ describe("communication messageComposer", () => {
     assert.doesNotMatch(full, /Para mantenimiento/);
   });
 
+  test("appendFooter uses org footer template when configured", () => {
+    const ctx = {
+      ...BRAND_CONTEXT,
+      commSmsHeaderTemplate: "{brand}: Reminder",
+      commSmsFooterTemplate: "- Management at {brand} at {building}. Please contact the office.",
+    };
+    const full = appendFooter("Your rent balance is outstanding.", ctx, "PENN", "", "en", {
+      isMultiProperty: false,
+    });
+
+    assert.match(full, /The Grand Management Group: Reminder/);
+    assert.match(full, /Your rent balance is outstanding\./);
+    assert.match(full, /Management at The Grand Management Group at The Grand at Penn/);
+    assert.match(full, /Reply STOP to opt out\./);
+  });
+
   test("estimateSmsSegments handles gsm and unicode messages", () => {
     const gsm = estimateSmsSegments("A".repeat(161));
     assert.equal(gsm.encoding, "GSM-7");

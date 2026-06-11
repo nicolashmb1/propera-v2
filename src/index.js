@@ -15,6 +15,7 @@ const { isDbConfigured, pingDb, getSupabase } = require("./db/supabase");
 const { processDueLifecycleTimers } = require("./jobs/processLifecycleTimers");
 const { processDueAccessLifecycleJobs } = require("./access/processAccessLifecycleJobs");
 const { processMeterRunsPendingCron } = require("./dal/meterBillingRuns");
+const { processDueBalanceReminders } = require("./communication/balanceReminderService");
 const { requestContext } = require("./middleware/requestContext");
 const { boot, emit } = require("./logging/structuredLog");
 const {
@@ -130,9 +131,40 @@ app.post("/internal/cron/meter-runs-process-pending", async (req, res) => {
   }
 });
 
+/** Daily balance-triggered lease reminders — Communication Engine broadcast SMS. */
+app.post("/internal/cron/balance-reminders", async (req, res) => {
+  const secret = lifecycleCronSecret();
+  const hdr = String(req.headers["x-propera-cron-secret"] || "").trim();
+  if (!secret || hdr !== secret) {
+    return res.status(401).json({ ok: false, error: "unauthorized" });
+  }
+  const sb = getSupabase();
+  if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+  try {
+    const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+    const forceDay = body.forceDay != null ? Number(body.forceDay) : undefined;
+    const forceSend = body.forceSend === true;
+    const out = await processDueBalanceReminders(sb, { traceId: req.traceId, forceDay, forceSend });
+    emit({
+      level: out.ok ? "info" : "warn",
+      trace_id: req.traceId,
+      trace_start_ms: req.traceStartMs,
+      log_kind: "cron",
+      event: "balance_reminders_tick",
+      data: out,
+    });
+    return res.status(out.ok ? 200 : 500).json(out);
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: String(err && err.message ? err.message : err),
+    });
+  }
+});
+
 app.get("/", (_req, res) => {
   res.type("text/plain").send(
-    "Propera V2 — GET /health | POST /webhooks/telegram | POST /webhooks/twilio | POST /webhooks/sms | POST /webhooks/portal | POST /webhooks/communications/sms | POST /webhooks/communications/status | POST /internal/cron/lifecycle-timers | POST /internal/cron/meter-runs-process-pending | GET /api/portal/gas-compat?path=tickets|properties|tenants | GET /api/portal/tenants (+ POST PATCH DELETE roster) | GET /api/portal/turnovers (+ items / mark-ready / create-ticket) | GET /api/portal/program-templates program-runs POST program-runs PATCH program-lines/:id/complete|reopen | GET/POST /api/portal/meter-runs utility-meters | GET/POST /api/communications/campaigns (+ detail + resolve + send) | POST /api/communications/draft | GET /dashboard + GET /api/ops/event-log + GET /api/ops/lifecycle-timers | dev: GET /api/dev/resolve-actor?phone=+1..."
+    "Propera V2 — GET /health | POST /webhooks/telegram | POST /webhooks/twilio | POST /webhooks/sms | POST /webhooks/portal | POST /webhooks/communications/sms | POST /webhooks/communications/status | POST /internal/cron/lifecycle-timers | POST /internal/cron/meter-runs-process-pending | POST /internal/cron/balance-reminders | GET /api/portal/gas-compat?path=tickets|properties|tenants | GET /api/portal/tenants (+ POST PATCH DELETE roster) | GET /api/portal/turnovers (+ items / mark-ready / create-ticket) | GET /api/portal/program-templates program-runs POST program-runs PATCH program-lines/:id/complete|reopen | GET /api/portal/meter-runs utility-meters | GET/POST /api/communications/campaigns (+ detail + resolve + send) | POST /api/communications/draft | GET /dashboard + GET /api/ops/event-log + GET /api/ops/lifecycle-timers | dev: GET /api/dev/resolve-actor?phone=+1..."
   );
 });
 

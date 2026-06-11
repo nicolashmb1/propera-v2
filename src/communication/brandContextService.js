@@ -54,12 +54,14 @@ async function getBrandContext(input) {
   try {
     const { data: orgRow } = await sb
       .from("organizations")
-      .select("id, brand_name, brand_short_name")
+      .select("id, brand_name, brand_short_name, comm_sms_header_template, comm_sms_footer_template")
       .eq("id", orgId)
       .maybeSingle();
     if (orgRow) {
       out.orgBrandName = String(orgRow.brand_name || "").trim();
       out.orgBrandShort = String(orgRow.brand_short_name || "").trim();
+      out.commSmsHeaderTemplate = String(orgRow.comm_sms_header_template || "").trim();
+      out.commSmsFooterTemplate = String(orgRow.comm_sms_footer_template || "").trim();
     }
   } catch (_) {
     // Fresh dev DBs may not have the communication migration yet.

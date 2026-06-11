@@ -4,6 +4,12 @@ const {
   commMainNumberDisplay,
 } = require("../config/env");
 const { openaiChatCompletionsWithRetry } = require("../integrations/openaiTransport");
+const {
+  buildTemplateVars,
+  renderSmsTemplate,
+  stopLineForLanguage,
+  messageIncludesStopLine,
+} = require("./messageTemplateRender");
 
 function normalizeLanguage(raw) {
   const value = String(raw || "").trim().toLowerCase();
@@ -263,21 +269,33 @@ function appendFooter(messageBody, brandContext, propertyCode, mainNumberDisplay
         ? "Management at " + propertyCtx.displayName
         : String(ctx.orgBrandShort || ctx.orgBrandName || "Management").trim());
   const lang = normalizeLanguage(language);
+  const stopLine = stopLineForLanguage(lang);
 
-  let stopLine = "Reply STOP to opt out.";
-  if (lang === "es") {
-    stopLine = "Responda STOP para dejar de recibir mensajes.";
-  } else if (lang === "pt") {
-    stopLine = "Responda STOP para sair.";
+  void mainNumberDisplay;
+
+  const vars = buildTemplateVars(ctx, code, label);
+  const headerTemplate = String(ctx.commSmsHeaderTemplate || "").trim();
+  const footerTemplate = String(ctx.commSmsFooterTemplate || "").trim();
+
+  const parts = [];
+  if (headerTemplate) {
+    const header = renderSmsTemplate(headerTemplate, vars);
+    if (header) parts.push(header);
+  }
+  parts.push(body);
+
+  if (footerTemplate) {
+    const customFooter = renderSmsTemplate(footerTemplate, vars);
+    if (customFooter) parts.push(customFooter);
+  } else {
+    parts.push("- " + label);
   }
 
-  // Maintenance/office redirect line intentionally omitted for this phase — the
-  // footer is just the sender label + STOP opt-out. `mainNumberDisplay` is kept
-  // in the signature so the line can be restored later without touching callers.
-  void mainNumberDisplay;
-  const footerParts = ["- " + label, stopLine];
-
-  return normalizeBody(body + "\n\n" + footerParts.join("\n"));
+  const joined = parts.join("\n\n");
+  if (!messageIncludesStopLine(joined)) {
+    return normalizeBody(joined + "\n\n" + stopLine);
+  }
+  return normalizeBody(joined);
 }
 
 module.exports = {
