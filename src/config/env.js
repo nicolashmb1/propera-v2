@@ -438,6 +438,11 @@ function accessCredentialSecret() {
   return String(env("ACCESS_CREDENTIAL_SECRET", "")).trim();
 }
 
+/** Seam API key for Yale / smart-lock access codes (`SEAM_API_KEY`). */
+function seamApiKey() {
+  return String(env("SEAM_API_KEY", "")).trim();
+}
+
 /** Operational finance master — default off (`PROPERA_FINANCE_ENABLED=1`). */
 function financeCoreEnabled() {
   return env("PROPERA_FINANCE_ENABLED", "") === "1";
@@ -821,6 +826,7 @@ module.exports = {
   tenantI18nEnabled,
   tenantTranslateModel,
   accessCredentialSecret,
+  seamApiKey,
   financeCoreEnabled,
   financialCaptureEnabled,
   financeTicketCostsEnabled,

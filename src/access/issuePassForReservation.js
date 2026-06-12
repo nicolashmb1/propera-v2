@@ -13,7 +13,10 @@ async function issuePassForReservation(sb, reservation, lockRow, actor = "") {
   const adapter = getLockAdapter(lockRow.provider);
   const validFrom = new Date(reservation.start_at);
   const validUntil = new Date(reservation.end_at);
-  const issued = await adapter.issueCredential(lockRow, validFrom, validUntil);
+  const issued = await adapter.issueCredential(lockRow, validFrom, validUntil, {
+    reservationId: reservation.id,
+    name: `propera-${String(reservation.id || "").slice(0, 8)}`,
+  });
   const enc = encryptCredentialValue(issued.credentialValue);
 
   const { data: pass, error: passErr } = await sb
@@ -23,6 +26,7 @@ async function issuePassForReservation(sb, reservation, lockRow, actor = "") {
       lock_id: lockRow.id,
       credential_type: issued.credentialType || "pin",
       credential_value_enc: enc,
+      external_credential_id: String(issued.externalCredentialId || ""),
       valid_from: validFrom.toISOString(),
       valid_until: validUntil.toISOString(),
       status: "ISSUED",

@@ -12,6 +12,10 @@ const {
   markTenantOutboundToday,
 } = require("../dal/tenantOutboundDayMark");
 const { CHANNEL_TELEGRAM } = require("../signal/inboundSignal");
+const {
+  buildAccessBroadcastSmsBody,
+  accessBroadcastSmsFrom,
+} = require("./accessBroadcastSms");
 
 async function resolvePropertyDisplayName(sb, propertyCode) {
   const code = String(propertyCode || "").trim().toUpperCase();
@@ -49,6 +53,10 @@ async function resolveAccessTransport(sb, phoneE164, preferredChannel) {
     return { transportChannel: "whatsapp", twilioTo: phone };
   }
 
+  if (preferred === "sms") {
+    return { transportChannel: "sms", twilioTo: phone };
+  }
+
   if (chatId && telegramOutboundEnabled()) {
     return {
       transportChannel: "telegram",
@@ -61,6 +69,17 @@ async function resolveAccessTransport(sb, phoneE164, preferredChannel) {
   }
 
   return { transportChannel: "sms", twilioTo: phone };
+}
+
+async function isTenantCommBroadcastOptedOut(sb, tenantId) {
+  const id = String(tenantId || "").trim();
+  if (!sb || !id) return false;
+  const { data } = await sb
+    .from("tenant_roster")
+    .select("comm_broadcast_opt_out")
+    .eq("id", id)
+    .maybeSingle();
+  return data?.comm_broadcast_opt_out === true;
 }
 
 async function dispatchAccessNotification(o) {
@@ -96,56 +115,105 @@ async function dispatchAccessNotification(o) {
     return { ok: false, skipped: true, error: "no_transport" };
   }
 
-  const intent = buildOutboundIntent({
-    intentType: templateKey,
-    audience: audience === "staff" ? "staff" : "tenant",
-    replyText: bodyText,
-    traceId: String(o.traceId || "").trim(),
-    correlationIds: {
-      reservation_id: String(o.reservationId || "").trim(),
-    },
-  });
-  const rendered = renderOutboundIntent({ intent, messageSpec: spec });
-
   const tenantActorKey = String(o.tenantActorKey || recipientPhoneE164).trim();
-  const includeFirstContactExtras =
-    audience === "tenant" && tenantActorKey ? await isFirstTenantOutboundToday(tenantActorKey) : false;
-  const propertyDisplayName =
-    audience === "tenant" ? await resolvePropertyDisplayName(sb, o.context?.propertyCode) : "";
+  const useBroadcastSms =
+    audience === "tenant" && transport.transportChannel === "sms";
+  let bodyForSend = "";
+  let parseMode = null;
+  let outgateMeta = {};
+  let twilioFrom = "";
+  let includeFirstContactExtras = false;
 
-  const channelRender = renderForChannel({
-    transportChannel: transport.transportChannel,
-    body: rendered.body,
-    audience,
-    includeFirstContactExtras,
-    propertyDisplayName,
-    contextLabel: "access",
-  });
+  if (useBroadcastSms) {
+    twilioFrom = accessBroadcastSmsFrom();
+    if (!twilioFrom) {
+      await appendEventLog({
+        traceId: String(o.traceId || "").trim(),
+        log_kind: "access_outgate",
+        event: "ACCESS_OUTBOUND_SKIP",
+        payload: {
+          template_key: templateKey,
+          reason: "missing_broadcast_from",
+          recipient_phone_e164: recipientPhoneE164,
+        },
+      });
+      return { ok: false, skipped: true, error: "missing_broadcast_from" };
+    }
+    if (await isTenantCommBroadcastOptedOut(sb, o.tenantId)) {
+      await appendEventLog({
+        traceId: String(o.traceId || "").trim(),
+        log_kind: "access_outgate",
+        event: "ACCESS_OUTBOUND_SKIP",
+        payload: {
+          template_key: templateKey,
+          reason: "comm_broadcast_opt_out",
+          tenant_id: String(o.tenantId || "").trim(),
+        },
+      });
+      return { ok: false, skipped: true, error: "comm_broadcast_opt_out" };
+    }
+    bodyForSend = await buildAccessBroadcastSmsBody({
+      bodyText,
+      propertyCode: o.context?.propertyCode,
+      orgId: o.context?.orgId,
+    });
+    outgateMeta = { broadcastSms: true, communicationEngineFrom: true };
+  } else {
+    const intent = buildOutboundIntent({
+      intentType: templateKey,
+      audience: audience === "staff" ? "staff" : "tenant",
+      replyText: bodyText,
+      traceId: String(o.traceId || "").trim(),
+      correlationIds: {
+        reservation_id: String(o.reservationId || "").trim(),
+      },
+    });
+    const rendered = renderOutboundIntent({ intent, messageSpec: spec });
+    includeFirstContactExtras =
+      audience === "tenant" && tenantActorKey
+        ? await isFirstTenantOutboundToday(tenantActorKey)
+        : false;
+    const propertyDisplayName =
+      audience === "tenant" ? await resolvePropertyDisplayName(sb, o.context?.propertyCode) : "";
+    const channelRender = renderForChannel({
+      transportChannel: transport.transportChannel,
+      body: rendered.body,
+      audience,
+      includeFirstContactExtras,
+      propertyDisplayName,
+      contextLabel: "access",
+    });
+    bodyForSend = channelRender.body;
+    parseMode = channelRender.parseMode;
+    outgateMeta = {
+      ...(rendered.meta || {}),
+      ...(channelRender.meta || {}),
+    };
+  }
 
   const out = await dispatchOutbound({
     traceId: String(o.traceId || "").trim(),
     transportChannel: transport.transportChannel,
-    body: channelRender.body,
+    body: bodyForSend,
     telegramSignal: transport.telegramSignal || null,
     twilioTo: transport.twilioTo || "",
-    telegramParseMode: channelRender.parseMode,
+    twilioFrom: twilioFrom || undefined,
+    telegramParseMode: parseMode,
     dispatchMeta: {
       intentType: templateKey,
       access: true,
       reservationId: String(o.reservationId || "").trim(),
-      outgate: {
-        ...(rendered.meta || {}),
-        ...(channelRender.meta || {}),
-      },
+      outgate: outgateMeta,
     },
   });
 
   if (
     out.ok &&
+    !useBroadcastSms &&
     includeFirstContactExtras &&
     audience === "tenant" &&
     tenantActorKey &&
-    (channelRender.meta?.propertyHeader || channelRender.meta?.smsComplianceFooter)
+    (outgateMeta.propertyHeader || outgateMeta.smsComplianceFooter)
   ) {
     await markTenantOutboundToday(tenantActorKey);
   }

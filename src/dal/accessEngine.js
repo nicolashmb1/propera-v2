@@ -284,7 +284,7 @@ async function setAccessProgramEnrollment(opts) {
  * @param {object} [tenant]
  * @param {object} [pass]
  */
-function mapReservationRow(row, tenant, pass) {
+function mapReservationRow(row, tenant, pass, opts = {}) {
   if (!row) return null;
   const out = {
     id: row.id,
@@ -313,9 +313,13 @@ function mapReservationRow(row, tenant, pass) {
   if (pass) {
     out.passStatus = pass.status;
     out.credentialType = pass.credential_type;
-    out.pinMasked = pass.credential_value_enc
-      ? `••••${decryptCredentialValue(pass.credential_value_enc).slice(-2)}`
-      : null;
+    const decrypted = pass.credential_value_enc
+      ? decryptCredentialValue(pass.credential_value_enc)
+      : "";
+    if (opts.includeFullPin && decrypted) {
+      out.pin = decrypted;
+    }
+    out.pinMasked = decrypted ? `••••${decrypted.slice(-2)}` : null;
   }
   return out;
 }
@@ -480,7 +484,7 @@ async function listBlackoutsForLocation(locationId, from, to) {
   }));
 }
 
-async function listReservationsForLocation(locationId, from, to) {
+async function listReservationsForLocation(locationId, from, to, opts = {}) {
   const sb = getSupabase();
   if (!sb) return [];
   const fromIso = from instanceof Date ? from.toISOString() : from;
@@ -501,10 +505,11 @@ async function listReservationsForLocation(locationId, from, to) {
       .in("id", passIds);
     for (const p of passes || []) passesById[p.id] = p;
   }
+  const includeFullPin = opts.includeFullPin === true;
   return (data || []).map((r) => {
     const t = r.tenant_roster;
     const pass = r.access_pass_id ? passesById[r.access_pass_id] : null;
-    return mapReservationRow(r, t, pass);
+    return mapReservationRow(r, t, pass, { includeFullPin });
   });
 }
 
@@ -773,11 +778,7 @@ async function getReservationDetail(reservationId) {
       .maybeSingle();
     pass = p;
   }
-  const mapped = mapReservationRow(row, row.tenant_roster, pass);
-  if (pass) {
-    mapped.pin = decryptCredentialValue(pass.credential_value_enc);
-  }
-  return mapped;
+  return mapReservationRow(row, row.tenant_roster, pass, { includeFullPin: true });
 }
 
 function parseActorAndOptions(actorOrOptions, maybeOptions) {
@@ -799,6 +800,37 @@ function parseActorAndOptions(actorOrOptions, maybeOptions) {
 function prefersStructuredOnlyChannel(channel) {
   const ch = String(channel || "").trim().toLowerCase();
   return ch === "portal" || ch === "tenant_portal" || ch === "qr_portal" || ch === "staff_override";
+}
+
+/** Tenant SMS/Telegram for portal self-serve is lifecycle-only; staff bookings must notify. */
+function shouldNotifyTenantAccessEvent(channel, templateKey) {
+  const ch = String(channel || "").trim().toLowerCase();
+  const key = String(templateKey || "").trim();
+  if (!key) return false;
+
+  if (ch === "staff_override") {
+    return [
+      "ACCESS_TENANT_RESERVATION_CONFIRMED",
+      "ACCESS_TENANT_APPROVED",
+      "ACCESS_TENANT_APPROVAL_REQUIRED",
+      "ACCESS_TENANT_CANCELLED",
+      "ACCESS_TENANT_DENIED",
+      "ACCESS_TENANT_REMINDER",
+      "ACCESS_TENANT_ACTIVE",
+      "ACCESS_TENANT_COMPLETED",
+    ].includes(key);
+  }
+
+  if (prefersStructuredOnlyChannel(ch)) {
+    return [
+      "ACCESS_TENANT_REMINDER",
+      "ACCESS_TENANT_ACTIVE",
+      "ACCESS_TENANT_COMPLETED",
+      "ACCESS_TENANT_DENIED",
+    ].includes(key);
+  }
+
+  return true;
 }
 
 async function resolveStaffNotificationPhone(sb, propertyCode) {
@@ -869,7 +901,10 @@ async function revokePassForReservation(sb, reservationRow, actor = "", nextStat
   if (!pass) return null;
   if (pass.access_locks) {
     const adapter = getLockAdapter(pass.access_locks.provider);
-    await adapter.revokeCredential(pass.access_locks.id, pass.id);
+    await adapter.revokeCredential(pass.access_locks, {
+      externalCredentialId: pass.external_credential_id,
+      passId: pass.id,
+    });
   }
   const status = String(nextStatus || "REVOKED").trim().toUpperCase() || "REVOKED";
   await sb
@@ -964,6 +999,7 @@ async function notifyReservationEvent(bundle, templateKey, opts = {}) {
   if (!detail) return;
 
   const context = {
+    orgId: bundle.location.orgId || bundle.row.org_id,
     propertyCode: bundle.location.propertyCode,
     locationName: bundle.location.name,
     startAt: detail.startAt,
@@ -979,17 +1015,14 @@ async function notifyReservationEvent(bundle, templateKey, opts = {}) {
   const shouldSendTenant =
     !!detail.tenantPhone &&
     (!!opts.forceTenantNotification ||
-      !prefersStructuredOnlyChannel(detail.channel) ||
-      tenantTemplate === "ACCESS_TENANT_REMINDER" ||
-      tenantTemplate === "ACCESS_TENANT_ACTIVE" ||
-      tenantTemplate === "ACCESS_TENANT_COMPLETED" ||
-      tenantTemplate === "ACCESS_TENANT_DENIED");
+      shouldNotifyTenantAccessEvent(detail.channel, tenantTemplate));
 
   if (shouldSendTenant && tenantTemplate) {
     await dispatchAccessNotification({
       sb,
       traceId,
       reservationId: detail.id,
+      tenantId: detail.tenantId,
       templateKey: tenantTemplate,
       recipientPhoneE164: detail.tenantPhone,
       preferredChannel,
@@ -1245,14 +1278,7 @@ async function regeneratePin(reservationId, actor = "") {
   const lock = await getActiveLockForLocation(res.location_id);
   if (!lock) throw new Error("no_lock");
   if (res.access_pass_id) {
-    await sb
-      .from("access_passes")
-      .update({
-        status: "REVOKED",
-        revoked_at: new Date().toISOString(),
-        revoked_by: actor,
-      })
-      .eq("id", res.access_pass_id);
+    await revokePassForReservation(sb, res, actor, "REVOKED");
   }
   const issued = await issuePassForReservation(sb, res, lock, actor);
   const detail = await getReservationDetail(reservationId);
@@ -1439,4 +1465,5 @@ module.exports = {
   denyReservationByTimeout,
   markReservationActive,
   completeReservationLifecycle,
+  shouldNotifyTenantAccessEvent,
 };

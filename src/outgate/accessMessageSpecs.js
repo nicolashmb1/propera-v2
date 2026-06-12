@@ -117,7 +117,15 @@ function buildWindowLabel(ctx) {
 function pinLine(ctx) {
   const pin = String(ctx.pin || "").trim();
   if (!pin) return "";
-  return ` PIN: ${pin}.`;
+  return ` Door code: ${pin}.`;
+}
+
+function pinActivationLine(ctx) {
+  const pin = String(ctx.pin || "").trim();
+  if (!pin) return "";
+  const startLabel = formatTime(ctx.startAt, ctx.timeZone);
+  if (!startLabel) return ` Door code ${pin} will be active at the start of your reservation.`;
+  return ` Door code ${pin} will be active at ${startLabel}.`;
 }
 
 function residentLabel(ctx) {
@@ -140,11 +148,11 @@ function buildAccessMessageText(templateKey, ctx) {
 
   switch (templateKey) {
     case "ACCESS_TENANT_RESERVATION_CONFIRMED":
-      return `Your ${locationName} reservation is confirmed for ${windowLabel}.${pinLine(ctx)}`.trim();
+      return `Your ${locationName} reservation is confirmed for ${windowLabel}.${pinActivationLine(ctx)}`.trim();
     case "ACCESS_TENANT_APPROVAL_REQUIRED":
       return `Your ${locationName} request for ${windowLabel} is pending approval. We will follow up once the team reviews it.`;
     case "ACCESS_TENANT_APPROVED":
-      return `Your ${locationName} request was approved for ${windowLabel}.${pinLine(ctx)}`.trim();
+      return `Your ${locationName} reservation is confirmed for ${windowLabel}.${pinActivationLine(ctx)}`.trim();
     case "ACCESS_TENANT_DENIED":
       return `Your ${locationName} request for ${windowLabel} was not approved and has been cancelled.`;
     case "ACCESS_TENANT_REMINDER":

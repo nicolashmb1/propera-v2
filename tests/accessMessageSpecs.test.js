@@ -21,10 +21,12 @@ describe("accessMessageSpecs", () => {
     assert.equal(spec?.templateKey, "ACCESS_TENANT_RESERVATION_CONFIRMED");
   });
 
-  it("builds tenant confirmation copy with pin", () => {
+  it("builds tenant confirmation copy with activation window", () => {
     const text = buildAccessMessageText("ACCESS_TENANT_RESERVATION_CONFIRMED", ctx);
     assert.match(text, /Gameroom/);
+    assert.match(text, /confirmed for/i);
     assert.match(text, /4321/);
+    assert.match(text, /will be active at/i);
   });
 
   it("builds staff approval copy with tenant context", () => {

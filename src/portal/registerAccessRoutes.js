@@ -265,7 +265,8 @@ function registerAccessRoutes(app) {
         const rows = await listReservationsForLocation(
           req.params.locationId,
           req.query.from,
-          req.query.to
+          req.query.to,
+          { includeFullPin: true }
         );
         return res.json({ ok: true, reservations: rows });
       } catch (err) {
