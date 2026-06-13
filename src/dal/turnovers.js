@@ -9,6 +9,30 @@ const { mergeChangedByIntoTicketPatch } = require("./ticketAuditPatch");
 
 const ACTIVE_STATUSES = ["OPEN", "IN_PROGRESS"];
 
+/** Max walkthrough photos per turnover line (portal punch list). */
+const MAX_TURNOVER_ITEM_PHOTOS = 30;
+
+/**
+ * @param {unknown} raw
+ * @returns {string[]}
+ */
+function normalizePhotoRefs(raw) {
+  if (!raw || !Array.isArray(raw)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const x of raw) {
+    const u = String(x || "").trim();
+    if (u.length < 8 || u.length > 2048) continue;
+    const lower = u.toLowerCase();
+    if (!lower.startsWith("https://") && !lower.startsWith("http://")) continue;
+    if (seen.has(u)) continue;
+    seen.add(u);
+    out.push(u);
+    if (out.length >= MAX_TURNOVER_ITEM_PHOTOS) break;
+  }
+  return out;
+}
+
 /** @type {{ task_key: string, title: string, category: string, sort_order: number }[]} */
 const DEFAULT_TEMPLATE_LINES = [
   { task_key: "move_out_inspection", title: "Move-out inspection", category: "Inspection", sort_order: 10 },
@@ -29,8 +53,17 @@ function normProp(code) {
 function isTicketStatusBlocking(statusRaw) {
   const s = String(statusRaw || "").trim().toLowerCase();
   if (!s) return false;
-  const done = ["completed", "closed", "canceled", "cancelled", "resolved"];
-  return !done.some((d) => s === d || s.includes(d));
+  const terminal = [
+    "completed",
+    "closed",
+    "canceled",
+    "cancelled",
+    "resolved",
+    "deleted",
+    "void",
+    "removed",
+  ];
+  return !terminal.some((d) => s === d || s.includes(d));
 }
 
 function priorityToPortalUrgency(priority) {
@@ -57,6 +90,44 @@ function readTurnoverIdsFromPortalPayload(routerParameter) {
     /* ignore */
   }
   return { turnoverId, turnoverItemId };
+}
+
+/**
+ * Clear punch-list ticket links when the ticket is gone or no longer open.
+ * @param {import('@supabase/supabase-js').SupabaseClient} sb
+ * @param {string} turnoverId
+ */
+async function reconcileTurnoverItemLinks(sb, turnoverId) {
+  const id = String(turnoverId || "").trim();
+  if (!id || !sb) return;
+
+  const { data: items } = await sb
+    .from("turnover_items")
+    .select("id, linked_ticket_id, linked_work_item_id")
+    .eq("turnover_id", id);
+
+  for (const item of items || []) {
+    const tid = String(item.linked_ticket_id || "").trim();
+    if (!tid) continue;
+
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      tid
+    );
+    const { data: ticket } = isUuid
+      ? await sb.from("tickets").select("ticket_id, status").eq("id", tid).maybeSingle()
+      : await sb
+          .from("tickets")
+          .select("ticket_id, status")
+          .eq("ticket_id", tid.toUpperCase())
+          .maybeSingle();
+
+    if (!ticket || !isTicketStatusBlocking(ticket.status)) {
+      await sb
+        .from("turnover_items")
+        .update({ linked_ticket_id: null, linked_work_item_id: null })
+        .eq("id", item.id);
+    }
+  }
 }
 
 /**
@@ -106,6 +177,8 @@ async function refreshTurnoverBlocker(sb, turnoverId) {
   const { data: trow } = await sb.from("turnovers").select("*").eq("id", id).maybeSingle();
   if (!trow) return;
 
+  await reconcileTurnoverItemLinks(sb, id);
+
   const { data: items } = await sb
     .from("turnover_items")
     .select("id, title, status, sort_order, linked_ticket_id, source, metadata_json")
@@ -152,13 +225,17 @@ async function getTurnoverById(id, withItems) {
 
   if (!withItems) return { ok: true, turnover, items: [] };
 
+  await refreshTurnoverBlocker(sb, tid);
+
+  const { data: turnoverFresh } = await sb.from("turnovers").select("*").eq("id", tid).maybeSingle();
+
   const { data: items, error: iErr } = await sb
     .from("turnover_items")
     .select("*")
     .eq("turnover_id", tid)
     .order("sort_order", { ascending: true });
   if (iErr) return { ok: false, error: iErr.message, turnover, items: [] };
-  return { ok: true, turnover, items: items || [] };
+  return { ok: true, turnover: turnoverFresh || turnover, items: items || [] };
 }
 
 /**
@@ -393,7 +470,7 @@ async function updateTurnoverItem(turnoverId, itemId, patch, o) {
   for (const f of fields) {
     if (Object.prototype.hasOwnProperty.call(patch, f)) {
       if (f === "photo_refs") {
-        upd[f] = Array.isArray(patch[f]) ? patch[f] : item.photo_refs;
+        upd[f] = normalizePhotoRefs(patch[f]);
       } else if (f === "priority" && patch[f] != null) {
         upd[f] = String(patch[f]).trim().toUpperCase();
       } else if (f === "status" && patch[f] != null) {

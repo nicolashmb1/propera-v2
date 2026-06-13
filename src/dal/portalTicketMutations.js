@@ -443,7 +443,7 @@ async function fetchTicketByHumanId(sb, humanTicketId) {
   const { data, error } = await sb
     .from("tickets")
     .select(
-      "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history, assignment_source"
+      "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history, assignment_source, turnover_id, turnover_item_id"
     )
     .eq("ticket_id", upper)
     .maybeSingle();
@@ -451,7 +451,7 @@ async function fetchTicketByHumanId(sb, humanTicketId) {
   const { data: dI, error: eI } = await sb
     .from("tickets")
     .select(
-      "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history, assignment_source"
+      "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history, assignment_source, turnover_id, turnover_item_id"
     )
     .ilike("ticket_id", id)
     .maybeSingle();
@@ -471,7 +471,7 @@ async function fetchTicketForPortalMutation(sb, lookupHint) {
     const { data, error } = await sb
       .from("tickets")
       .select(
-        "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history, assignment_source"
+        "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history, assignment_source, turnover_id, turnover_item_id"
       )
       .eq("id", hl)
       .maybeSingle();
@@ -479,7 +479,7 @@ async function fetchTicketForPortalMutation(sb, lookupHint) {
     const { data: dk, error: ek } = await sb
       .from("tickets")
       .select(
-        "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history, assignment_source"
+        "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history, assignment_source, turnover_id, turnover_item_id"
       )
       .eq("ticket_key", hl)
       .maybeSingle();
@@ -487,7 +487,7 @@ async function fetchTicketForPortalMutation(sb, lookupHint) {
     const { data: dk2, error: ek2 } = await sb
       .from("tickets")
       .select(
-        "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history, assignment_source"
+        "ticket_id, ticket_key, property_code, status, message_raw, attachments, is_imported_history, assignment_source, turnover_id, turnover_item_id"
       )
       .eq("ticket_key", hint)
       .maybeSingle();
@@ -660,6 +660,22 @@ async function tryPortalPmTicketMutation(o) {
       };
     }
     await cancelPendingLifecycleTimersForTicketKey(sb, ticketKey, "ticket_deleted");
+    let turnoverIdToRefresh = String(ticket.turnover_id || "").trim();
+    if (!turnoverIdToRefresh) {
+      const linkHint = String(ticket.ticket_id || resolvedTicketId || "").trim();
+      if (linkHint) {
+        const { data: linkedItem } = await sb
+          .from("turnover_items")
+          .select("turnover_id")
+          .eq("linked_ticket_id", linkHint)
+          .maybeSingle();
+        turnoverIdToRefresh = String(linkedItem?.turnover_id || "").trim();
+      }
+    }
+    if (turnoverIdToRefresh) {
+      const { refreshTurnoverBlocker } = require("./turnovers");
+      await refreshTurnoverBlocker(sb, turnoverIdToRefresh);
+    }
     await appendEventLog({
       traceId,
       log_kind: "portal",

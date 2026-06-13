@@ -26,7 +26,7 @@ const {
 } = require("./savedPrograms");
 
 /** Max images per line (portal preventive proof-of-work). */
-const MAX_PROOF_PHOTOS_PER_LINE = 12;
+const MAX_PROOF_PHOTOS_PER_LINE = 30;
 
 /**
  * @param {unknown} raw

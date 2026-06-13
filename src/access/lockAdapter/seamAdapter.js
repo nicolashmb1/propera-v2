@@ -5,6 +5,15 @@ const { getSeamClient } = require("./seamClient");
  * @param {unknown} row
  * @returns {{ accessCodeId: string, code: string }}
  */
+const SEAM_ACCESS_CODE_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isSeamManagedCredentialId(externalCredentialId) {
+  const id = String(externalCredentialId || "").trim();
+  if (!id || id.startsWith("noop-")) return false;
+  return SEAM_ACCESS_CODE_ID_RE.test(id);
+}
+
 function parseSeamAccessCode(row) {
   const ac = row && typeof row === "object" ? row : {};
   const nested =
@@ -60,6 +69,9 @@ const seamAdapter = {
   async revokeCredential(_lockRow, ctx = {}) {
     const externalCredentialId = String(ctx.externalCredentialId || "").trim();
     if (!externalCredentialId) return { ok: true, skipped: true };
+    if (!isSeamManagedCredentialId(externalCredentialId)) {
+      return { ok: true, skipped: true, reason: "not_seam_credential" };
+    }
     const seam = getSeamClient();
     await seam.accessCodes.delete({ access_code_id: externalCredentialId });
     return { ok: true };
@@ -96,4 +108,8 @@ const seamAdapter = {
   },
 };
 
-module.exports = { seamAdapter, parseSeamAccessCode };
+module.exports = {
+  seamAdapter,
+  parseSeamAccessCode,
+  isSeamManagedCredentialId,
+};

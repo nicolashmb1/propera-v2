@@ -72,11 +72,30 @@ describe("seamAdapter", () => {
 
     const result = await seamAdapter.revokeCredential(
       { external_lock_id: "device-uuid-1" },
-      { externalCredentialId: "ac_test_1" }
+      { externalCredentialId: "f46b20dc-f066-4968-a453-8f0eae760589" }
     );
 
     assert.equal(result.ok, true);
-    assert.deepEqual(deleted, [{ access_code_id: "ac_test_1" }]);
+    assert.deepEqual(deleted, [
+      { access_code_id: "f46b20dc-f066-4968-a453-8f0eae760589" },
+    ]);
+  });
+
+  test("revokeCredential skips noop pilot credential ids", async () => {
+    setSeamClientForTests({
+      accessCodes: {
+        delete: async () => {
+          throw new Error("should_not_call");
+        },
+      },
+    });
+
+    const result = await seamAdapter.revokeCredential(
+      {},
+      { externalCredentialId: "noop-1781235259989" }
+    );
+    assert.equal(result.skipped, true);
+    assert.equal(result.reason, "not_seam_credential");
   });
 
   test("revokeCredential skips when external id missing", async () => {
