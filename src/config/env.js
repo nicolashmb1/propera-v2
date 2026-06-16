@@ -438,6 +438,11 @@ function accessCredentialSecret() {
   return String(env("ACCESS_CREDENTIAL_SECRET", "")).trim();
 }
 
+/** Encrypt Stripe secret keys at rest (`STRIPE_CREDENTIAL_SECRET`). Dev may omit (base64 only). */
+function stripeCredentialSecret() {
+  return String(env("STRIPE_CREDENTIAL_SECRET", "")).trim();
+}
+
 /** Seam API key for Yale / smart-lock access codes (`SEAM_API_KEY`). */
 function seamApiKey() {
   return String(env("SEAM_API_KEY", "")).trim();
@@ -826,6 +831,7 @@ module.exports = {
   tenantI18nEnabled,
   tenantTranslateModel,
   accessCredentialSecret,
+  stripeCredentialSecret,
   seamApiKey,
   financeCoreEnabled,
   financialCaptureEnabled,

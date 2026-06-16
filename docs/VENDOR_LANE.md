@@ -8,7 +8,7 @@
 
 **Related (do not duplicate here):**
 
-- [ORCHESTRATOR_ROUTING.md](./ORCHESTRATOR_ROUTING.md) — inbound order; vendor lane today = stub at step 10
+- [ORCHESTRATOR_ROUTING.md](./ORCHESTRATOR_ROUTING.md) — inbound order; **identified vendor** → `handleVendorInbound`; **unidentified** vendor traffic → lane stub at step 10
 - [PM_ASSIGNMENT_OVERRIDE.md](./PM_ASSIGNMENT_OVERRIDE.md) — portal assign + `PM_OVERRIDE` guard
 - [COMMUNICATION_ENGINE.md](./COMMUNICATION_ENGINE.md) — separate Twilio number; **not** vendor dispatch unless product explicitly chooses it
 - [PROPERA_JARVIS_NORTH_STAR.md](./PROPERA_JARVIS_NORTH_STAR.md) — agent may not claim vendor assigned until brain executes

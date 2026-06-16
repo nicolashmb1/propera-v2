@@ -28,9 +28,10 @@ Optional: **`docs/GAS_ENGINE_PORT_PROGRAM.md`** (phased port for engines 10/12/1
 If the user says anything about **finances, ledger, rent, delinquency, owner statements, charges, lease, cost, vendor AP, budgets**, or working on the **`/financial` area** of propera-app, read these **before touching code**:
 
 1. **`docs/PROPERA_FINANCE_ROADMAP.md`** — **start here**. Six-phase plan + **§Finance inside Propera architecture** (channel-agnostic POS, package in/out, `/financial` module spine). Shows what is done, what is next, and the migration sequence. **Check which phase we are in before building anything.**
-2. **`docs/PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md`** — honest snapshot of what ships today (capabilities checklist, Layer 0–5 depth map, feature flags, §2.5a for propera-app finance surfaces).
-3. **`docs/PROPERA_FINANCIAL_LAYER_MAP.md`** — where tables live, portal routes, guardrails, app proxy pattern for cost/ledger data.
-4. **`../propera-app/docs/FINANCIAL_LEASEHOLD_SYNC.md`** — Leasehold snapshot ingest, office syncher (mirror → staging), schedule, deposit reconciliation, migrations **094–097**.
+2. **`docs/ACCOUNTING_SIGNAL_SCHEMA.md`** — **read before Leasehold mimic / materialization work**. Leasehold adapter → structured signals → brain posts Propera leases + ledger (Steps 0–4; tenant reconcile → lease materializer → ledger mimic). Phase 1.5 snapshot ingest alone is **display-only**.
+3. **`docs/PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md`** — honest snapshot of what ships today (capabilities checklist, Layer 0–5 depth map, feature flags, §2.5a for propera-app finance surfaces).
+4. **`docs/PROPERA_FINANCIAL_LAYER_MAP.md`** — where tables live, portal routes, guardrails, app proxy pattern for cost/ledger data.
+5. **`../propera-app/docs/FINANCIAL_LEASEHOLD_SYNC.md`** — Leasehold snapshot ingest, office syncher (mirror → staging), schedule, deposit reconciliation, migrations **094–097**.
 
 ### Where the roadmap stands right now (update this when a phase item ships)
 
@@ -40,16 +41,19 @@ If the user says anything about **finances, ledger, rent, delinquency, owner sta
 | **Phase 1** — credible daily use (snapshot APIs, lease/rent on cards, ledger void/date/notes) | 🟡 In progress | **052** applied; Phase 1d (property expenses + record payment + bill scan) shipped **2026-05-30** — see roadmap §1d |
 | **Phase 1d** — parallel-run operating expenses (`property_expenses` table, expense tab, bill scan, record payment) | ✅ Shipped | **082** `property_expenses`; record payment uses existing ledger POST; bill scan via V2 `expenseScanVision.js` |
 | **Phase 1.5** — incumbent accounting **read-only snapshot** (Leasehold → `/financial`) | ✅ **Shipped** (2026-06-08) — bridge + import APIs + snapshot rollups; office syncher **planned** | migrations **094–097**; see `../propera-app/docs/FINANCIAL_LEASEHOLD_SYNC.md` |
-| **Phase 2** — rent roll + delinquency (native `rent_postings` or promoted import) | 🔲 Not started | needs 053 |
-| **Phase 3** — vendor finance / AP | 🔲 Not started | needs 054–055 |
-| **Phase 4** — budget vs actual | 🔲 Not started | needs 056 |
-| **Phase 5** — owner statements | 🔲 Not started | needs 057 |
-| **Phase 6** — full books | 🔲 Deferred (explicit decision gate) | — |
+| **Phase 1.6** — accounting mimic (LH signals → Propera lease + ledger records) | 🟡 **Steps 1–2 pilot** — `lease_terms_sync` shipped; ledger mimic **WESTFIELD unit 101** | **`handleAccountingImportSignals.js`**; migration **108** applied before import |
+| **Phase 2** — rent roll + delinquency (native `rent_postings` or promoted import) | 🔲 Not started | **103+** (new number — see roadmap) |
+| **Phase 3** — vendor finance / AP | 🔲 Not started | **103+** (new number — see roadmap) |
+| **Phase 4** — budget vs actual | 🔲 Not started | **103+** (new number — see roadmap) |
+| **Phase 5** — owner statements | 🔲 Not started | **108+** (see roadmap) |
+| **Phase 5b** — accounting reports (`/financial/reports`, accountant export pack) | 🔲 Not started — **required for LH cutover** | **108+** |
+| **Phase 6** — full books + bank reconciliation (**cutover target** — replace Leasehold) | 🔲 Not started | **108+** |
 
-**Current finance migration note:** `052_tenant_ledger_effective_date_notes.sql` is already in repo for Phase 1 ledger hardening. **Do not reuse 051** (already `program_lines` staff assignment). Before the next Phase 2 schema change, confirm numbering against the roadmap because `053_financial_intake_cost_capture.sql` also exists in-repo.
+**Current finance migration note:** `052_tenant_ledger_effective_date_notes.sql` is applied for Phase 1 ledger hardening. **108** adds `accounting_import` + `import_idempotency_key` for LH ledger mimic. **Do not reuse 051** (already `program_lines` staff assignment). **053–057 are consumed** by other features. **094–097** = Leasehold snapshot ingest (Phase 1.5). Next **new** finance schema beyond 108 starts at **109+** — see **`docs/PROPERA_FINANCE_ROADMAP.md`** migration table.
 
 ### Finance guardrails (always apply)
-- Finance is **layered on the property operation system** — channel-agnostic, package in/out. See roadmap **§Finance inside Propera architecture**. No finance logic in adapters; no lifecycle/resolver bypass.
+- Finance is **layered on the property operation system** — channel-agnostic, package in/out. See roadmap **§Finance inside Propera architecture** and **§Staff-minimal finance**. No finance logic in adapters; no lifecycle/resolver bypass.
+- **Owner intent:** Leasehold is transitional — build toward **Propera financially complete** (payments, bank rec, reports, automation). See roadmap **Owner cutover intent** and Phase **5b / 6**.
 - Browser **never** writes `ticket_cost_entries` directly — only V2 portal routes with finance flags.
 - **Manual ledger lines** and **unit lease** upserts go through **propera-app Next routes** with the tenant-mutation gate — not the V2 ticket-cost DAL.
 - Ticket economics stay **authoritative on tickets**. Manual ledger lines are PM/owner adjustments only.
@@ -65,7 +69,7 @@ If the user says anything about **finances, ledger, rent, delinquency, owner sta
 - **Do not add new product paths or new brain surfaces** unless the user explicitly un-freezes that. Prior work item: **what is already wired must behave like GAS** (regression / parity), not scope expansion.  
 - **Exception (explicit):** **PM/Task V1** — template-driven `program_runs` / `program_lines` + `/api/portal/program-*` routes (**`docs/PM_PROGRAM_ENGINE_V1.md`**). **Not** tenant reactive intake; keep **`handleInboundCore`** out of program creation. **`properties.program_expansion_profile`** is the per-property **building structure** for expansion today; **planned reuse** for tenant/staff/ops assistance (same labels across tickets and programs) is documented under **Strategic reuse** in that file — still **read-side / resolver** until explicitly owned elsewhere (**`docs/BRAIN_PORT_MAP.md`** portal PM table).  
 - **Any behavior change** → update **`docs/PARITY_LEDGER.md`** and pointer comments in code (`PARITY GAP:` where reduced vs GAS).
-- **Known red tests / preserve current tenant-agent behavior (2026-05-25):** Do **not** change tenant-agent behavior just to make the remaining red tests pass without explicit user approval. Current accepted behavior: **unit tickets may finalize without schedule**, then ask schedule **post-create**; **common area** and **emergency / skipScheduling** should **not** ask for schedule. Remaining reds are tracked in **`docs/HANDOFF_LOG.md`** latest section: **`tests/scenarios/tenantAgentConversationTtl.test.js`** (test drift on fresh partial metadata), **`tests/scenarios/tenantAgentPostCompletePhase4.test.js`** (result-label drift: `tenant_agent_gather` vs `intake_start_new`), **`tests/tenantAgent/detectGatherSafety.test.js`** (handoff emergency payload contract mismatch), **`tests/tenantMessagesCancelLayer.test.js`** (known unimplemented cancel/suspend path). Unless the user asks for that tenant-agent work, leave those behaviors alone and move on to the requested slice (current next slice: Access Engine completion beyond `noop` / deposit hooks only when explicitly requested).
+- **Known red tests / preserve current tenant-agent behavior (2026-06-12):** Do **not** change tenant-agent behavior just to make failing tests pass without explicit user approval. Current accepted behavior: **unit tickets may finalize without schedule**, then ask schedule **post-create**; **common area** and **emergency / skipScheduling** should **not** ask for schedule. **`npm test`** currently reports **~13 flaky failures** (count varies 13–15) — mostly tenant-agent gather/golden/handoff suites plus **`tests/tenantMessagesCancelLayer.test.js`** (known unimplemented cancel/suspend path). Core suites (router, schedule, staff brain, Jarvis reason) stay green. Do not “fix reds” unless the user explicitly requests tenant-agent work. See **`docs/TESTING_STRATEGY.md`** §Known flaky failures.
 
 ---
 
@@ -107,6 +111,7 @@ Conversations **drift**: freeze lifts, scope shifts, priorities change, a port l
 | Ticket Activity timeline (trigger kinds, view contract, V2 event kinds, duplicate rule) | **`docs/TICKET_TIMELINE.md`**, **`supabase/migrations/`** (new migration if SQL contract changes), **`propera-app/src/lib/timelineMapping.ts`**, **`tests/ticketTimelineV1Kinds.test.js`** (or successor) |
 | PM assignment override phases, acceptance criteria, per-phase status | **`docs/PM_ASSIGNMENT_OVERRIDE.md`** — update `Status` column when a phase ships or acceptance criteria change |
 | Finance phase ships, new migration lands, or roadmap priority changes | **`docs/PROPERA_FINANCE_ROADMAP.md`** (phase table + migration sequence) · **`AGENTS.md`** "Where the roadmap stands" table · **`docs/PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md`** §2.5a + §8 + Baseline row |
+| Accounting mimic / signal kinds / materialization rules change | **`docs/ACCOUNTING_SIGNAL_SCHEMA.md`** · **`docs/PROPERA_FINANCE_ROADMAP.md`** Phase 1.6 row |
 
 **Rule:** Stale docs are a bug. **Do not** end a meaningful direction change with only chat context updated.
 
@@ -130,18 +135,20 @@ Conversations **drift**: freeze lifts, scope shifts, priorities change, a port l
 | **Finance roadmap** (phased plan, current phase, next migration) | **`docs/PROPERA_FINANCE_ROADMAP.md`** — **read before any finance work** |
 | Finance depth + capability snapshot (Layer 0–5, flags, propera-app surfaces) | `docs/PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md` |
 | Finance table / route / flag map | `docs/PROPERA_FINANCIAL_LAYER_MAP.md` |
+| **Leasehold mimic / accounting signals** (adapter → brain → Propera records) | **`docs/ACCOUNTING_SIGNAL_SCHEMA.md`** — Steps 0–4; tenant reconcile **`supabase/queries/README_TENANT_RECONCILE.md`** |
 | Unit leases (schema, API) | `supabase/migrations/049_unit_leases.sql`; propera-app `src/app/api/properties/[code]/units/[unitId]/lease/route.ts` |
 | Unit tenant ledger (schema, API, manual POST) | `supabase/migrations/042_operational_finance_v1.sql` + `050_tenant_ledger_unit_property_idx.sql`; propera-app `src/app/api/properties/[code]/units/[unitId]/ledger/route.ts` |
 | Unit tests | `propera-v2/tests/` |
 | Supabase SQL | `propera-v2/supabase/migrations/` |
 | Portal ticket Activity / timeline V1+V2 contract | **`docs/TICKET_TIMELINE.md`**; SQL: `034`–`037` ticket timeline migrations; app: `propera-app/src/lib/timelineMapping.ts` |
-| **PM ticket split** (2-ticket, detail modal) | **`docs/TICKET_SPLIT_V1.md`** — spec locked; migration **`061`** planned; not implemented |
+| **PM ticket split** (2-ticket, detail modal) | **`docs/TICKET_SPLIT_V1.md`** — spec locked; **not implemented** (needs new migration — **`061`** is open-deck day chart note only) |
 | **Open deck day chart** (mobile 8a–8p, open vs completed, day pager) | **`docs/OPEN_DECK_DAY_CHART_V1.md`** — feature-flagged; `GET /api/portal/tickets/day-curve`; app `OpenDeckDayChart.tsx` |
-| **Communication Engine** (broadcast SMS, dedicated Twilio number) | **`docs/COMMUNICATION_ENGINE.md`**; SQL: **`055_communication_engine.sql`**, **`065_communication_agent_initiated.sql`**; code: `src/communication/` (campaign draft + compose + audience preview + send + reply/delivery tracking live), `src/webhooks/communicationsSms.js` |
+| **Communication Engine** (broadcast SMS, dedicated Twilio number) | **`docs/COMMUNICATION_ENGINE.md`**; SQL: **`055`**, **`065`**, **`102`** (org SMS header/footer templates); code: `src/communication/` (campaign draft + compose + audience preview + send + reply/delivery tracking live), `src/webhooks/communicationsSms.js` |
+| **Balance reminder automation** (rent reminders via comm engine) | **`docs/BALANCE_REMINDER_AUTOMATION.md`**; SQL: **`098`–`101`**; cron `POST /internal/cron/balance-reminders`; portal settings `/api/portal/settings/balance-reminders/*`; flag **`PROPERA_BALANCE_REMINDER_ENABLED=1`**; app **`/settings/balance-reminders`** |
 | **Portal Leasing Ops V1** (expiring leases + prospect pipeline — not GAS leasing brain) | **`docs/PARITY_LEDGER.md`** §12; SQL: **`085_leasing_engine_v1.sql`**; code: `src/dal/leasingProspects.js`; flags: **`PROPERA_LEASING_ENGINE_ENABLED`** (V2) + **`NEXT_PUBLIC_PROPERA_LEASING_ENABLED`** (app) |
-| **Vendor lane** (dispatch, inbound YES/NO, policy auto-route — planned) | **`docs/VENDOR_LANE.md`**; today: lane **stub** + portal assign only (`046`, `portalTicketAssignment.js`) |
+| **Vendor lane** (dispatch, inbound YES/NO, policy auto-route) | **`docs/VENDOR_LANE.md`**; **V0–V2 shipped:** portal assign + dispatch (`069`, `073`), **`handleVendorInbound`** YES/NO for identified vendor phones; **V3** policy auto-route not started; unidentified vendor traffic still gets lane stub |
 | **Multi-org / SaaS spine** | **`docs/MULTI_ORG_ARCHITECTURE.md`**; SQL: **`074_org_spine_core.sql`**; code: `src/portal/resolvePortalOrgContext.js`, `portalOrgScope.js` |
-| **Conflict Mediation Engine** (policy enforcement, complaints, notice tiers — planned) | **`docs/CONFLICT_MEDIATION_ENGINE.md`**; Jarvis: **`docs/PROPERA_JARVIS_NORTH_STAR.md`**; SQL: **`067`**, **`068`**, **`071`**; code: `src/conflictMediation/` (CME-2 report + courtesy notice live) |
+| **Conflict Mediation Engine** (policy enforcement, complaints, notice tiers) | **`docs/CONFLICT_MEDIATION_ENGINE.md`**; **CME-2 shipped** behind `PROPERA_CONFLICT_MEDIATION_ENABLED=1` (report violation + courtesy notice); CME-3+ not started; SQL: **`067`**, **`068`**, **`071`**; code: `src/conflictMediation/` |
 | **Jarvis / company operating delegate** (tenant, staff, owner agents + outgate) | **`docs/PROPERA_JARVIS_NORTH_STAR.md`**, **`docs/JARVIS_SPINE.md`** |
 | **Tenant Agent** (AI Staff — conversational SMS/TG/WA front door) | **`docs/TENANT_AGENT_ADAPTER.md`**; code: `src/adapters/tenantAgent/`; brain append: `handleTenantAppendToTicket.js`; SQL: **`063_tenant_conversations.sql`**; flags: **`TENANT_AGENT_*`** in `.env.example` |
 | **Tenant portal** (resident `/tenant/*` in propera-app + `/api/tenant/*` in V2) | **`docs/TENANT_PORTAL_BUILD_PLAN.md`**; SQL: **`056_tenant_portal.sql`**; **i18n en/es:** **`docs/TENANT_PORTAL_I18N.md`** (spec locked — staff portal untouched) |

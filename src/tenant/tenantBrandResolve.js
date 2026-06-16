@@ -4,6 +4,7 @@
 const { getSupabase } = require("../db/supabase");
 const { commMainNumberDisplay } = require("../config/env");
 const { tenantAmenitiesVisible } = require("./tenantAccessService");
+const { tenantPaymentsVisible } = require("./tenantPaymentService");
 const { normalizeTenantUiLocale } = require("./tenantI18nLocale");
 
 /**
@@ -95,6 +96,7 @@ async function loadTenantSessionBrand(sb, rosterId, orgId) {
   }
 
   const amenitiesVisible = await tenantAmenitiesVisible({ propertyCode });
+  const paymentsVisible = await tenantPaymentsVisible({ propertyCode });
 
   return {
     tenant: {
@@ -116,7 +118,7 @@ async function loadTenantSessionBrand(sb, rosterId, orgId) {
       showProperaAttribution: org?.show_propera_attribution !== false,
     },
     contact: { mainNumberE164: commMainNumberDisplay() },
-    features: { amenitiesVisible },
+    features: { amenitiesVisible, paymentsVisible },
   };
 }
 

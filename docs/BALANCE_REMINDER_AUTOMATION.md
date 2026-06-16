@@ -56,16 +56,17 @@ Every 15 min cron → POST /internal/cron/balance-reminders
 | `balance_reminder_rules` | Steps: day, message, threshold, delivery |
 | `balance_reminder_runs` | Monthly dedupe + campaign audit |
 
-Migrations: `098_balance_reminder_automation.sql`, `099_balance_reminder_rules_portal.sql`, `100_balance_reminder_send_time.sql`
+Migrations: `098_balance_reminder_automation.sql`, `099_balance_reminder_rules_portal.sql`, `100_balance_reminder_send_time.sql`, `101_balance_reminder_message_wrap.sql` (org-wide SMS header/footer templates: migration **102**)
 
 ---
 
 ## Operator setup
 
-1. Run migrations **098**, **099**, and **100** in Supabase.
+1. Run migrations **098**, **099**, **100**, and **101** in Supabase (plus **094** for snapshot balances; **102** optional for org SMS templates).
 2. Enable Communication Engine + Twilio outbound on V2.
-3. Schedule cron every 15 minutes: `POST /internal/cron/balance-reminders` (see `.github/workflows/balance-reminder-cron.yml`).
-4. Staff turns on automation and sets send time in **Settings → Rent reminders**.
+3. Set **`PROPERA_BALANCE_REMINDER_ENABLED=1`** on V2 (requires comm engine).
+4. Schedule cron every 15 minutes: `POST /internal/cron/balance-reminders` (see `.github/workflows/balance-reminder-cron.yml`).
+5. Staff turns on automation and sets send time in **Settings → Rent reminders**.
 
 Staging test (bypass send-time gate): `POST /internal/cron/balance-reminders` with body `{ "forceDay": 5, "forceSend": true }`.
 

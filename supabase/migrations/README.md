@@ -60,8 +60,22 @@ Run SQL files in **numeric order** in the Supabase SQL Editor (same project as `
 | **095_unit_lease_net_rent_enrichment.sql** | **`unit_leases`**: `net_rent_cents`, `rent_subsidy_cents`, `net_rent_derived_at` | **`leaseEnrichmentImport.ts`** / `netRentEnrichmentImport.ts` on snapshot import; portfolio subsidy math |
 | **096_unit_lease_deposit_enrichment.sql** | **`unit_leases`**: `key_deposit_cents`, `deposits_derived_at` | **`leaseEnrichmentImport.ts`**; unit hub + `/financial/properties/[p]` deposit display |
 | **097_unit_lease_other_pet_deposit_enrichment.sql** | **`unit_leases`**: `other_deposit_cents`, `pet_deposit_cents` | **`leaseEnrichmentImport.ts`**; LH “Other Security” bucket split (Key + Pet + Other = LH Other) |
+| **053_financial_intake_cost_capture.sql** | **`ticket_cost_entries`**: `receipt_status`, `voided_at`, `capture_idempotency_key` | Financial Intake V1 chat capture — **`docs/FINANCIAL_INTAKE_V1.md`** |
+| **061_open_deck_day_chart_note.sql** | Comment-only (no schema) | Open deck day chart — **`GET /api/portal/tickets/day-curve`**; see **`docs/OPEN_DECK_DAY_CHART_V1.md`** |
+| **069_vendor_lane_v1.sql** | **`vendor_contacts`**, **`vendor_conversation_ctx`**, dispatch columns on **`tickets`** | **`docs/VENDOR_LANE.md`** — assign + dispatch + inbound YES/NO |
+| **073_portal_tickets_vendor_lane.sql** | Replaces **`portal_tickets_v1`** with vendor dispatch/status fields | PM cockpit vendor columns |
+| **098_balance_reminder_automation.sql** | **`balance_reminder_runs`** — monthly dedupe + campaign audit | **`docs/BALANCE_REMINDER_AUTOMATION.md`** |
+| **099_balance_reminder_rules_portal.sql** | **`balance_reminder_settings`**, **`balance_reminder_rules`** | Portal-configured rent reminder steps |
+| **100_balance_reminder_send_time.sql** | `send_hour` / `send_minute` on **`balance_reminder_settings`** | Scheduled send time gate |
+| **100_access_passes_external_credential_id.sql** | **`access_passes.external_credential_id`** | Seam lock revoke id — Access Engine |
+| **101_balance_reminder_message_wrap.sql** | `message_header` / `message_footer` on **`balance_reminder_settings`** | Custom SMS wrap text |
+| **102_org_broadcast_sms_templates.sql** | **`organizations.comm_sms_header_template`**, **`comm_sms_footer_template`** | Communication Engine + balance reminder SMS wrap |
 
 **Leasehold financial ingest (094–097):** apply all four before first full import. Join keys in SQL: `unit_leases.unit_catalog_id` → **`public.units`** (`id`), not a `unit_catalog` table. Property filter: `unit_leases.property_code` or `units.property_code` (both reference `properties.code`).
+
+**Balance reminders (098–101):** require Communication Engine (**055**) + Leasehold snapshots (**094**) for balance data. Enable **`PROPERA_BALANCE_REMINDER_ENABLED=1`** on V2.
+
+**Note:** two files share prefix **100** — apply both; consider renumbering in a future cleanup migration.
 
 ### Minimum paths
 

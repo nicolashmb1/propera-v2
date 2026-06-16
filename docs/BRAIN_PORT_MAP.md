@@ -20,23 +20,23 @@
 | **PHASE 1–2** Map + canonical `RouterParameter` contract | **Done** — see builder + `InboundSignal` |
 | **PHASE 3** First real slice (precursors only) | **Done** — `src/brain/router/*`, `src/contracts/buildRouterParameterFromTelegram.js` |
 | **PHASE 4** Tests | **Done** — `npm test` (router, parse draft, staff brain, `ticketDefaults`) |
-| **PHASE 5** Next slices | **In progress** — maintenance + staff slices are live; **orchestrator** explicit in **`src/inbound/routeInboundDecision.js`** + **`docs/ORCHESTRATOR_ROUTING.md`** (core guards, vendor/system **lane stubs**). **Outgate:** `src/outgate/` — `dispatchOutbound` only place for user-facing sends; compliance **MessageSpecs** + maintenance template keys on **`coreRun.outgate`**. Staff lifecycle partial; schedule commit runs **`parsePreferredWindowShared`**, **`inferStageDayFromText_`**, **`validateSchedPolicy_`** (`ticketPreferredWindow.js`). **Remaining:** full GAS canonical intake, full lifecycle graph, template map — **PARITY_LEDGER.md** §7. |
+| **PHASE 5** Next slices | **In progress** — maintenance + staff slices are live; **orchestrator** explicit in **`src/inbound/routeInboundDecision.js`** + **`docs/ORCHESTRATOR_ROUTING.md`** (core guards; vendor/system **lane stubs** for unidentified traffic; **identified vendor** → `handleVendorInbound`). **Outgate:** `src/outgate/` — `dispatchOutbound` only place for user-facing sends; compliance **MessageSpecs** + maintenance template keys on **`coreRun.outgate`**. Staff lifecycle partial; schedule commit runs **`parsePreferredWindowShared`**, **`inferStageDayFromText_`**, **`validateSchedPolicy_`** (`ticketPreferredWindow.js`). **Remaining:** full GAS canonical intake, full lifecycle graph, template map — **PARITY_LEDGER.md** §7. |
 
 **Migration plan (canonical in repo):** [PROPERA_V2_GAS_EXIT_PLAN.md](./PROPERA_V2_GAS_EXIT_PLAN.md) (YAML todos + phases).
 
 **Keep docs current:** When you change behavior, update **this file**, **[PROPERA_V2_GAS_EXIT_PLAN.md](./PROPERA_V2_GAS_EXIT_PLAN.md)** (todos + narrative), and **[OUTSIDE_CURSOR.md](./OUTSIDE_CURSOR.md)** if operators must run new SQL or env steps. See *Documentation discipline* at the bottom.
 
-### Vendor lane (V0/V1 shipped — inbound stub until V2)
+### Vendor lane (V0–V2 shipped — stub only for unidentified vendor traffic)
 
-Spec: **[VENDOR_LANE.md](./VENDOR_LANE.md)**. **V0/V1:** migration **`069`**, `preloadActorIdentity`, `vendorContacts.js`, `vendorAssignment.js`, portal assign + dispatch. Vendor SMS still **`lane_stub_vendor`** until V2.
+Spec: **[VENDOR_LANE.md](./VENDOR_LANE.md)**. **V0–V2:** migration **`069`**, **`073`**, `preloadActorIdentity`, `vendorContacts.js`, `vendorAssignment.js`, portal assign + dispatch, **`handleVendorInbound`** YES/NO for identified vendor phones. **Unidentified** vendor-lane traffic still gets **`lane_stub_vendor`**.
 
 | Piece | Location |
 |-------|----------|
 | Lane classify | `preloadActorIdentity.js`, `decideLane.js`, `lanePolicy.js` |
 | Assign + dispatch | `src/dal/vendorAssignment.js` |
 | Portal | `portalTicketAssignment.js`, `registerPortalRoutes.js` |
-| Catalog + contacts | `046`, `069_vendor_lane_v1.sql` |
-| Inbound YES/NO (V2) | `src/brain/vendor/handleVendorInbound.js` (planned) |
+| Catalog + contacts | `046`, `069_vendor_lane_v1.sql`, `073_portal_tickets_vendor_lane.sql` |
+| Inbound YES/NO (V2) | `src/vendor/handleVendorInbound.js` — wired in `runInboundPipeline.js` |
 
 ### Access Engine (live partial — separate from maintenance brain)
 
@@ -76,9 +76,23 @@ Inbound ACCESS_* intents route **beside** `handleInboundCore` — same channel a
 | Campaign / audience / compose / send services | `src/communication/` |
 | Portal/API routes | `src/communication/registerCommunicationRoutes.js` — `POST /api/communications/campaigns`, `GET /api/communications/campaigns`, `GET /api/communications/campaigns/:id`, `POST /api/communications/draft`, `POST /api/communications/campaigns/:id/resolve`, `POST /api/communications/campaigns/:id/send` |
 | Broadcast webhooks | `src/webhooks/communicationsSms.js` — `POST /webhooks/communications/sms`, `POST /webhooks/communications/status` |
-| SQL | `supabase/migrations/055_communication_engine.sql`, `065_communication_agent_initiated.sql` |
+| SQL | `supabase/migrations/055_communication_engine.sql`, `065_communication_agent_initiated.sql`, `102_org_broadcast_sms_templates.sql` |
 
 **Canonical spec + guardrails:** **[COMMUNICATION_ENGINE.md](./COMMUNICATION_ENGINE.md)**. Portal-first surface now; future agent adapter must call the same `/api/communications/*` routes rather than a parallel backend. Reply/status webhooks are live; maintenance handoff remains an explicit stub seam, not a hidden second brain.
+
+### Balance reminder automation (cron subtype of Communication Engine)
+
+Automated rent reminders via the same comm engine + dedicated Twilio number. Requires Leasehold snapshots (**094**) for balance data.
+
+| Piece | Location |
+|-------|----------|
+| Service + cron | `src/communication/balanceReminderService.js`; `POST /internal/cron/balance-reminders` in `src/index.js` |
+| Portal settings API | `src/dal/portalBalanceReminders.js`; routes in `registerPortalRoutes.js` — `/api/portal/settings/balance-reminders/*` |
+| SQL | `098_balance_reminder_automation.sql`, `099_balance_reminder_rules_portal.sql`, `100_balance_reminder_send_time.sql`, `101_balance_reminder_message_wrap.sql` |
+| Feature flag | `PROPERA_BALANCE_REMINDER_ENABLED=1` (requires comm engine + Twilio) |
+| App UI | `propera-app` `/settings/balance-reminders` |
+
+**Spec:** **[BALANCE_REMINDER_AUTOMATION.md](./BALANCE_REMINDER_AUTOMATION.md)**.
 
 ### Conflict Mediation Engine (CME-2 write slice — separate from maintenance brain)
 
@@ -167,7 +181,7 @@ Shape matches the object under `e.parameter` that `handleInboundRouter_` reads (
 | `16_ROUTER_ENGINE.gs` | `detectTenantCommand_` (47–73) | `src/brain/router/detectTenantCommand.js` |
 | `16_ROUTER_ENGINE.gs` | `handleInboundRouter_` precursor chain (ordering only) | `src/brain/router/evaluateRouterPrecursor.js` |
 
-**Partially ported:** `decideLane` / `normalizeInboundEvent` — see `src/brain/router/`. **Orchestrator:** `routeInboundDecision.js` encodes core entry guards + vendor/system lane stubs (**20-B/C**). **Core path:** `handleInboundCore` performs real DB writes when configured. **SMS opt-out:** migration **011** + `smsOptOut.js` + pipeline (SMS **only**). **Still missing vs GAS:** full lifecycle state machine, full canonical intake/vision, full `handleInboundRouter_` depth — see **PARITY_LEDGER.md**.
+**Partially ported:** `decideLane` / `normalizeInboundEvent` — see `src/brain/router/`. **Orchestrator:** `routeInboundDecision.js` encodes core entry guards; **identified vendor** → `handleVendorInbound`; **unidentified** vendor/system → lane stubs (**20-B/C**). **Core path:** `handleInboundCore` performs real DB writes when configured. **SMS opt-out:** migration **011** + `smsOptOut.js` + pipeline (SMS **only**). **Still missing vs GAS:** full lifecycle state machine, full canonical intake/vision, full `handleInboundRouter_` depth — see **PARITY_LEDGER.md**.
 
 **Staff:** DB-backed staff resolution + `STAFF_LIFECYCLE_GATE`; `handleStaffLifecycleCommand` — full GAS `handleLifecycleSignal_` parity ongoing (**PARITY_LEDGER** §6).
 

@@ -158,7 +158,7 @@ Implementation: `buildIssueTicketGroups` from `src/brain/core/finalizeTicketGrou
 
 ---
 
-## Schema — migration `061_ticket_split_v1.sql` (planned)
+## Schema — migration `103+` (planned — **061** is open-deck day chart comment only)
 
 Add to `public.tickets`:
 
@@ -200,7 +200,7 @@ Update **`tests/ticketTimelineV1Kinds.test.js`** or add split-specific test for 
 | Layer | Planned location |
 |-------|------------------|
 | Spec | This file |
-| Migration | `supabase/migrations/061_ticket_split_v1.sql` |
+| Migration | `supabase/migrations/103+_ticket_split_v1.sql` (pick next free number — **061** taken by open-deck day chart) |
 | Split service | `src/portal/splitTicket.js` or `src/dal/portalTicketSplit.js` |
 | Suggest helper | `src/portal/suggestTicketSplit.js` (thin wrapper over `buildIssueTicketGroups`) |
 | Routes | `src/portal/registerPortalRoutes.js` — `POST …/tickets/:id/split`, optional `…/split/suggest` |
@@ -241,7 +241,7 @@ Require `ticket.ticketRowId` and `ticket.source === "v2"`.
 - [ ] GAS / imported-history tickets: control hidden or disabled with clear message.
 - [ ] Suggest split (if shipped): returns ≥2 issue strings for “icemaker and tube clogged” class text in unit tests.
 - [ ] `npm test` in `propera-v2` includes split service tests.
-- [ ] **`OUTSIDE_CURSOR.md`** updated with migration **061** apply step.
+- [ ] **`OUTSIDE_CURSOR.md`** updated with split migration apply step (use **103+**, not **061**).
 
 ---
 

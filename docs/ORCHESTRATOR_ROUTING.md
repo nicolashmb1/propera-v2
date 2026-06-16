@@ -76,16 +76,19 @@ Use **`#`** only for **new staff capture** drafts; use plain text for lifecycle 
 
 ## 4. Lane stubs (Phase 20-C)
 
-If `decideLane` returns **vendor** or **system** (`vendorLane`, `systemLane`), maintenance core is **not** entered. The user receives a **deterministic stub** (`buildNonMaintenanceLaneStub`) and `event_log` records **`LANE_STUB`**.
+If `decideLane` returns **vendor** or **system** (`vendorLane`, `systemLane`), maintenance core is **not** entered — **unless** the actor is an **identified vendor** (`actorIdentity.isVendor === true`), in which case **`handleVendorInbound`** runs instead of the stub.
 
-**Vendor lane full spec (phased implementation):** **[VENDOR_LANE.md](./VENDOR_LANE.md)** — replace vendor stub with `handleVendorInbound` in a later phase; portal vendor assign (no dispatch) already ships via `portalTicketAssignment.js`.
+For **unidentified** vendor/system traffic, the user receives a **deterministic stub** (`buildNonMaintenanceLaneStub`) and `event_log` records **`LANE_STUB`**.
 
-| Lane | Maintenance core | Stub `brain` |
-|------|------------------|--------------|
+**Vendor lane full spec (phased implementation):** **[VENDOR_LANE.md](./VENDOR_LANE.md)** — V0–V2 shipped (dispatch + YES/NO inbound); **V3** policy auto-route not started.
+
+| Lane | Maintenance core | Handler |
+|------|------------------|---------|
 | `tenantLane` | Allowed | — |
 | `managerLane` | Allowed | — |
 | `staffCapture` | Allowed | — |
-| `vendorLane` | **Blocked** | `lane_stub_vendor` |
+| `vendorLane` (identified vendor) | **Blocked** | `handleVendorInbound` |
+| `vendorLane` (unidentified) | **Blocked** | `lane_stub_vendor` |
 | `systemLane` | **Blocked** | `lane_stub_system` |
 | `staffOperational` | N/A (precursor not `PRECURSOR_EVALUATED` for core) | — |
 

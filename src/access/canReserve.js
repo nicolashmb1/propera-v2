@@ -3,6 +3,7 @@ const { getActivePolicy } = require("./getActivePolicy");
 const { evaluateCanReserve } = require("./reservationRules");
 const { BLOCKING_RESERVATION_STATUSES } = require("./constants");
 const { propertyTimezone } = require("./accessLocalTime");
+const { isTenantBlockedFromLocation } = require("./accessLocationBlocks");
 
 /**
  * @param {object} params
@@ -26,6 +27,11 @@ async function canReserve(params) {
   }
 
   const tenantIdEarly = String(params.tenantId || "").trim();
+  if (tenantIdEarly) {
+    const blocked = await isTenantBlockedFromLocation(sb, locationId, tenantIdEarly);
+    if (blocked) return { allowed: false, reason: "tenant_blocked" };
+  }
+
   if (tenantIdEarly && !params.staffOverride) {
     const { data: locRow } = await sb
       .from("access_locations")

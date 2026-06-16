@@ -178,6 +178,8 @@ function explainReasonCode(code, locationName) {
       return `You have reached the weekly booking limit for ${name}.`;
     case "staff_only_location":
       return `${name} is reserved for building staff only. Contact the office if you need access.`;
+    case "tenant_blocked":
+      return "Sorry, we could not proceed with your reservation right now. Please call management for assistance.";
     case "tenant_monthly_limit":
       return `You have reached the monthly booking limit for ${name}.`;
     case "no_policy":

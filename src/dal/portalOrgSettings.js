@@ -519,6 +519,11 @@ function propertyCodeFromDisplayName(name) {
   return raw.slice(0, 24);
 }
 
+const {
+  mapPropertyStripeSettings,
+  applyStripeSecretPatches,
+} = require("../tenant/propertyStripeConfig");
+
 function mapPropertyRow(row) {
   return {
     propertyCode: String(row.code || "").trim().toUpperCase(),
@@ -528,6 +533,12 @@ function mapPropertyRow(row) {
     address: String(row.address || "").trim(),
     active: row.active !== false,
     orgId: String(row.org_id || "").trim(),
+    stripeAchPaymentLink: String(row.stripe_ach_payment_link || "").trim(),
+    stripeCardPaymentLink: String(row.stripe_card_payment_link || "").trim(),
+    zelleHandle: String(row.zelle_handle || "").trim(),
+    zelleName: String(row.zelle_name || "").trim(),
+    tenantPaysStripeFees: row.tenant_pays_stripe_fees !== false,
+    ...mapPropertyStripeSettings(row),
   };
 }
 
@@ -536,7 +547,9 @@ async function listPropertiesForOrg(sb, orgId, opts = {}) {
   const oid = normOrg(orgId);
   let query = sb
     .from("properties")
-    .select("code, display_name, short_name, ticket_prefix, address, active, org_id")
+    .select(
+      "code, display_name, short_name, ticket_prefix, address, active, org_id, stripe_ach_payment_link, stripe_card_payment_link, zelle_handle, zelle_name, tenant_pays_stripe_fees, stripe_secret_key_enc, stripe_webhook_secret_enc"
+    )
     .eq("org_id", oid)
     .order("code", { ascending: true });
   if (!opts.includeInactive) {
@@ -661,7 +674,9 @@ async function createPropertyForOrg(sb, orgId, input) {
       active: true,
       org_id: oid,
     })
-    .select("code, display_name, short_name, ticket_prefix, address, active, org_id")
+    .select(
+      "code, display_name, short_name, ticket_prefix, address, active, org_id, stripe_ach_payment_link, stripe_card_payment_link, zelle_handle, zelle_name, tenant_pays_stripe_fees, stripe_secret_key_enc, stripe_webhook_secret_enc"
+    )
     .maybeSingle();
 
   if (error) {
@@ -725,6 +740,35 @@ async function patchPropertyForOrg(sb, orgId, propertyCode, patch) {
   if (patch.active != null) {
     updates.active = patch.active !== false && patch.active !== "0" && patch.active !== 0;
   }
+  if (patch.stripeAchPaymentLink != null || patch.stripe_ach_payment_link != null) {
+    updates.stripe_ach_payment_link = String(
+      patch.stripeAchPaymentLink ?? patch.stripe_ach_payment_link ?? ""
+    )
+      .trim()
+      .slice(0, 500);
+  }
+  if (patch.stripeCardPaymentLink != null || patch.stripe_card_payment_link != null) {
+    updates.stripe_card_payment_link = String(
+      patch.stripeCardPaymentLink ?? patch.stripe_card_payment_link ?? ""
+    )
+      .trim()
+      .slice(0, 500);
+  }
+  if (patch.zelleHandle != null || patch.zelle_handle != null) {
+    updates.zelle_handle = String(patch.zelleHandle ?? patch.zelle_handle ?? "")
+      .trim()
+      .slice(0, 120);
+  }
+  if (patch.zelleName != null || patch.zelle_name != null) {
+    updates.zelle_name = String(patch.zelleName ?? patch.zelle_name ?? "")
+      .trim()
+      .slice(0, 120);
+  }
+  if (patch.tenantPaysStripeFees != null || patch.tenant_pays_stripe_fees != null) {
+    const raw = patch.tenantPaysStripeFees ?? patch.tenant_pays_stripe_fees;
+    updates.tenant_pays_stripe_fees = raw !== false && raw !== "0" && raw !== 0;
+  }
+  applyStripeSecretPatches(patch, updates);
 
   if (!Object.keys(updates).length) {
     return { ok: false, error: "no_changes", status: 400 };
@@ -735,7 +779,9 @@ async function patchPropertyForOrg(sb, orgId, propertyCode, patch) {
     .update(updates)
     .eq("code", code)
     .eq("org_id", oid)
-    .select("code, display_name, short_name, ticket_prefix, address, active, org_id")
+    .select(
+      "code, display_name, short_name, ticket_prefix, address, active, org_id, stripe_ach_payment_link, stripe_card_payment_link, zelle_handle, zelle_name, tenant_pays_stripe_fees, stripe_secret_key_enc, stripe_webhook_secret_enc"
+    )
     .maybeSingle();
 
   if (error) return { ok: false, error: error.message, status: 500 };

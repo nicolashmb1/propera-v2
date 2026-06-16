@@ -31,6 +31,11 @@ const {
   getTenantDocumentDownloadUrl,
 } = require("./tenantDocumentsService");
 const { getTenantAccountBalance } = require("./tenantAccountService");
+const { getTenantPaymentMethods } = require("./tenantPaymentService");
+const {
+  createTenantCheckoutSession,
+  getTenantCheckoutPaymentStatus,
+} = require("./stripeCheckoutService");
 const {
   listTenantAccessLocations,
   getPublicAccessLocation,
@@ -261,6 +266,54 @@ function registerTenantRoutes(app) {
             ? 404
             : 500;
         return res.status(status).json({ ok: false, error: result.error });
+      }
+      return res.json(result);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err?.message || err) });
+    }
+  });
+
+  app.get("/api/tenant/payment-methods", requireTenantAuth, async (req, res) => {
+    const sb = getSupabase();
+    if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+    try {
+      const result = await getTenantPaymentMethods(sb, req.tenantCtx);
+      if (!result.ok) {
+        const status =
+          result.error === "missing_property_context" || result.error === "property_mismatch"
+            ? 404
+            : 500;
+        return res.status(status).json({ ok: false, error: result.error });
+      }
+      return res.json(result);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err?.message || err) });
+    }
+  });
+
+  app.post("/api/tenant/checkout-session", requireTenantAuth, async (req, res) => {
+    const sb = getSupabase();
+    if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+    try {
+      const method = String(req.body?.method || "").trim().toLowerCase() === "card" ? "card" : "ach";
+      const result = await createTenantCheckoutSession(sb, req.tenantCtx, { method }, req);
+      if (!result.ok) {
+        return res.status(result.status || 400).json({ ok: false, error: result.error });
+      }
+      return res.json(result);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err?.message || err) });
+    }
+  });
+
+  app.get("/api/tenant/payment-status", requireTenantAuth, async (req, res) => {
+    const sb = getSupabase();
+    if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+    try {
+      const sessionId = String(req.query.session_id || req.query.sessionId || "").trim();
+      const result = await getTenantCheckoutPaymentStatus(sb, req.tenantCtx, sessionId);
+      if (!result.ok) {
+        return res.status(result.status || 400).json({ ok: false, error: result.error });
       }
       return res.json(result);
     } catch (err) {
@@ -538,7 +591,7 @@ function registerTenantRoutes(app) {
     } catch (err) {
       const code = err.code || String(err.message || "failed");
       const status =
-        code === "location_not_found" || code === "not_allowed" || code.includes("duration")
+        code === "location_not_found" || code === "not_allowed" || code === "tenant_blocked" || code.includes("duration")
           ? 400
           : 500;
       return res.status(status).json({ ok: false, error: code });

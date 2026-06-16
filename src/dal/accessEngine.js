@@ -802,7 +802,7 @@ function prefersStructuredOnlyChannel(channel) {
   return ch === "portal" || ch === "tenant_portal" || ch === "qr_portal" || ch === "staff_override";
 }
 
-/** Tenant SMS/Telegram for portal self-serve is lifecycle-only; staff bookings must notify. */
+/** Portal self-serve gets confirmation + lifecycle SMS; staff_override gets full lifecycle set. */
 function shouldNotifyTenantAccessEvent(channel, templateKey) {
   const ch = String(channel || "").trim().toLowerCase();
   const key = String(templateKey || "").trim();
@@ -823,6 +823,9 @@ function shouldNotifyTenantAccessEvent(channel, templateKey) {
 
   if (prefersStructuredOnlyChannel(ch)) {
     return [
+      "ACCESS_TENANT_RESERVATION_CONFIRMED",
+      "ACCESS_TENANT_APPROVED",
+      "ACCESS_TENANT_APPROVAL_REQUIRED",
       "ACCESS_TENANT_REMINDER",
       "ACCESS_TENANT_ACTIVE",
       "ACCESS_TENANT_COMPLETED",

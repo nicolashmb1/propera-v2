@@ -10,10 +10,18 @@ describe("shouldNotifyTenantAccessEvent", () => {
     );
   });
 
-  it("tenant_portal skips confirmation sms", () => {
+  it("tenant_portal sends confirmation sms with passcode", () => {
     assert.equal(
       shouldNotifyTenantAccessEvent("tenant_portal", "ACCESS_TENANT_RESERVATION_CONFIRMED"),
-      false
+      true
+    );
+    assert.equal(
+      shouldNotifyTenantAccessEvent("qr_portal", "ACCESS_TENANT_RESERVATION_CONFIRMED"),
+      true
+    );
+    assert.equal(
+      shouldNotifyTenantAccessEvent("tenant_portal", "ACCESS_TENANT_APPROVED"),
+      true
     );
   });
 

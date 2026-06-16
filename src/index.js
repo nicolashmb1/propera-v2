@@ -43,6 +43,7 @@ const { registerTenantRoutes } = require("./tenant/registerTenantRoutes");
 const { registerVoiceRoutes } = require("./voice/registerVoiceRoutes");
 const { registerAccessRoutes } = require("./portal/registerAccessRoutes");
 const { registerConflictMediationRoutes } = require("./conflictMediation/registerConflictMediationRoutes");
+const { registerStripeWebhooks } = require("./webhooks/stripeCheckout");
 const {
   buildInboundKey,
   isSeen,
@@ -50,6 +51,8 @@ const {
 } = require("./dal/inboundDedup");
 
 const app = express();
+
+registerStripeWebhooks(app);
 
 /** Portal webhook carries `portal_chat` + inline screenshot `dataUrl`s — keep above typical photo JSON. */
 app.use(express.json({ limit: "15mb" }));

@@ -7,6 +7,207 @@
 
 ---
 
+---
+
+---
+
+---
+
+---
+
+## 2026-06-15 (g) — Step 2 ledger mimic pilot (WESTFIELD unit 101)
+
+**Why:** Close Phase 1.6 loop for tenant ledger — LH `posted_transactions` → idempotent `tenant_ledger_entries` without staff re-keying. One-unit pilot before full building.
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **Migration 108** | `108_accounting_import_ledger.sql` — `accounting_import` source + `import_idempotency_key` unique index |
+| **V2 brain** | `ledgerEventSignal.js`, `postLedgerEventSignal.js`; `handleAccountingImportSignals.js` processes lease + ledger signals |
+| **Bridge** | `buildLedgerEventSignals.js`, `ledger-mimic-pilot.json` — **WESTFIELD unit 101** only |
+| **App** | `enrichAccountingImportSignals.ts` — all signal kinds → `unit_catalog_id`; import returns `ledger_created` / `ledger_skipped_existing` |
+| **Tests** | `propera-v2/tests/ledgerEventSignal.test.js`; `leasehold-bridge/tests/buildLedgerEventSignals.test.js` |
+| **Verify SQL** | `supabase/queries/verify_ledger_mimic_westfield_101.sql` |
+
+### Deploy
+
+1. Apply migration **108** on Supabase  
+2. Deploy **propera-v2**, **propera-app**, **leasehold-bridge**  
+3. Run WESTFIELD sync (`sync-changed` or manual import)  
+4. Compare unit 101 — SQL above + LH screen spot-check  
+
+### Next agent
+
+1. Validate unit **101** ledger vs snapshot  
+2. Expand `ledger-mimic-pilot.json` → full **WESTFIELD** building  
+3. **Step 4** policy hooks  
+4. **Phase 5b** tenant ledger report for WESTFIELD  
+5. Per-building cutover doc (cutoff date, balance source, stop double-post)  
+
+---
+
+## 2026-06-15 (f) — Bridge emits `lease_terms_sync` signals[]
+
+**Why:** LH adapter at source; app forwards structured intent, not raw matched facts.
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **Bridge** | `src/signals/buildLeaseTermsSyncSignals.js` — `signals[]` on every import payload |
+| **App** | `enrichLeaseTermsSignals.ts` — resolve `unit_label` → `unit_catalog_id`; prefer signals over matched facts |
+| **V2 brain** | Staff charge-line mode merge at post time (`postLeaseTermsSync.js`) |
+| **Tests** | `leasehold-bridge/tests/buildLeaseTermsSyncSignals.test.js` |
+
+### Deploy
+
+Requires **leasehold-bridge** (office syncher), **propera-app**, and **propera-v2** — all three for signal path.
+
+---
+
+## 2026-06-15 (e) — `lease_terms_sync` signal contract + thin brain handler
+
+**Why:** Channel-agnostic architecture — LH today, cockpit tomorrow, Jarvis/agents later. Brain validates intent signals; adapters normalize transport.
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **Contract** | `ACCOUNTING_SIGNAL_SCHEMA.md` — locked `lease_terms_sync` envelope + validation rules |
+| **Brain** | `leaseTermsSyncSignal.js`, `postLeaseTermsSync.js`, `handleAccountingImportSignals.js` |
+| **LH adapter** | `adapters/leasehold/normalizeLeaseholdFactToLeaseTermsSync.js` — fact → signal (pet fee, deposits, charge_lines) |
+| **Route** | `POST /api/portal/financial/accounting-import-signals` (primary); legacy `materialize-leases-from-import` aliases |
+| **App** | Proxies to `accounting-import-signals` with `matched` facts (adapter on V2) |
+| **Tests** | `tests/leaseTermsSyncSignal.test.js` + existing `leaseImportFacts.test.js` |
+
+### Producers (same spine)
+
+- `leasehold_import` — adapter normalizes LH snapshot
+- `portal_lease_edit` — future cockpit form
+- `jarvis_confirm` — future staff confirm
+- `agent_proposal` — future multi-agent
+
+---
+
+## 2026-06-15 (d) — Lease materializer moved to V2 brain (Step 1 clean path)
+
+**Why:** Owner chose channel-agnostic architecture from the start — `unit_leases` posting belongs in **propera-v2** brain, not propera-app.
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **V2 brain** | `src/brain/financial/leaseImportFacts.js`, `materializeLeaseShellFromFacts.js`, `handleAccountingImportLeases.js` |
+| **Route** | `POST /api/portal/financial/materialize-leases-from-import` (portal token) |
+| **App** | Snapshots still upsert in app; lease post via `materializeLeasesViaV2.ts` → V2 proxy only |
+| **Tests** | `propera-v2/tests/leaseImportFacts.test.js` (7 tests); run `npm test` in propera-v2 |
+
+### Deploy note
+
+**V2 Cloud Run restart required** after this lands — app-only deploy is insufficient for lease materialization.
+
+---
+
+## 2026-06-15 (c) — Lease materializer Step 1 (Phase 1.6)
+
+**Why:** Every occupied LH unit needs a full `unit_leases` row (rent, dates, deposits, charge_lines) — not just net-rent/deposit enrichment. Required before renewals/actions; roster reconcile not blocking.
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **Logic** | `propera-app/src/lib/server/leaseImportFacts.ts` — occupied gate, LH patch builder, change detection, invalid date guard |
+| **Import** | `leaseMaterializeImport.ts` — upsert on `importAccountingSnapshots`; preserves `renewal_status`, `renewal_notes`, `notes` |
+| **Charge lines** | `hasStaffChargeTemplate`, `refreshChargeLineAmountsFromAncillary` in `unitChargePrefill.ts` |
+| **Tests** | `npm run test:lease-materialize` (7 tests) |
+| **UI** | `/financial/imports` shows leases created/updated count |
+
+### Field ownership (locked)
+
+- **LH overwrites:** rent, dates, deposits, charge_lines (amounts; staff modes preserved when template saved)
+- **Never touched:** `renewal_status`, `renewal_notes`, `notes`
+- **Vacant LH units:** skip (no insert/update)
+
+### Verify after import
+
+Re-import one property → check `unit_leases` has rows matching snapshot rent/dates for occupied units.
+
+---
+
+## 2026-06-15 (b) — Owner cutover intent + staff-minimal finance
+
+**Why:** Owner wants to **switch to Propera** after finance is complete — not run Leasehold forever. Emphasis: easy payment recording, bank reconciliation, automation (captures, deposits), minimal staff system time, **complete report section for accountant**.
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **PROPERA_FINANCE_ROADMAP.md** | Owner cutover intent; §Staff-minimal finance; Phase **5b** reports; Phase **6** reframed as cutover target + gate |
+| **ACCOUNTING_SIGNAL_SCHEMA.md** | §End state — financially complete |
+| **PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md** | Finance end state in north star; non-goals → phased cutover goals |
+| **AGENTS.md** | Finance guardrail — owner cutover intent |
+
+---
+
+## 2026-06-15 — Accounting signal schema doc (Leasehold mimic)
+
+**Why:** Phase 1.5 ingest is display-only. Product direction (from prior sessions): Leasehold-bridge should mimic staff actions into Propera via structured signals — not stay read-only forever. Spec was discussed but never written.
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **Spec SSOT** | **`docs/ACCOUNTING_SIGNAL_SCHEMA.md`** — adapter pattern, signal kinds, idempotency, field ownership, build Steps 0–4, cutover/strangler, implementation status |
+| **Finance roadmap** | Phase **1.6** row added; intelligence item 7 points to mimic doc |
+| **AGENTS.md** | Finance mandatory read #2; Phase 1.6 in roadmap table; doc update table row |
+| **FINANCIAL_LEASEHOLD_SYNC.md** | Target-state pointer to schema doc |
+
+### Not built (next work per schema)
+
+1. **Step 0** — finish tenant roster ↔ LH reconcile (SQL workflow exists; WESTFIELD/PENN in progress)
+2. **Step 1** — lease materializer on import (`unit_leases` from snapshot)
+3. **Step 2** — ledger materializer + migration **108+** (`accounting_import`)
+4. **Step 3** — bridge `signals[]` + `handleAccountingImportSignals`
+
+---
+
+## 2026-06-12 — Documentation sync (codebase reality audit)
+
+### Done
+
+| Area | Change |
+|------|--------|
+| **`AGENTS.md`** | Finance phase migration numbers corrected (**103+** for Phase 2–5; **053–057 consumed**); vendor lane V0–V2 shipped; CME-2 shipped; ticket split **`061`** correction; balance reminder row; red test count **~13 flaky** |
+| **`PARITY_LEDGER.md`** | GAS engine map rows **21–26** split GAS-brain vs V2-native (comm, access, leasing portal, vendor partial); §7 “other lanes” updated |
+| **`PROPERA_FINANCE_ROADMAP.md`** | Migration table: **094–097 applied**; Phase 2–5 renumbered **103+**; **053** financial intake marked applied |
+| **`BRAIN_PORT_MAP.md`** | Vendor lane live (`handleVendorInbound`); balance reminder automation block (**098–101**) |
+| **`ORCHESTRATOR_ROUTING.md`** | Identified vendor → handler; unidentified → stub |
+| **`VENDOR_LANE.md`**, **`BALANCE_REMINDER_AUTOMATION.md`**, **`OPEN_DECK_DAY_CHART_V1.md`** | Stale stub/planned/migration references fixed |
+| **`supabase/migrations/README.md`** | Added **053**, **061**, **069**, **073**, **098–102** |
+| **`TESTING_STRATEGY.md`** | §Known flaky failures (**~13** reds, do-not-fix rule) |
+| **`propera-app/AGENTS.md` + `README.md`** | Leasing, access, conflicts, balance reminders, tenant portal feature rows |
+| **`PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md`** | Layer 1.5/1d shipped, comm/balance-reminder/vendor surfaces, §2.6–2.9, migration footer |
+| **`PROPERA_FINANCIAL_LAYER_MAP.md`** | **053**, **082**, **098–101** tables; balance reminder section |
+| **`TICKET_SPLIT_V1.md`**, **`PORTING_FROM_GAS.md`**, **`BRAIN_PORT_MAP.md`** | **061** collision; vendor orchestrator routing |
+
+### Test baseline
+
+```bash
+cd propera-v2 && npm test
+# ~1195 pass / ~13 fail (tenant-agent gather/handoff drift + cancel layer unimplemented)
+```
+
+### Still open (docs only — not code)
+
+| Item | Notes |
+|------|--------|
+| **Migration 100 collision** | Two files share prefix `100` — apply both; consider renumber in cleanup |
+| **Phase 2 finance schema** | Pick **103+** when implementing `rent_postings` |
+| **Tenant-agent red tests** | Fix only with explicit user approval |
+
+---
+
 ## 2026-06-08 (b) — Westfield deposit reconciliation + migration 097
 
 ### Done

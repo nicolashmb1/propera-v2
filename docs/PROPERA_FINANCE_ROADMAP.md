@@ -4,11 +4,13 @@
 
 **Audience:** product, engineering, and the next agent picking up this work.
 
-**Related (do not duplicate here):** [PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md](./PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md) (capabilities + Layer 0–5), [PROPERA_FINANCIAL_LAYER_MAP.md](./PROPERA_FINANCIAL_LAYER_MAP.md) (tables, routes, app proxy), **[FINANCIAL_INTAKE_V1.md](./FINANCIAL_INTAKE_V1.md)** — **design north** for the financial chat channel (V1 ticket cost → V2 four routes / LLM extract + brain validate → V3 queries/voice; **build capture before deepening dashboards**).
+**Related (do not duplicate here):** [PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md](./PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md) (capabilities + Layer 0–5), [PROPERA_FINANCIAL_LAYER_MAP.md](./PROPERA_FINANCIAL_LAYER_MAP.md) (tables, routes, app proxy), **[FINANCIAL_INTAKE_V1.md](./FINANCIAL_INTAKE_V1.md)** — **design north** for the financial chat channel (V1 ticket cost → V2 four routes / LLM extract + brain validate → V3 queries/voice; **build capture before deepening dashboards**), **[ACCOUNTING_SIGNAL_SCHEMA.md](./ACCOUNTING_SIGNAL_SCHEMA.md)** — **design north** for Leasehold import mimic (adapter signals → brain posts → Propera records; **read Step 0–4 before materialization work**).
 
 **North compass:** Money always traces to real operational events. Finance is **layered on top of operations** — not a parallel app. The deterministic core (resolver, lifecycle, policy) stays authoritative. Finance is **expression and posting** on top — never ownership, lifecycle, or routing logic.
 
 **Strategic positioning (2026-05 — Leasehold / NJ incumbent):** For operators who already run **account-heavy** niche landlord accounting (e.g. **Leasehold**), Propera does **not** win by rebuilding that GL in v1. The moat is **operations + intelligence on top of accounting truth**: maintenance, communication, renewals, portfolio queries, and enrichment fields Propera owns. **Leasehold (or peer) stays system of record for rent posting and ledger math** until an explicit later gate. Propera **ingests read-only snapshots**, displays them in `/financial`, and **never writes back** in early phases. Payments and compliance posting stay in the incumbent; Propera is the **brain**, not a five-year accounting QA project.
+
+**Owner cutover intent (2026-06 — locked product direction):** For **this portfolio**, Leasehold is **transitional**, not the permanent answer. The owner intends to **switch to Propera as the financial system of record** once finance is **complete enough to trust daily** — not to run two systems forever. Phases 1.5–1.6 (snapshot + mimic) exist to **parallel-run and prove parity**, then **cut over write authority** to Propera. Build every finance slice as if Propera will eventually be **financially complete**: own payments, bank reconciliation, deposit lifecycle, automation-first capture, and a **full report section for the accountant**. **Minimize staff time in any system** — automation and adapters post facts; staff handle exceptions only.
 
 ---
 
@@ -36,7 +38,24 @@
 
 **Ingest paths (best → acceptable):** direct DB/read of incumbent files → scheduled rent-roll + ledger **CSV/Excel export** → parsed PDF reports → manual CSV upload bridge. Ask accounting: *“What is the cleanest recurring export of rent roll + tenant ledger?”*
 
-**Phase 1 read rule:** `/financial` may show **imported snapshot balances** alongside Propera maintenance economics. **Do not** ask PMs to re-key Leasehold payments into `tenant_ledger_entries` as the primary path — manual ledger lines remain for **Propera-only adjustments** and ticket chargebacks, not duplicating the incumbent ledger.
+**Phase 1 read rule:** `/financial` may show **imported snapshot balances** alongside Propera maintenance economics. **Do not** ask PMs to **manually** re-key Leasehold payments into `tenant_ledger_entries` as the primary path — manual ledger lines remain for **Propera-only adjustments** and ticket chargebacks, not duplicating the incumbent ledger. **Automated mirror on import** (Phase 1.6) and **payment-rail webhooks** (Stripe, bank CSV) are adapter posting — not human re-keying.
+
+---
+
+## Staff-minimal finance (design law)
+
+Every finance feature should reduce how often staff open Leasehold, Excel, or duplicate entry. Prefer **package in → brain validates → post** over forms.
+
+| Principle | Meaning | Examples (shipped / planned) |
+|-----------|---------|------------------------------|
+| **Automate capture** | Money and cost reality enters via adapter, webhook, OCR, or import signal — not typed twice | Ticket cost + receipt scan (**053**); Stripe Checkout webhook → ledger (**107**); LH mimic signals (Phase 1.6); bank CSV match (Phase 6) |
+| **Easy record payment** | Recording a tenant payment is ≤2 taps or zero (webhook) | Stripe tenant pay; portal "record payment" for exceptions; chat `payment_received` (FINANCIAL_INTAKE V2) |
+| **Deposits follow lifecycle** | Security/key/pet deposits move on move-in, turnover, return — tied to unit occupancy — not free-text re-entry | Deposit fields on `unit_leases` + turnover hooks (build with Phase 1.6 + unit lifecycle) |
+| **Bank reconcile, not re-post** | Bank feed **matches** existing ledger lines; staff only clears exceptions | Phase 6 bank CSV import + auto-match to `tenant_ledger_entries` / vendor payments |
+| **Reports for the accountant** | `/financial` includes export-ready views — rent roll, tenant ledger, deposit register, vendor AP aging, bank rec status, owner statements | Phase 5 owner statements + Phase 6 tax/GL exports; expand **Reports** nav as phases land |
+| **Exception queue, not data entry** | Default UI surfaces **what needs a human** (unmatched bank line, name drift, failed webhook) | Tenant reconcile queue; future bank-rec exceptions |
+
+**Anti-pattern:** Building another dashboard that only **shows** Leasehold numbers without Propera owning the underlying records — that blocks cutover.
 
 ---
 
@@ -211,6 +230,24 @@ Stale sync: if `synced_at` is older than policy (e.g. 24h), tint the **single** 
 
 **Guardrail:** Snapshot rows are **immutable facts from import** except superseded by the next sync. Propera enrichment columns live on **`unit_leases`** or a sibling `unit_lease_enrichment` table — never mixed into snapshot payload as if Leasehold said so.
 
+### Phase 1.6 — Accounting mimic (Leasehold → Propera records) — **in progress (pilot)**
+
+> **Status:** Spec in **[ACCOUNTING_SIGNAL_SCHEMA.md](./ACCOUNTING_SIGNAL_SCHEMA.md)**. Phase 1.5 ingest remains **display truth** for portfolio balance until cutover. Phase 1.6 closes the loop: LH staff actions → structured signals → Propera `unit_leases` + `tenant_ledger_entries` (strangler / mirror-first — **no LH write-back**).
+
+| Step | Build | Outcome | Status |
+|------|-------|---------|--------|
+| **0** | Tenant roster ↔ LH reconcile (SQL workflow today; UI later) | Verified people before money posts | **In progress** — WESTFIELD/PENN rounds |
+| **1** | Lease materializer on import | Every occupied snapshot unit → full `unit_leases` | **Shipped** — `lease_terms_sync` |
+| **2** | Ledger materializer + migration **108** | LH posted lines → deduped `tenant_ledger_entries` (`accounting_import`) | **Pilot** — WESTFIELD unit **101** only |
+| **3** | Bridge `signals[]` + `handleAccountingImportSignals` | Channel-agnostic mimic loop | **Partial** — lease all properties; ledger pilot units only |
+| **4** | Policy hooks | Payment → reminder pause; tenant change → occupancy | **Not started** |
+
+**Pilot config:** `leasehold-bridge/config/ledger-mimic-pilot.json` — expand `WESTFIELD` unit list when unit 101 compares clean.
+
+**Next after building ledger trusted:** Step 4 policy hooks → **Phase 5b** reports (WESTFIELD) → per-building cutoff + balance source → **Phase C** (Propera originates new payments/billing; stop LH writes for that building).
+
+**Do not** skip Step 0 for a property. **Do not** ask PMs to manually re-key LH lines — automated mirror on import is adapter posting, not human duplication (see schema doc).
+
 ---
 
 ## Phase 2 — Rent roll + delinquency (portfolio truth in Propera)
@@ -286,6 +323,28 @@ The three headline numbers on every property card — **rent collected**, **deli
 
 ---
 
+## Phase 5b — Accounting reports (accountant / owner pack)
+
+> **Goal:** A **complete report section** under `/financial` so the owner and outside accountant can run the portfolio **without Leasehold or ad-hoc Excel**. Required for cutover confidence — not optional polish.
+
+| Report / export | Question it answers | Depends on |
+|-----------------|---------------------|------------|
+| **Rent roll** | Expected vs collected vs delinquent by unit, period | Phase 2 `rent_postings` or promoted snapshot + Propera ledger |
+| **Tenant ledger** | Full charge/payment history per unit | `tenant_ledger_entries` (Propera-native + import mimic + Stripe) |
+| **Deposit register** | Security / key / pet on hand, move-in/out | `unit_leases` + deposit lifecycle |
+| **Delinquency aging** | Who owes what, how long | Snapshot + native ledger |
+| **Maintenance spend** | By property, category, month | Existing cost rollups |
+| **Vendor AP aging** | Open vendor invoices | Phase 3 |
+| **Bank reconciliation status** | Cleared vs outstanding vs unmatched | Phase 6 |
+| **Owner / property P&L summary** | Income − maintenance − operating expenses | Phases 2 + 1d + 5 |
+| **Accountant export pack** | CSV/PDF bundle for CPA (Schedule E–style slices, 1099 vendor totals when ready) | Phase 6 |
+
+**UX:** `/financial/reports` — pick property + period + report type → preview in-app → download CSV/PDF. Same read APIs power portfolio cards; no second truth.
+
+**Phase 5b deliverable:** Accountant can produce month-end package from Propera alone; owner uses this to **sign off on Leasehold retirement**.
+
+---
+
 ## Beyond finance phases — intelligence layer (product north star, not yet phased)
 
 These items come **after** structured snapshots + enrichment exist. They do **not** require Propera to replace Leasehold GL.
@@ -298,25 +357,37 @@ These items come **after** structured snapshots + enrichment exist. They do **no
 | 4 | **Predictive** — late-pay risk, non-renewal, rent vs market | History + enrichment |
 | 5 | **Document intelligence** — lease PDF → structured terms | Adapter → `unit_leases` / enrichment |
 | 6 | **Tenant-facing surface** — pay rent, view lease, maintenance (SMS inbound exists; close the loop) | Snapshot read + payment rail decision |
-| 7 | **Accounting bridge** — read Leasehold; optional push to QBO later | Phase 1.5 ingest; **no write-back** until explicit product gate |
+| 7 | **Accounting bridge** — read Leasehold; mimic into Propera; optional push to QBO later | Phase 1.5 ingest + **[ACCOUNTING_SIGNAL_SCHEMA.md](./ACCOUNTING_SIGNAL_SCHEMA.md)** Steps 1–3; **no LH write-back** until explicit cutover gate |
 
 **Do not skip 1.5 to build 2–7.** Intelligence is queries on **current state**; state still lives in Leasehold until ingest proves stable.
 
 ---
 
-## Phase 6 — Full books (long-term, optional)
-> **Goal:** Propera replaces the accounting software for operators who do not need a CPA-grade GL. This is a deliberate product bet, not a default path — and **not** the strategy for Leasehold-first portfolios until Phases 1.5–5 prove value without displacing incumbent posting.
+## Phase 6 — Full books + bank reconciliation (cutover target for this portfolio)
+
+> **Goal:** Propera **replaces Leasehold** as system of record for rent, ledger, and month-end close. For **this owner**, Phase 6 is the **required end state**, not an optional bet for greenfield operators only. Reach it only after Phases 1.6–5b prove parallel-run parity.
 
 | Build | Notes |
 |-------|-------|
-| **Chart of accounts** | COA table + mapping rules from `entry_type` and `rent_postings` categories |
-| **General ledger** | Double-entry rows derived from every financial event (rent posting, cost entry, manual ledger line) |
-| **Bank reconciliation** | Import bank CSV → auto-match to rent postings + vendor payments |
+| **Chart of accounts** | COA table + mapping rules from `entry_type`, rent categories, vendor AP |
+| **General ledger** | Double-entry rows derived from every financial event (rent posting, cost entry, ledger line, Stripe payment) |
+| **Bank reconciliation** | Import bank CSV/OFX → **auto-match** to rent postings + tenant payments + vendor payouts; **exception queue** for staff (staff-minimal) |
+| **Record payment (native)** | All rails post to same ledger: Stripe webhook, manual exception, Zelle/cash with receipt, future ACH | Easy 1–2 tap UI for exceptions only |
 | **Trust accounting** | Security deposit tracking per tenancy + required segregation rules by jurisdiction |
+| **Deposit automation** | Move-in / turnover / return posts deposit ledger lines from lifecycle — not re-keyed |
 | **Tax exports** | 1099 vendor summaries, Schedule E income/expense by property |
 | **Accountant portal** | Read-only role + export to QuickBooks / Xero CSV |
 
-**Decision gate:** Start Phase 6 only when Phase 2 (rent roll) + Phase 3 (vendor AP) are in daily use and operators ask to replace their accounting tool. Otherwise Propera exports clean data to QuickBooks and stays in its lane.
+**Cutover gate (owner sign-off):** Parallel-run until:
+
+1. Propera ledger balance matches LH snapshot within policy for **N consecutive sync cycles**
+2. Bank rec clears with **≤ agreed exception rate**
+3. Phase 5b report pack matches accountant expectations for **one closed month**
+4. Staff workflows (reminders, renewals, tenant pay) run on **Propera records**, not snapshot-only reads
+
+Then: **new rent receipts and charges originate in Propera**; Leasehold becomes read-only backup or retired.
+
+**Decision gate (other portfolios):** Greenfield operators may skip incumbent mimic. Leasehold-first operators **must** complete 1.6 + parallel-run before flipping write authority.
 
 ---
 
@@ -333,16 +404,21 @@ These items come **after** structured snapshots + enrichment exist. They do **no
 | **051** | `assigned_staff_id` + `assigned_staff_display` on `program_lines` (preventive ops — not finance tables) | 046 | applied |
 | **052** | `effective_date` + `notes` on `tenant_ledger_entries` | 042 | applied |
 | **082** | **`property_expenses`** — PM-entered operating costs (tax, insurance, utilities, staff allocation, management fee, etc.) not tied to tickets. Phase 1d for parallel-run operators. Writes via propera-app route + auth gate; bill scan via V2. | 042, properties | applied |
-| **058** | **`tenant_account_snapshots`** + payment history (incumbent read-only ingest) | 049, 030 | **deferred** — design after Leasehold export spec |
-| **053** | **`rent_postings`** | 049 | planned (Phase 2 — greenfield or promoted from snapshot) |
-| **054** | Invoice fields on `ticket_cost_entries` | 042 | planned (Phase 3) |
-| **055** | Vendor master extensions | 046 | planned (Phase 3) |
-| **056** | **`property_budgets`** | 042 | planned (Phase 4) |
-| **057** | **`owner_statements`** | 053 + 042 | planned (Phase 5) |
+| **053** | **`ticket_cost_entries`** receipt/void/idempotency columns (Financial Intake V1 chat capture) | 042 | applied |
+| **094** | **`tenant_account_snapshots`** + payment history (incumbent read-only ingest) | 049, 030 | applied (Phase 1.5) |
+| **095** | **`unit_leases`** net rent enrichment | 094 | applied |
+| **096** | **`unit_leases`** key deposit + `deposits_derived_at` | 094 | applied |
+| **097** | **`unit_leases`** other + pet deposit columns | 096 | applied |
+| **108** | **`accounting_import`** on `tenant_ledger_entries` + `import_idempotency_key` (Phase 1.6 Step 2 ledger mimic) | 042, 107 | **shipped in repo** — apply before pilot import |
+| **103+** | **`rent_postings`** (Phase 2) | 049, 094 | planned — **new number required** |
+| **103+** | Invoice fields on `ticket_cost_entries` (Phase 3 AP) | 042, 053 | planned — **new number required** |
+| **103+** | Vendor master finance extensions (Phase 3) | 046 | planned — **new number required** |
+| **103+** | **`property_budgets`** (Phase 4) | 042 | planned — **new number required** |
+| **103+** | **`owner_statements`** (Phase 5) | rent + cost spine | planned — **new number required** |
 
 **051 is not a finance migration** — do not repurpose it for ledger columns. Finance ledger hardening starts at **052**.
 
-**Current caution:** before writing the next Phase 2 finance migration, confirm the numbering sequence. `053_financial_intake_cost_capture.sql` already exists in-repo, so the old "`053 = rent_postings`" placeholder needs re-sequencing before implementation.
+**Numbering consumed by non-finance features:** **053** financial intake cost capture, **054** PM audio mime, **055** communication engine, **056** tenant portal, **057** access engine, **058** access property location link, **061** open-deck day chart (comment-only). **094–097** are Leasehold snapshot ingest (Phase 1.5). **098–107** include tenant portal, access, Stripe checkout (**107**). **108** = ledger mimic dedupe column. Before writing Phase 2+ finance SQL beyond 108, pick the next free migration number (**109+** as of 2026-06-15).
 
 ---
 

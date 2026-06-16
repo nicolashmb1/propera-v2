@@ -15,7 +15,9 @@
 | Stable row id | `tickets.id` | Exposed as `ticket_row_id` on `portal_tickets_v1` for finance APIs. |
 | Location targets | `tickets.unit_catalog_id`, `tickets.location_id`, snapshots | Cost rows mirror **financial** target independently (prefilled from ticket, overridable). |
 | Building locations | `public.property_locations` | Non–unit scope (common area, property-wide, floor zone, system). |
-| Ticket costs | `public.ticket_cost_entries` | Property-scoped, target-based; parent is **either** a ticket **or** a program run (`042` + `047`). |
+| Ticket costs | `public.ticket_cost_entries` | Property-scoped, target-based; parent is **either** a ticket **or** a program run (`042` + `047`). Migration **053** adds `receipt_status`, `voided_at`, `capture_idempotency_key` (Financial Intake V1). |
+| Property operating expenses | `public.property_expenses` | PM-entered operating costs not tied to tickets — migration **082** (Phase 1d); app writes via Next route + auth gate. |
+| Balance reminder config | `balance_reminder_settings`, `balance_reminder_rules`, `balance_reminder_runs` | Automated rent reminders — migrations **098–101**; cron + Communication Engine. |
 | Tenant ledger (opt-in) | `public.tenant_ledger_entries` | Posted from approved ticket charges when `PROPERA_FINANCE_LEDGER_ENABLED=1`. |
 | Rollups | `portal_ticket_financial_summary_v1`, `portal_property_maintenance_spend_month_v1`, **`portal_properties_v1`** (current UTC month + **YTD** maintenance columns after **048**) | Read models for badges / property spend. |
 | Activity timeline | `public.ticket_timeline_events` | Trigger-owned kinds unchanged; V2 appends `cost_added`, `cost_updated`, `tenant_charge_decision`. |
@@ -28,6 +30,7 @@
 - **Routes:** `POST /api/financial/import/accounting-snapshots`, `run-leasehold`, `run-leasehold-all`.
 - **Rollups:** `propera-app/src/lib/server/financialSnapshot.ts` — portfolio/property KPIs when `accountingSnapshot` present.
 - **Ops:** Office PC syncher → staging copy → changed properties only. See **`../propera-app/docs/FINANCIAL_LEASEHOLD_SYNC.md`**.
+- **Target mimic loop:** LH staff actions → structured signals → brain posts `unit_leases` + `tenant_ledger_entries` — **[ACCOUNTING_SIGNAL_SCHEMA.md](./ACCOUNTING_SIGNAL_SCHEMA.md)** (not built; snapshots today are display-only).
 
 ## Attachments
 
@@ -48,3 +51,9 @@ Receipts reuse the same URL pattern as tickets (`pm-attachments` flow in propera
 
 - Browser never writes finance tables directly; only V2 portal with `X-Propera-Portal-Token`.
 - Imported GAS tickets (`is_imported_history`): cost mutations blocked (same rule as PM ticket edits).
+
+## Balance reminders (V2 cron + app settings)
+
+- **Not** a separate finance table write path from the browser — settings via portal API; sends create **`communication_campaigns`** rows.
+- **Requires:** Communication Engine (**055**), Leasehold snapshots (**094**) for balance data, `PROPERA_BALANCE_REMINDER_ENABLED=1`.
+- **Spec:** **`docs/BALANCE_REMINDER_AUTOMATION.md`**; app **`/settings/balance-reminders`**.

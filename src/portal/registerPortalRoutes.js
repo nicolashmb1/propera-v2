@@ -1,7 +1,7 @@
 /**
  * Portal read/write API — GAS `?path=tickets|properties|tenants` + roster CRUD for propera-app.
  */
-const { listTicketsForPortal, listPropertiesForPortal } = require("../dal/portalTicketsRead");
+const { listStripePaymentsForUnit } = require("../tenant/stripePaymentQueries");
 const {
   listTenantsForPortal,
   createTenantForPortal,
@@ -488,6 +488,25 @@ function registerPortalReadRoutes(app) {
           ok: false,
           error: String(err && err.message ? err.message : err),
         });
+      }
+    })
+  );
+
+  app.get(
+    "/api/portal/properties/:code/units/:unitId/stripe-payments",
+    gate(async (req, res) => {
+      try {
+        const sb = getSupabase();
+        if (!sb) return res.status(503).json({ ok: false, error: "no_db" });
+        const out = await listStripePaymentsForUnit(sb, {
+          propertyCode: req.params.code,
+          unitId: req.params.unitId,
+          limit: Number(req.query.limit) || 20,
+        });
+        if (!out.ok) return res.status(400).json({ ok: false, error: out.error });
+        return res.json({ ok: true, payments: out.payments });
+      } catch (err) {
+        return res.status(500).json({ ok: false, error: String(err?.message || err) });
       }
     })
   );
@@ -2680,6 +2699,20 @@ function registerPortalReadRoutes(app) {
   const { handleJarvisDismissProposal } = require("./handleJarvisDismissProposal");
   app.post("/api/portal/jarvis/dismiss-proposal", gate(async (req, res) => {
     return handleJarvisDismissProposal(req, res);
+  }));
+
+  // ─── Financial import brain (lease_terms_sync intent signals → unit_leases) ───
+
+  const { handleAccountingImportSignals } = require("../brain/financial/handleAccountingImportSignals");
+  const { handleMaterializeLeasesFromImport } = require("../brain/financial/handleAccountingImportLeases");
+
+  app.post("/api/portal/financial/accounting-import-signals", gate(async (req, res) => {
+    return handleAccountingImportSignals(req, res);
+  }));
+
+  /** @deprecated Legacy alias — accepts signals[] or matched LH facts (adapter normalizes). */
+  app.post("/api/portal/financial/materialize-leases-from-import", gate(async (req, res) => {
+    return handleMaterializeLeasesFromImport(req, res);
   }));
 
   // ─── Financial renewals desk (status on unit_leases; no leasing UI flag) ─────

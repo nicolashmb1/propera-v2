@@ -7,6 +7,7 @@
 **Related (do not duplicate):**
 
 - [PROPERA_FINANCE_ROADMAP.md](./PROPERA_FINANCE_ROADMAP.md) — phased finance roadmap (ledger, rent, AP, statements); dashboards after capture is habitual.
+- [ACCOUNTING_SIGNAL_SCHEMA.md](./ACCOUNTING_SIGNAL_SCHEMA.md) — Leasehold import mimic (adapter signals → same DAL as V2 routes below); import is deterministic, not LLM.
 - [PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md](./PROPERA_V2_APP_CAPABILITIES_AND_FINANCE_DEPTH.md) — what ships today (`ticket_cost_entries`, form UI, flags).
 - [TICKET_TIMELINE.md](./TICKET_TIMELINE.md) — timeline duplicate rule; cost events use distinct `event_kind` values.
 
@@ -423,7 +424,7 @@ Prevent duplicate rows when outgate fails and staff retries.
 
 ## Receipt status (V1 — pre-decided)
 
-Add first-class `receipt_status` on cost capture path (migration when implementing — not in 042 today).
+Add first-class `receipt_status` on cost capture path — **shipped** in migration **053** (`053_financial_intake_cost_capture.sql`).
 
 | Value | Meaning |
 |-------|---------|

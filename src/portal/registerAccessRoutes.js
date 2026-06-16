@@ -27,6 +27,11 @@ const {
   listAccessProgramForProperty,
   setAccessProgramEnrollment,
 } = require("../dal/accessEngine");
+const {
+  listBlockedTenantsForLocation,
+  blockTenantFromLocation,
+  unblockTenantFromLocation,
+} = require("../access/accessLocationBlocks");
 
 function registerAccessRoutes(app) {
   function gate(handler) {
@@ -195,6 +200,55 @@ function registerAccessRoutes(app) {
         return res.json({ ok: true, schedules });
       } catch (err) {
         return res.status(500).json({ ok: false, error: String(err.message || err) });
+      }
+    })
+  );
+
+  app.get(
+    "/api/portal/access/locations/:locationId/blocks",
+    gateAccess(async (req, res) => {
+      try {
+        const blocks = await listBlockedTenantsForLocation(req.params.locationId);
+        return res.json({ ok: true, blocks });
+      } catch (err) {
+        return res.status(500).json({ ok: false, error: String(err.message || err) });
+      }
+    })
+  );
+
+  app.post(
+    "/api/portal/access/locations/:locationId/blocks",
+    gateAccess(async (req, res) => {
+      try {
+        const tenantId = String(req.body?.tenantId || req.body?.tenant_id || "").trim();
+        const out = await blockTenantFromLocation(
+          req.params.locationId,
+          tenantId,
+          actorFromReq(req),
+          req.body?.notes
+        );
+        const blocks = await listBlockedTenantsForLocation(req.params.locationId);
+        return res.status(201).json({ ok: true, ...out, blocks });
+      } catch (err) {
+        const code = err.code || err.message;
+        const status =
+          code === "missing_fields" || code === "tenant_property_mismatch" ? 400 : code === "not_found" || code === "tenant_not_found" ? 404 : 500;
+        return res.status(status).json({ ok: false, error: String(code) });
+      }
+    })
+  );
+
+  app.delete(
+    "/api/portal/access/locations/:locationId/blocks/:tenantId",
+    gateAccess(async (req, res) => {
+      try {
+        await unblockTenantFromLocation(req.params.locationId, req.params.tenantId);
+        const blocks = await listBlockedTenantsForLocation(req.params.locationId);
+        return res.json({ ok: true, blocks });
+      } catch (err) {
+        const code = err.code || err.message;
+        const status = code === "missing_fields" ? 400 : 500;
+        return res.status(status).json({ ok: false, error: String(code) });
       }
     })
   );

@@ -254,6 +254,22 @@ These should become shared assertion helpers over time.
 
 ---
 
+## Known flaky failures (do not fix without approval)
+
+As of **2026-06-12**, **`npm test`** reports **~13 failures** (count varies 13–15) out of **~1200** tests. These are **accepted** tenant-agent / gather drift — not regressions in core brain paths.
+
+| Suite | Why red |
+|-------|---------|
+| `tests/scenarios/tenantAgentConversationTtl.test.js` | Test drift on fresh partial metadata |
+| `tests/scenarios/tenantAgentPostCompletePhase4.test.js` | Result-label drift (`tenant_agent_gather` vs `intake_start_new`) |
+| `tests/scenarios/tenantAgentHandoff*.test.js`, `tenantAgentLlmGather*.test.js`, `tenantAgentGolden*.test.js` | Gather/handoff fixture drift vs current agent behavior |
+| `tests/tenantAgent/detectGatherSafety.test.js` | Handoff emergency payload contract mismatch |
+| `tests/tenantMessagesCancelLayer.test.js` | Known unimplemented cancel/suspend path |
+
+**Rule:** Do **not** change tenant-agent production behavior just to green these tests unless the user explicitly requests that work. Core suites (router, schedule, staff brain, Jarvis reason, maintenance scenarios) must stay green.
+
+---
+
 ## What to prioritize next (short list)
 
 **Immediate**

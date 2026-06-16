@@ -12,6 +12,7 @@
 - [TENANT_ROSTER_PORTAL.md](./TENANT_ROSTER_PORTAL.md) — `tenant_roster` is the resident phone source of truth today
 - [TENANT_PORTAL_BUILD_PLAN.md](./TENANT_PORTAL_BUILD_PLAN.md) — resident `/tenant/*` UI + notices read path
 - [OUTSIDE_CURSOR.md](./OUTSIDE_CURSOR.md) — Supabase + Twilio operator steps
+- [BALANCE_REMINDER_AUTOMATION.md](./BALANCE_REMINDER_AUTOMATION.md) — automated rent reminders (cron subtype of this engine; migrations **098–101**)
 
 **North compass alignment:** The **main brain** still owns maintenance lifecycle. The Communication Engine **never** runs `handleInboundCore` or `runInboundPipeline` for broadcast-number traffic. It may call a **single thin handoff** (`createMaintenanceTicketFromCommReply` — to be defined in `src/brain/` or `src/dal/`) when `reply_class` is `MAINTENANCE_SIGNAL` or `EMERGENCY_SIGNAL`.
 

@@ -1,5 +1,7 @@
 # Tenant roster ↔ financial reconcile (manual workflow)
 
+**Step 0** of **[ACCOUNTING_SIGNAL_SCHEMA.md](../docs/ACCOUNTING_SIGNAL_SCHEMA.md)** — identity must be verified before lease/ledger materialization (Steps 1–3).
+
 ## The loop
 
 ```text

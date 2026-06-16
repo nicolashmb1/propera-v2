@@ -319,7 +319,12 @@ async function listDayReservationsForTenantLocation(tenantCtx, locationId, day) 
     startUtc instanceof Date ? startUtc.toISOString() : startUtc,
     endUtc instanceof Date ? endUtc.toISOString() : endUtc
   );
-  return rows.map((r) => ({
+  return rows
+    .filter((r) => {
+      const s = String(r.status || "").trim().toUpperCase();
+      return s !== "CANCELLED" && s !== "NO_SHOW";
+    })
+    .map((r) => ({
     id: r.id,
     startAt: r.startAt,
     endAt: r.endAt,

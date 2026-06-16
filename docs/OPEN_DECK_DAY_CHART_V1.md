@@ -162,7 +162,7 @@ Align with app open deck: `isTicketOpenForOps` / `isTerminalTicketStatus` in `pr
 | Layer | Location |
 |-------|----------|
 | Spec | This file |
-| SQL / RPC | `supabase/migrations/061_ticket_day_curve_v1.sql` (or `062` if `061` taken by ticket split) |
+| SQL / RPC | `supabase/migrations/061_open_deck_day_chart_note.sql` (comment-only — no schema; computation is JS-only) |
 | V2 service | `src/portal/ticketDayCurve.js` |
 | V2 route | `src/portal/registerPortalRoutes.js` — `GET /api/portal/tickets/day-curve` |
 | Tests | `tests/ticketDayCurve.test.js` — fixed fixtures: carryover open at 8am, 7am complete → 8am cumulative 1, after-8pm footer |
