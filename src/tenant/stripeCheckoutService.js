@@ -45,11 +45,7 @@ async function createTenantCheckoutSession(sb, tenantCtx, opts, req) {
     balance.available && balance.balanceCents != null
       ? Math.max(0, Math.round(Number(balance.balanceCents)))
       : 0;
-  const rentCents =
-    balance.rentCents != null && Number(balance.rentCents) > 0
-      ? Math.round(Number(balance.rentCents))
-      : 0;
-  const feeBasisCents = balanceCents > 0 ? balanceCents : rentCents;
+  const feeBasisCents = balanceCents;
   if (feeBasisCents <= 0) return { ok: false, error: "no_payment_amount", status: 400 };
 
   const tenantPaysStripeFees = prop.tenant_pays_stripe_fees !== false;
@@ -70,7 +66,7 @@ async function createTenantCheckoutSession(sb, tenantCtx, opts, req) {
         currency: "usd",
         unit_amount: baseCents,
         product_data: {
-          name: unitLabel ? `Rent — Unit ${unitLabel}` : `Rent — ${propertyCode}`,
+          name: unitLabel ? `Balance due — Unit ${unitLabel}` : `Balance due — ${propertyCode}`,
         },
       },
     },

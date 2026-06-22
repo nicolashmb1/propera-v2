@@ -1,4 +1,5 @@
 const { financeLedgerEnabled } = require("../config/env");
+const { applyStripeCheckoutReminderPolicy } = require("../brain/financial/paymentReminderPolicy");
 
 /**
  * Idempotent ledger payment for a succeeded Stripe checkout row.
@@ -13,7 +14,13 @@ async function postStripePaymentToLedger(sb, paymentRow) {
   const paymentId = paymentRow.id;
   if (!paymentId) return { ok: false, error: "missing_payment_id" };
   if (paymentRow.ledger_entry_id) {
-    return { ok: true, skipped: true, ledgerEntryId: paymentRow.ledger_entry_id };
+    const ledgerResult = {
+      ok: true,
+      skipped: true,
+      ledgerEntryId: paymentRow.ledger_entry_id,
+    };
+    const policy = await applyStripeCheckoutReminderPolicy(sb, paymentRow, ledgerResult);
+    return { ok: true, skipped: true, ledgerEntryId: paymentRow.ledger_entry_id, policy };
   }
 
   const { data: existing } = await sb
@@ -28,7 +35,9 @@ async function postStripePaymentToLedger(sb, paymentRow) {
       .from("tenant_stripe_payments")
       .update({ ledger_entry_id: existing.id })
       .eq("id", paymentId);
-    return { ok: true, skipped: true, ledgerEntryId: existing.id };
+    const ledgerResult = { ok: true, skipped: true, ledgerEntryId: existing.id };
+    const policy = await applyStripeCheckoutReminderPolicy(sb, paymentRow, ledgerResult);
+    return { ok: true, skipped: true, ledgerEntryId: existing.id, policy };
   }
 
   const baseCents = Math.round(Number(paymentRow.base_cents) || 0);
@@ -66,7 +75,9 @@ async function postStripePaymentToLedger(sb, paymentRow) {
     .update({ ledger_entry_id: data.id })
     .eq("id", paymentId);
 
-  return { ok: true, ledgerEntryId: data.id };
+  const ledgerResult = { ok: true, ledgerEntryId: data.id };
+  const policy = await applyStripeCheckoutReminderPolicy(sb, paymentRow, ledgerResult);
+  return { ok: true, ledgerEntryId: data.id, policy };
 }
 
 module.exports = { postStripePaymentToLedger };

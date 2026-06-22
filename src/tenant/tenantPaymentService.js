@@ -81,11 +81,7 @@ async function getTenantPaymentMethods(sb, tenantCtx) {
     balance.available && balance.balanceCents != null
       ? Math.max(0, Math.round(Number(balance.balanceCents)))
       : 0;
-  const rentCents =
-    balance.rentCents != null && Number(balance.rentCents) > 0
-      ? Math.round(Number(balance.rentCents))
-      : 0;
-  const feeBasisCents = balanceCents > 0 ? balanceCents : rentCents;
+  const feeBasisCents = balanceCents;
   const tenantPaysStripeFees = prop?.tenant_pays_stripe_fees !== false;
   const totals = computePaymentTotals(feeBasisCents, { tenantPaysStripeFees });
 

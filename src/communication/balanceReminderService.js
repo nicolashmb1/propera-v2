@@ -18,6 +18,7 @@ const {
   loadEnabledBalanceReminderRules,
   listOrgsWithBalanceRemindersEnabled,
 } = require("../dal/portalBalanceReminders");
+const { loadSuppressedTenantIds } = require("../dal/balanceReminderSuppression");
 const { createCampaign, prepareCampaign, sendCampaignNow } = require("./campaignService");
 
 const ACCOUNTING_SOURCE = String(process.env.PROPERA_ACCOUNTING_SOURCE || "leasehold").trim() || "leasehold";
@@ -66,7 +67,7 @@ function periodKeyFromParts(parts) {
   return `${parts.year}-${parts.month}`;
 }
 
-async function fetchDelinquentTenantIds(sb, minBalanceCents, propertyCodes) {
+async function fetchDelinquentTenantIds(sb, minBalanceCents, propertyCodes, periodKey) {
   let snapQuery = sb
     .from("tenant_account_snapshots")
     .select("unit_catalog_id, property_code, balance_cents")
@@ -135,7 +136,22 @@ async function fetchDelinquentTenantIds(sb, minBalanceCents, propertyCodes) {
     }
   }
 
-  return { ok: true, tenantIds, eligibleCount: tenantIds.length };
+  let filteredIds = tenantIds;
+  let suppressedCount = 0;
+  if (periodKey && tenantIds.length) {
+    const suppressed = await loadSuppressedTenantIds(sb, tenantIds, periodKey);
+    if (suppressed.size) {
+      filteredIds = tenantIds.filter((id) => !suppressed.has(id));
+      suppressedCount = tenantIds.length - filteredIds.length;
+    }
+  }
+
+  return {
+    ok: true,
+    tenantIds: filteredIds,
+    eligibleCount: filteredIds.length,
+    suppressedCount,
+  };
 }
 
 async function ruleAlreadyRan(sb, ruleId, periodKey) {
@@ -168,7 +184,7 @@ async function runBalanceReminderRule(sb, rule, context) {
     return { ok: true, ruleId: rule.id, skipped: "already_ran_this_period" };
   }
 
-  const eligible = await fetchDelinquentTenantIds(sb, rule.minBalanceCents, rule.propertyCodes);
+  const eligible = await fetchDelinquentTenantIds(sb, rule.minBalanceCents, rule.propertyCodes, periodKey);
   if (!eligible.ok) {
     return { ok: false, ruleId: rule.id, error: eligible.error };
   }
@@ -180,7 +196,7 @@ async function runBalanceReminderRule(sb, rule, context) {
       sent_count: 0,
       failed_count: 0,
     });
-    return { ok: true, ruleId: rule.id, skipped: "no_eligible_tenants", eligibleCount: 0 };
+    return { ok: true, ruleId: rule.id, skipped: "no_eligible_tenants", eligibleCount: 0, suppressedCount: eligible.suppressedCount || 0 };
   }
 
   const audienceKind = rule.propertyCodes.length === 1 ? "PROPERTY" : "PORTFOLIO";
@@ -242,6 +258,7 @@ async function runBalanceReminderRule(sb, rule, context) {
       period_key: periodKey,
       campaign_id: campaignId,
       eligible_count: eligible.eligibleCount,
+      suppressed_count: eligible.suppressedCount || 0,
       sent: sendStats.sent || 0,
       failed: sendStats.failed || 0,
     },
@@ -252,6 +269,7 @@ async function runBalanceReminderRule(sb, rule, context) {
     ruleId: rule.id,
     campaignId,
     eligibleCount: eligible.eligibleCount,
+    suppressedCount: eligible.suppressedCount || 0,
     sent: sendStats.sent || 0,
     failed: sendStats.failed || 0,
   };

@@ -16,6 +16,7 @@ const {
   postLedgerEventSignal,
   loadExistingImportIdempotencyKeys,
 } = require("./postLedgerEventSignal");
+const { runAccountingImportPolicies } = require("./accountingImportPolicies");
 
 const UPDATE_CHUNK = 25;
 
@@ -186,12 +187,14 @@ async function processLedgerEventSignals(signals) {
   });
 
   await runChunked(sorted, UPDATE_CHUNK, async (rawSignal) => {
-    const out = await postLedgerEventSignal(sb, rawSignal, {
+    const result = await postLedgerEventSignal(sb, rawSignal, {
       seenIdempotencyKeys: seenKeys,
       existingKeys,
     });
-    outcomes.push(out);
+    outcomes.push({ signal: rawSignal, result });
   });
+
+  const policyOutcomes = await runAccountingImportPolicies(sb, outcomes);
 
   let ledgerCreated = 0;
   let ledgerSkippedExisting = 0;
@@ -199,7 +202,8 @@ async function processLedgerEventSignals(signals) {
   let ledgerRejected = 0;
   const ledgerErrors = [];
 
-  for (const out of outcomes) {
+  for (const item of outcomes) {
+    const out = item.result;
     if (!out.ok) {
       ledgerRejected += 1;
       if (out.error) ledgerErrors.push(String(out.error));
@@ -216,6 +220,7 @@ async function processLedgerEventSignals(signals) {
     ledgerSkippedDuplicateKey,
     ledgerRejected,
     ledgerErrors: [...new Set(ledgerErrors)],
+    policy: policyOutcomes,
   };
 }
 
@@ -299,6 +304,7 @@ async function handleAccountingImportSignalsBody(body) {
     ledger_skipped_existing: ledgerResult.ledgerSkippedExisting,
     ledger_skipped_duplicate_key: ledgerResult.ledgerSkippedDuplicateKey,
     ledger_rejected: ledgerResult.ledgerRejected,
+    policy: ledgerResult.policy,
     errors: errors.length ? errors : undefined,
   };
 }
