@@ -7,7 +7,31 @@ const { finalizeMaintenanceDraft } = require("./finalizeMaintenance");
 const { mergeTicketUpdateRespectingPmOverride } = require("./ticketAssignmentGuard");
 const { mergeChangedByIntoTicketPatch } = require("./ticketAuditPatch");
 
-const ACTIVE_STATUSES = ["OPEN", "IN_PROGRESS"];
+const LIVE_STATUSES = ["OPEN", "IN_PROGRESS", "SCHEDULED"];
+const WORKING_STATUSES = ["OPEN", "IN_PROGRESS"];
+/** @deprecated use LIVE_STATUSES */
+const ACTIVE_STATUSES = LIVE_STATUSES;
+
+function utcTodayDateStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Derive turnover status from target date (future → SCHEDULED, else IN_PROGRESS).
+ * @param {string | null | undefined} targetReadyDate
+ * @param {string | undefined} currentStatus
+ */
+function resolveTurnoverStatusForTargetDate(targetReadyDate, currentStatus) {
+  const cur = String(currentStatus || "").trim().toUpperCase();
+  if (cur === "READY" || cur === "CANCELED") return cur;
+  const d =
+    targetReadyDate != null && String(targetReadyDate).trim()
+      ? String(targetReadyDate).trim().slice(0, 10)
+      : "";
+  if (!d) return "IN_PROGRESS";
+  if (d > utcTodayDateStr()) return "SCHEDULED";
+  return "IN_PROGRESS";
+}
 
 /** Max walkthrough photos per turnover line (portal punch list). */
 const MAX_TURNOVER_ITEM_PHOTOS = 30;
@@ -269,7 +293,7 @@ async function startTurnover(o) {
     .select("id")
     .eq("property_code", prop)
     .eq("unit_catalog_id", unitCatalogId)
-    .in("status", ACTIVE_STATUSES)
+    .in("status", LIVE_STATUSES)
     .limit(1)
     .maybeSingle();
 
@@ -278,18 +302,21 @@ async function startTurnover(o) {
   }
 
   const unitLabelSnapshot = String(unit.unit_label || "").trim();
+  const targetReadyDate =
+    o.target_ready_date != null && String(o.target_ready_date).trim()
+      ? String(o.target_ready_date).trim().slice(0, 10)
+      : null;
+  const status = resolveTurnoverStatusForTargetDate(targetReadyDate, null);
   const nowIso = new Date().toISOString();
   const row = {
     property_code: prop,
     unit_catalog_id: unitCatalogId,
     unit_label_snapshot: unitLabelSnapshot,
-    status: "IN_PROGRESS",
-    target_ready_date: o.target_ready_date != null && String(o.target_ready_date).trim()
-      ? String(o.target_ready_date).trim().slice(0, 10)
-      : null,
+    status,
+    target_ready_date: targetReadyDate,
     summary: o.summary != null ? String(o.summary).trim() : "",
     created_by: o.created_by != null ? String(o.created_by).trim() : "",
-    started_at: nowIso,
+    started_at: status === "SCHEDULED" ? null : nowIso,
     current_blocker: "",
   };
 
@@ -337,7 +364,11 @@ async function patchTurnover(turnoverId, patch, o) {
   const id = String(turnoverId || "").trim();
   if (!id) return { ok: false, error: "missing_id" };
 
-  const { data: existing } = await sb.from("turnovers").select("id, status").eq("id", id).maybeSingle();
+  const { data: existing } = await sb
+    .from("turnovers")
+    .select("id, status, started_at, target_ready_date")
+    .eq("id", id)
+    .maybeSingle();
   if (!existing) return { ok: false, error: "not_found" };
 
   /** @type {Record<string, unknown>} */
@@ -356,6 +387,23 @@ async function patchTurnover(turnoverId, patch, o) {
       upd.status = "CANCELED";
       upd.completed_at = new Date().toISOString();
       upd.current_blocker = "";
+    } else if (s === "IN_PROGRESS" && String(existing.status || "").toUpperCase() === "SCHEDULED") {
+      upd.status = "IN_PROGRESS";
+      upd.started_at = existing.started_at || new Date().toISOString();
+    }
+  }
+
+  if (upd.target_ready_date !== undefined && upd.status === undefined) {
+    const nextDate = upd.target_ready_date;
+    const newStatus = resolveTurnoverStatusForTargetDate(nextDate, existing.status);
+    const cur = String(existing.status || "").trim().toUpperCase();
+    if (newStatus !== cur && (cur === "SCHEDULED" || cur === "IN_PROGRESS" || cur === "OPEN")) {
+      upd.status = newStatus;
+      if (newStatus === "SCHEDULED") {
+        upd.started_at = null;
+      } else if (newStatus === "IN_PROGRESS" && !existing.started_at) {
+        upd.started_at = new Date().toISOString();
+      }
     }
   }
 
@@ -388,7 +436,7 @@ async function addTurnoverItem(turnoverId, body, o) {
 
   const { data: t } = await sb.from("turnovers").select("id, status").eq("id", id).maybeSingle();
   if (!t) return { ok: false, error: "not_found" };
-  if (!ACTIVE_STATUSES.includes(String(t.status || "").toUpperCase())) {
+  if (!LIVE_STATUSES.includes(String(t.status || "").toUpperCase())) {
     return { ok: false, error: "turnover_not_active" };
   }
 
@@ -627,7 +675,7 @@ async function createTicketFromTurnoverItem(o) {
 
   const { data: trow } = await sb.from("turnovers").select("*").eq("id", turnoverId).maybeSingle();
   if (!trow) return { ok: false, error: "turnover_not_found" };
-  if (!ACTIVE_STATUSES.includes(String(trow.status || "").toUpperCase())) {
+  if (!LIVE_STATUSES.includes(String(trow.status || "").toUpperCase())) {
     return { ok: false, error: "turnover_not_active" };
   }
 
@@ -746,7 +794,9 @@ async function markTurnoverReady(turnoverId, o) {
 
   const { data: trow } = await sb.from("turnovers").select("*").eq("id", id).maybeSingle();
   if (!trow) return { ok: false, error: "not_found" };
-  if (!ACTIVE_STATUSES.includes(String(trow.status || "").toUpperCase())) {
+  const tStatus = String(trow.status || "").toUpperCase();
+  if (!WORKING_STATUSES.includes(tStatus)) {
+    if (tStatus === "SCHEDULED") return { ok: false, error: "turnover_scheduled" };
     return { ok: false, error: "turnover_not_active" };
   }
 
@@ -807,6 +857,9 @@ async function markTurnoverReady(turnoverId, o) {
 
 module.exports = {
   DEFAULT_TEMPLATE_LINES,
+  LIVE_STATUSES,
+  WORKING_STATUSES,
+  resolveTurnoverStatusForTargetDate,
   readTurnoverIdsFromPortalPayload,
   listTurnovers,
   getTurnoverById,
