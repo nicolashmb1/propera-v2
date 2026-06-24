@@ -72,27 +72,13 @@ function nullableEqual(a, b) {
 function leaseShellLhPatchChanged(existing, patch) {
   if (!existing) return true;
 
-  const fields = [
-    "rent_cents",
-    "security_deposit_cents",
-    "other_deposit_cents",
-    "pet_deposit_cents",
-    "key_deposit_cents",
-    "lease_start",
-    "lease_end",
-    "tenant_net_rent_cents",
-    "rent_subsidy_cents",
-    "rent_subsidy_label",
-    "net_rent_derived_at",
-    "deposits_derived_at",
-  ];
-
-  for (const key of fields) {
+  for (const key of Object.keys(patch)) {
+    if (key === "charge_lines") {
+      if (!chargeLinesEqual(existing.charge_lines ?? [], patch.charge_lines ?? [])) return true;
+      continue;
+    }
     if (!nullableEqual(existing[key], patch[key])) return true;
   }
-
-  const nextLines = patch.charge_lines;
-  if (!chargeLinesEqual(existing.charge_lines ?? [], nextLines ?? [])) return true;
 
   return false;
 }
@@ -137,12 +123,12 @@ function buildLeaseShellLhPatch(fact, existing, syncedAt) {
     rent_cents: rentCents,
     lease_start: leaseStart,
     lease_end: leaseEnd,
-    security_deposit_cents: securityCents,
-    other_deposit_cents: otherCents,
-    pet_deposit_cents: petCents,
-    key_deposit_cents: keyCents,
     charge_lines: chargeLines,
   };
+  if (securityCents != null) patch.security_deposit_cents = securityCents;
+  if (otherCents != null) patch.other_deposit_cents = otherCents;
+  if (petCents != null) patch.pet_deposit_cents = petCents;
+  if (keyCents != null) patch.key_deposit_cents = keyCents;
 
   if (hasNetRent) {
     patch.tenant_net_rent_cents = pattern.tenantNetRentCents;

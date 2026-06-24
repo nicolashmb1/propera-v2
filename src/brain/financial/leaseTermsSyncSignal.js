@@ -29,6 +29,34 @@ const BODY_DATE_FIELDS = ["lease_start", "lease_end"];
 
 const CHARGE_LINE_MODES = new Set(["fixed", "variable", "included", "none"]);
 
+/** Keys that may appear in lease_terms_sync body; presence = LH asserted the field. */
+const LEASE_TERMS_BODY_KEYS = [
+  "rent_cents",
+  "lease_start",
+  "lease_end",
+  "security_deposit_cents",
+  "other_deposit_cents",
+  "pet_deposit_cents",
+  "key_deposit_cents",
+  "charge_lines",
+  "tenant_net_rent_cents",
+  "rent_subsidy_cents",
+  "rent_subsidy_label",
+  "net_rent_derived_at",
+  "deposits_derived_at",
+];
+
+/**
+ * @param {Record<string, unknown> | null | undefined} rawBody
+ * @returns {string[]}
+ */
+function extractAssertedLeaseTermsFields(rawBody) {
+  if (!rawBody || typeof rawBody !== "object") return [];
+  return LEASE_TERMS_BODY_KEYS.filter((key) =>
+    Object.prototype.hasOwnProperty.call(rawBody, key)
+  );
+}
+
 function parseDateOnly(raw) {
   const text = String(raw ?? "").trim().slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null;
@@ -149,6 +177,8 @@ function validateLeaseTermsSyncSignal(raw) {
   const bodyErr = validateLeaseTermsBody(body);
   if (bodyErr) return { ok: false, error: bodyErr };
 
+  const assertedFields = extractAssertedLeaseTermsFields(body);
+
   return {
     ok: true,
     signal: {
@@ -161,6 +191,7 @@ function validateLeaseTermsSyncSignal(raw) {
       idempotency_key: idempotencyKey,
       effective_at: new Date(effectiveAt).toISOString(),
       body: normalizeLeaseTermsBodyForPost(body),
+      asserted_fields: assertedFields,
     },
   };
 }
@@ -203,8 +234,10 @@ module.exports = {
   LEASE_TERMS_SYNC_KIND,
   SCHEMA_VERSION,
   ALLOWED_SOURCE_CHANNELS,
+  LEASE_TERMS_BODY_KEYS,
   buildLeaseTermsIdempotencyKey,
   validateLeaseTermsSyncSignal,
   normalizeLeaseTermsBodyForPost,
   fingerprintLeaseTermsBody,
+  extractAssertedLeaseTermsFields,
 };

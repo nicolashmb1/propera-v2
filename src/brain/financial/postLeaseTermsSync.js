@@ -27,15 +27,45 @@ function mergeChargeLinesFromIncoming(existingLines, incomingLines) {
   });
 }
 
-function mergeLeaseTermsPatchWithExisting(signal, existingShell) {
-  const patch = { ...signal.body };
-  if (!existingShell) return patch;
-  if (signal.source_channel === "leasehold_import" && Array.isArray(existingShell.charge_lines)) {
+/**
+ * Delta mode (leasehold_import + existing row): only asserted body keys are written.
+ * Omitted/null in bridge intent → no-op — preserves staff corrections (e.g. WESTFIELD 314 Other $700).
+ */
+function buildLeaseTermsUpdatePatch(signal, existingShell) {
+  const body = signal.body ?? {};
+  const asserted = Array.isArray(signal.asserted_fields) ? signal.asserted_fields : null;
+
+  if (!existingShell) {
+    return { ...body };
+  }
+
+  if (signal.source_channel !== "leasehold_import" || !asserted?.length) {
+    const patch = { ...body };
+    if (Array.isArray(existingShell.charge_lines)) {
+      patch.charge_lines = mergeChargeLinesFromIncoming(
+        existingShell.charge_lines,
+        body.charge_lines
+      );
+    }
+    return patch;
+  }
+
+  const patch = {};
+  for (const key of asserted) {
+    if (!Object.prototype.hasOwnProperty.call(body, key)) continue;
+    patch[key] = body[key];
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(patch, "charge_lines") &&
+    Array.isArray(existingShell.charge_lines)
+  ) {
     patch.charge_lines = mergeChargeLinesFromIncoming(
       existingShell.charge_lines,
-      signal.body.charge_lines
+      patch.charge_lines
     );
   }
+
   return patch;
 }
 
@@ -97,7 +127,7 @@ async function postLeaseTermsSync(sb, rawSignal, ctx = {}) {
   }
 
   const existingShell = ctx.existingShell ?? null;
-  const patch = mergeLeaseTermsPatchWithExisting(signal, existingShell);
+  const patch = buildLeaseTermsUpdatePatch(signal, existingShell);
 
   if (existingShell && !leaseShellLhPatchChanged(existingShell, patch)) {
     return {
@@ -203,4 +233,5 @@ module.exports = {
   loadExistingLeaseShellsByUnit,
   clearPropertyNetRentDerived,
   rowToExistingShell,
+  buildLeaseTermsUpdatePatch,
 };

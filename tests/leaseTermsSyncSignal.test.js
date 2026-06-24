@@ -44,6 +44,10 @@ test("validateLeaseTermsSyncSignal — accepts valid signal", () => {
   assert.equal(out.ok, true);
   assert.equal(out.signal.kind, LEASE_TERMS_SYNC_KIND);
   assert.equal(out.signal.property_code, "WESTFIELD");
+  assert.ok(Array.isArray(out.signal.asserted_fields));
+  assert.ok(out.signal.asserted_fields.includes("rent_cents"));
+  assert.ok(out.signal.asserted_fields.includes("security_deposit_cents"));
+  assert.ok(!out.signal.asserted_fields.includes("other_deposit_cents"));
 });
 
 test("validateLeaseTermsSyncSignal — rejects invalid kind", () => {

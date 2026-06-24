@@ -62,6 +62,23 @@ test("buildLeaseShellLhPatch — insert shell from snapshot", () => {
   assert.equal(pet?.amount_cents, 5000);
 });
 
+test("buildLeaseShellLhPatch — omits unknown deposit keys", () => {
+  const fact = {
+    unit_label: "314",
+    tenant_name: "Tenant",
+    rent_cents: 240600,
+    lease_start: "2025-06-01",
+    lease_end: "2026-05-31",
+    security_deposit_cents: 240600,
+  };
+  const built = buildLeaseShellLhPatch(fact, null, "2026-06-15T12:00:00.000Z");
+  assert.ok(built);
+  assert.ok(Object.prototype.hasOwnProperty.call(built.patch, "security_deposit_cents"));
+  assert.ok(!Object.prototype.hasOwnProperty.call(built.patch, "other_deposit_cents"));
+  assert.ok(!Object.prototype.hasOwnProperty.call(built.patch, "pet_deposit_cents"));
+  assert.ok(!Object.prototype.hasOwnProperty.call(built.patch, "key_deposit_cents"));
+});
+
 test("buildLeaseShellLhPatch — skips invalid date pair", () => {
   const fact = {
     unit_label: "412",
