@@ -141,6 +141,10 @@ function validateLedgerEventSignal(raw) {
             ? Math.round(Number(body.posted_sequence))
             : null,
         confidence: "high",
+        payment_method:
+          body.payment_method != null || body.paymentMethod != null
+            ? String(body.payment_method ?? body.paymentMethod ?? "").trim().slice(0, 40) || null
+            : null,
       },
     },
   };

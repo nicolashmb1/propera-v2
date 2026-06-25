@@ -11,6 +11,8 @@ const SCHEMA_VERSION = 1;
 const ALLOWED_SOURCE_CHANNELS = new Set([
   "leasehold_import",
   "portal_lease_edit",
+  "portal_ledger_edit",
+  "portal_payment",
   "jarvis_confirm",
   "agent_proposal",
 ]);

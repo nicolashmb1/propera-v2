@@ -69,7 +69,12 @@ async function processLeaseTermsSyncSignals(propertyCode, signals) {
     };
   }
 
-  await clearPropertyNetRentDerived(sb, propertyCode);
+  const hasLeaseholdImport = leaseSignals.some(
+    (s) => String(s.source_channel ?? s.sourceChannel ?? "").trim() === "leasehold_import"
+  );
+  if (hasLeaseholdImport) {
+    await clearPropertyNetRentDerived(sb, propertyCode);
+  }
 
   const loaded = await loadExistingLeaseShellsByUnit(sb, propertyCode);
   if (loaded.migrationMissing) {

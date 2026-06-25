@@ -17,6 +17,19 @@ function buildDescription(signal) {
   return parts.join(" · ").slice(0, 500);
 }
 
+function resolveLedgerSourceType(sourceChannel) {
+  return String(sourceChannel ?? "").trim() === "leasehold_import" ? "accounting_import" : "manual";
+}
+
+function buildNotes(signal) {
+  const body = signal.body ?? {};
+  const parts = [];
+  if (body.lh_kind) parts.push(`LH ${body.lh_kind}`);
+  const method = String(body.payment_method ?? body.paymentMethod ?? "").trim();
+  if (method) parts.push(`method:${method}`);
+  return parts.join(" · ").slice(0, 500);
+}
+
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} sb
  * @param {Record<string, unknown>} rawSignal
@@ -47,19 +60,21 @@ async function postLedgerEventSignal(sb, rawSignal, ctx = {}) {
   const entryKind = signalKindToEntryKind(signal.kind);
   const amountCents = Number(signal.body.amount_cents);
 
+  const sourceType = resolveLedgerSourceType(signal.source_channel);
+
   const row = {
     property_code: signal.property_code,
     unit_catalog_id: signal.unit_catalog_id,
     tenant_roster_id: null,
     ticket_id: null,
-    source_type: "accounting_import",
+    source_type: sourceType,
     source_id: null,
     import_idempotency_key: key,
     entry_kind: entryKind,
     amount_cents: entryKind === "adjustment" ? amountCents : Math.abs(amountCents),
     currency: "USD",
     description: buildDescription(signal),
-    notes: signal.body.lh_kind ? `LH ${signal.body.lh_kind}` : "",
+    notes: buildNotes(signal),
     status: "posted",
     effective_date: signal.body.effective_date,
   };
@@ -102,7 +117,6 @@ async function loadExistingImportIdempotencyKeys(sb, keys) {
     const { data, error } = await sb
       .from("tenant_ledger_entries")
       .select("import_idempotency_key")
-      .eq("source_type", "accounting_import")
       .in("import_idempotency_key", slice);
 
     if (error) {
