@@ -17,6 +17,11 @@ const {
   loadExistingImportIdempotencyKeys,
 } = require("./postLedgerEventSignal");
 const { runAccountingImportPolicies } = require("./accountingImportPolicies");
+const { ensureLedgerOpeningBalances } = require("./ledgerOpeningBalance");
+const {
+  normalizeTenantNameDrifts,
+  recordOccupancyTenantNameDrifts,
+} = require("./occupancyTenantNameDrift");
 
 const UPDATE_CHUNK = 25;
 
@@ -244,24 +249,45 @@ async function handleAccountingImportSignalsBody(body) {
   let signals = normalizeIncomingSignals(body);
   let skippedVacant = 0;
 
+  const tenantNameDrifts = normalizeTenantNameDrifts(body);
+  const sourceSystem = String(body.source_system ?? body.sourceSystem ?? "leasehold")
+    .trim()
+    .toLowerCase();
+
   if (!signals.length) {
     const matched = normalizeMatchedFacts(body);
-    if (!matched.length) throw new Error("empty_signals");
+    if (!matched.length && !tenantNameDrifts.length) throw new Error("empty_signals");
 
-    const sb = getSupabase();
-    if (!sb) throw new Error("supabase_unavailable");
-    const loaded = await loadExistingLeaseShellsByUnit(sb, propertyCode);
-    const converted = matchedFactsToLeaseTermsSignals(
-      propertyCode,
-      matched,
-      syncedAt,
-      loaded.byUnit
-    );
-    signals = converted.signals;
-    skippedVacant = converted.skippedVacant;
+    if (matched.length) {
+      const sb = getSupabase();
+      if (!sb) throw new Error("supabase_unavailable");
+      const loaded = await loadExistingLeaseShellsByUnit(sb, propertyCode);
+      const converted = matchedFactsToLeaseTermsSignals(
+        propertyCode,
+        matched,
+        syncedAt,
+        loaded.byUnit
+      );
+      signals = converted.signals;
+      skippedVacant = converted.skippedVacant;
+    }
   }
 
   if (!signals.length) {
+    const sbEmpty = getSupabase();
+    if (!sbEmpty) throw new Error("supabase_unavailable");
+    const openingOnly = await ensureLedgerOpeningBalances(sbEmpty, propertyCode, syncedAt);
+    const driftOnly = await recordOccupancyTenantNameDrifts(
+      sbEmpty,
+      propertyCode,
+      tenantNameDrifts,
+      syncedAt,
+      sourceSystem
+    );
+    const errors = [
+      ...(openingOnly.errors ?? []),
+      ...(driftOnly.drift_errors ?? []),
+    ];
     return {
       ok: true,
       property_code: propertyCode,
@@ -279,6 +305,16 @@ async function handleAccountingImportSignalsBody(body) {
       ledger_skipped_existing: 0,
       ledger_skipped_duplicate_key: 0,
       ledger_rejected: 0,
+      opening_created: openingOnly.opening_created,
+      opening_skipped_existing: openingOnly.opening_skipped_existing,
+      opening_skipped_new_lease: openingOnly.opening_skipped_new_lease,
+      opening_skipped_no_mimic: openingOnly.opening_skipped_no_mimic,
+      opening_rejected: openingOnly.opening_rejected,
+      drift_created: driftOnly.drift_created,
+      drift_skipped_existing: driftOnly.drift_skipped_existing,
+      drift_skipped_unchanged: driftOnly.drift_skipped_unchanged,
+      drift_rejected: driftOnly.drift_rejected,
+      errors: errors.length ? errors : undefined,
     };
   }
 
@@ -287,10 +323,26 @@ async function handleAccountingImportSignalsBody(body) {
   );
   const ledgerSignals = signals.filter((s) => isLedgerEventKind(String(s?.kind ?? "").trim()));
 
+  const sb = getSupabase();
+  if (!sb) throw new Error("supabase_unavailable");
+
   const result = await processLeaseTermsSyncSignals(propertyCode, leaseSignals);
   const ledgerResult = await processLedgerEventSignals(ledgerSignals);
+  const openingResult = await ensureLedgerOpeningBalances(sb, propertyCode, syncedAt);
+  const driftResult = await recordOccupancyTenantNameDrifts(
+    sb,
+    propertyCode,
+    tenantNameDrifts,
+    syncedAt,
+    sourceSystem
+  );
 
-  const errors = [...result.errors, ...ledgerResult.ledgerErrors];
+  const errors = [
+    ...result.errors,
+    ...ledgerResult.ledgerErrors,
+    ...(openingResult.errors ?? []),
+    ...(driftResult.drift_errors ?? []),
+  ];
 
   return {
     ok: true,
@@ -309,6 +361,15 @@ async function handleAccountingImportSignalsBody(body) {
     ledger_skipped_existing: ledgerResult.ledgerSkippedExisting,
     ledger_skipped_duplicate_key: ledgerResult.ledgerSkippedDuplicateKey,
     ledger_rejected: ledgerResult.ledgerRejected,
+    opening_created: openingResult.opening_created,
+    opening_skipped_existing: openingResult.opening_skipped_existing,
+    opening_skipped_new_lease: openingResult.opening_skipped_new_lease,
+    opening_skipped_no_mimic: openingResult.opening_skipped_no_mimic,
+    opening_rejected: openingResult.opening_rejected,
+    drift_created: driftResult.drift_created,
+    drift_skipped_existing: driftResult.drift_skipped_existing,
+    drift_skipped_unchanged: driftResult.drift_skipped_unchanged,
+    drift_rejected: driftResult.drift_rejected,
     policy: ledgerResult.policy,
     errors: errors.length ? errors : undefined,
   };
